@@ -1,5 +1,5 @@
 package = "luafan"
-version = "0.1-1"
+version = "0.1-2"
 source = {
    url = "git://github.com/luafan/luafan",
    tag = "v0.1"
@@ -48,10 +48,12 @@ build = {
             "src/udpd.c",
             "src/stream.c",
             "src/fifo.c",
+            "src/http.c",
+            "src/httpd.c",
             "src/luasql.c",
             "src/luamariadb.c",
          },
-         defines = {},
+         defines = {"FAN_HAS_OPENSSL=1", "FAN_HAS_LUAJIT=1"},
          libraries = { "event", "event_openssl", "ssl", "crypto", "curl", "resolv", "mysqlclient" },
          incdirs = { "$(CURL_INCDIR)", "$(LIBEVENT_INCDIR)", "$(OPENSSL_INCDIR)", "$(MARIADB_INCDIR)" },
          libdirs = { "$(CURL_LIBDIR)", "$(LIBEVENT_LIBDIR)", "$(OPENSSL_LIBDIR)", "$(MARIADB_LIBDIR)" }
