@@ -1220,6 +1220,20 @@ LUA_API int http_capath(lua_State *L) {
   return 0;
 }
 
+LUA_API int http_escape(lua_State* L) {
+  size_t size = 0;
+  const char *str = luaL_checklstring(L, 1, &size);
+  lua_pushstring(L, curl_escape(str, size));
+  return 1;
+}
+
+LUA_API int http_unescape(lua_State* L) {
+  size_t size = 0;
+  const char *s = luaL_checklstring(L, 1, &size);
+  lua_pushstring(L, curl_unescape(s, size));
+  return 1;
+}
+
 static const luaL_Reg httplib[] = {{"get", http_get},
                                    {"post", http_post},
                                    {"put", http_put},
@@ -1229,6 +1243,8 @@ static const luaL_Reg httplib[] = {{"get", http_get},
                                    {"cookiejar", http_cookiejar},
                                    {"cainfo", http_cainfo},
                                    {"capath", http_capath},
+                                   {"escape", http_escape},
+                                   {"unescape", http_unescape},
                                    {NULL, NULL}};
 
 LUA_API int luaopen_fan_http(lua_State *L) {
