@@ -289,7 +289,7 @@ LUA_API int lua_evhttp_server_gc(lua_State *L) {
     luaL_unref(L, LUA_REGISTRYINDEX, server->onServiceRef);
   }
 
-  if (server->httpd) {
+  if (event_mgr_base() && server->httpd) {
     if (server->boundsocket) {
       evhttp_del_accept_socket(server->httpd, server->boundsocket);
     }

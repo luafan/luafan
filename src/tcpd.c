@@ -63,7 +63,7 @@ typedef struct {
 
 LUA_API int lua_tcpd_conn_gc(lua_State *L) {
   Conn *conn = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
-  if (conn->buf) {
+  if (event_mgr_base() && conn->buf) {
     bufferevent_free(conn->buf);
   }
   if (conn->onReadRef != LUA_NOREF) {
@@ -91,7 +91,7 @@ LUA_API int lua_tcpd_conn_gc(lua_State *L) {
 
 LUA_API int lua_tcpd_accept_gc(lua_State *L) {
   ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
-  if (accept->buf) {
+  if (event_mgr_base() && accept->buf) {
     bufferevent_free(accept->buf);
   }
   if (accept->onSendReadyRef != LUA_NOREF) {
@@ -117,7 +117,7 @@ LUA_API int lua_tcpd_server_gc(lua_State *L) {
   if (serv->host) {
     free(serv->host);
   }
-  if (serv->listener) {
+  if (event_mgr_base() && serv->listener) {
     evconnlistener_free(serv->listener);
   }
   return 0;

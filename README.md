@@ -15,7 +15,7 @@ fan
 start the event loop, can pass startup function or nothing.
 
 ### `fan.loopbreak()`
-break the event loop, make sure call this api after all the daemon service(tcpd.bind, udpd.bind, httpd.bind) has been garbage collected.
+break the event loop, make sure call this api after all the daemon service(fifo, tcpd.bind, udpd.bind, httpd.bind) has been garbage collected.
 
 ### `fan.sleep(sec:number)`
 sleep for any seconds, e.g. 0.1 or 10

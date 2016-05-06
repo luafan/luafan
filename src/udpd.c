@@ -46,12 +46,12 @@ LUA_API int lua_udpd_conn_gc(lua_State *L) {
     conn->onSendReadyRef = LUA_NOREF;
   }
 
-  if (conn->read_ev) {
+  if (event_mgr_base() && conn->read_ev) {
     event_del(conn->read_ev);
     conn->read_ev = NULL;
   }
 
-  if (conn->write_ev) {
+  if (event_mgr_base() && conn->write_ev) {
     event_del(conn->write_ev);
     conn->write_ev = NULL;
   }

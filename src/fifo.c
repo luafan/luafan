@@ -242,12 +242,12 @@ LUA_API int luafan_fifo_gc(lua_State *L) {
     fifo->onSendReadyRef = LUA_NOREF;
   }
 
-  if (fifo->read_ev) {
+  if (event_mgr_base() && fifo->read_ev) {
     event_del(fifo->read_ev);
     fifo->read_ev = NULL;
   }
 
-  if (fifo->write_ev) {
+  if (event_mgr_base() && fifo->write_ev) {
     event_del(fifo->write_ev);
     fifo->write_ev = NULL;
   }
