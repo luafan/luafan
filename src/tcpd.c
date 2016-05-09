@@ -757,7 +757,7 @@ LUA_API int tcpd_connect(lua_State *L) {
   conn->port = port;
   lua_pop(L, 1);
 
-  #if FAN_HAS_OPENSSL
+#if FAN_HAS_OPENSSL
   lua_getfield(L, 1, "ssl_verifyhost");
   conn->ssl_verifyhost = (int)luaL_optinteger(L, -1, 1);
   lua_pop(L, 1);
@@ -899,6 +899,22 @@ LUA_API int tcpd_accept_close(lua_State *L) {
   return 0;
 }
 
+LUA_API int tcpd_accept_read_pause(lua_State *L) {
+  ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
+  if (accept->buf) {
+    bufferevent_disable(accept->buf, EV_READ);
+  }
+  return 0;
+}
+
+LUA_API int tcpd_accept_read_resume(lua_State *L) {
+  ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
+  if (accept->buf) {
+    bufferevent_enable(accept->buf, EV_READ);
+  }
+  return 0;
+}
+
 LUA_API int tcpd_conn_read_pause(lua_State *L) {
   Conn *conn = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
   bufferevent_disable(conn->buf, EV_READ);
@@ -1000,6 +1016,12 @@ LUA_API int luaopen_fan_tcpd(lua_State *L) {
 
   lua_pushcfunction(L, &tcpd_accept_close);
   lua_setfield(L, -2, "close");
+
+  lua_pushcfunction(L, &tcpd_accept_read_pause);
+  lua_setfield(L, -2, "pause_read");
+
+  lua_pushcfunction(L, &tcpd_accept_read_resume);
+  lua_setfield(L, -2, "resume_read");
 
   lua_pushcfunction(L, &tcpd_accept_bind);
   lua_setfield(L, -2, "bind");
