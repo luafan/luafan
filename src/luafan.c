@@ -175,11 +175,22 @@ LUA_API int data2hex(lua_State *L) {
 }
 // -- end hex2data data2hex --
 
+LUA_API int luafan_gettime(lua_State *L) {
+  struct timeval v;
+  gettimeofday(&v, NULL);
+
+  lua_pushinteger(L, v.tv_sec);
+  lua_pushinteger(L, v.tv_usec);
+
+  return 2;
+}
+
 static const struct luaL_Reg fanlib[] = {
     {"loop", luafan_start},
     {"loopbreak", luafan_stop},
 
     {"sleep", luafan_sleep},
+    {"gettime", luafan_gettime},
 
     {"data2hex", data2hex},
     {"hex2data", hex2data},
