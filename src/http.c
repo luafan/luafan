@@ -580,7 +580,7 @@ int debug_callback(CURL *curl_handle, curl_infotype infotype, char *buf,
           lua_setfield(L, LUA_REGISTRYINDEX, "curlLogFile");
         }
       } else {
-        LOGD("set verbose verbose.log");
+        LOGD("set verbose verbose.log\n");
         curlLogFile = fopen("verbose.log", "a");
 
         if (curlLogFile) {

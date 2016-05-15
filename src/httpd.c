@@ -366,6 +366,7 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L) {
         const char *data = lua_tostring(L, -1);
         struct evkeyvalq params;
         evhttp_parse_query_str(data, &params);
+        lua_pop(L, 1);
 
         TAILQ_FOREACH(item, &params, next) {
           lua_pushstring(L, item->value);

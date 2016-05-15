@@ -26,6 +26,9 @@ convert binary data to hex string.
 ### `fan.hex2data(data:string)`
 convert hex string to binary data.
 
+### `fan.gettime()`
+return 2 integer values, sec, usec
+
 fan.fifo
 ========
 ### `conn = fifo.connect(arg:table)`
@@ -154,11 +157,11 @@ reconnect to the destination.
 
 ### `pause_read()`
 
-pause onread callback.
+pause `onread` callback.
 
 ### `resume_read()`
 
-resume onread callback.
+resume `onread` callback.
 
 ---------
 ### `serv = tcpd.bind(arg:table)`
@@ -484,6 +487,13 @@ flush data to client.
 return the client connection info table.
 `{ip = "1.2.3.4", port = 1234}`
 
+### `pause_read()`
+
+pause `onread` (from bind) callback.
+
+### `resume_read()`
+
+resume `onread` (from bind) callback.
 
 ### `bind(arg:table)`
 working on single connection.
@@ -629,7 +639,7 @@ fan.loop()
 
 Issues
 ======
-1. Ctrl+C may crash with "Segmentation fault", the reason is Ctrl+C break the loop, but there are daemon running, not a big issue, and will be fix later.
+* (TBC)
 
 
 more samples under project samples folder.
