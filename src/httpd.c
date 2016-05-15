@@ -373,7 +373,6 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L) {
           lua_setfield(L, -2, item->key);
         }
       }
-      lua_pop(L, 1);
     }
     return 1;
   } else if (strcmp(p, "body") == 0) {
