@@ -989,7 +989,9 @@ static int http_getpost(lua_State *L, int method) {
       curl_easy_setopt(conn->easy, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
       curl_easy_setopt(conn->easy, CURLOPT_PROXY, proxy);
       curl_easy_setopt(conn->easy, CURLOPT_PROXYPORT, proxyport);
+#ifdef CURLHEADER_SEPARATE
       curl_easy_setopt(conn->easy, CURLOPT_HEADEROPT, CURLHEADER_SEPARATE);
+#endif
       curl_easy_setopt(conn->easy, CURLOPT_NOPROXY, "127.0.0.1,localhost");
     }
 
