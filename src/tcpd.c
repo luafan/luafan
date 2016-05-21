@@ -89,23 +89,35 @@ LUA_API int lua_tcpd_conn_gc(lua_State *L) {
   return 0;
 }
 
+static void tcpd_accept_unref(ACCEPT *accept) {
+  if (accept->onSendReadyRef != LUA_NOREF) {
+    luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onSendReadyRef);
+    accept->onSendReadyRef = LUA_NOREF;
+  }
+
+  if (accept->onReadRef != LUA_NOREF) {
+    luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onReadRef);
+    accept->onReadRef = LUA_NOREF;
+  }
+
+  if (accept->onDisconnectedRef != LUA_NOREF) {
+    luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onDisconnectedRef);
+    accept->onDisconnectedRef = LUA_NOREF;
+  }
+
+  if (accept->selfRef != LUA_NOREF) {
+    luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->selfRef);
+    accept->selfRef = LUA_NOREF;
+  }
+
+}
+
 LUA_API int lua_tcpd_accept_gc(lua_State *L) {
   ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
   if (event_mgr_base() && accept->buf) {
     bufferevent_free(accept->buf);
   }
-  if (accept->onSendReadyRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, accept->onSendReadyRef);
-  }
-  if (accept->onReadRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, accept->onReadRef);
-  }
-  if (accept->onDisconnectedRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, accept->onDisconnectedRef);
-  }
-  if (accept->selfRef != LUA_NOREF) {
-    luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->selfRef);
-  }
+  tcpd_accept_unref(accept);
   return 0;
 }
 
@@ -180,19 +192,7 @@ static void tcpd_accept_eventcb(struct bufferevent *bev, short events,
       utlua_resume(co, accept->L, 1);
     }
 
-    if (accept->selfRef != LUA_NOREF) {
-      luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->selfRef);
-      accept->selfRef = LUA_NOREF;
-    }
-
-    if (accept->onReadRef != LUA_NOREF) {
-      luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onReadRef);
-      accept->onReadRef = LUA_NOREF;
-    }
-    if (accept->onSendReadyRef != LUA_NOREF) {
-      luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onSendReadyRef);
-      accept->onSendReadyRef = LUA_NOREF;
-    }
+    tcpd_accept_unref(accept);
   } else {
   }
 }
@@ -896,6 +896,7 @@ LUA_API int tcpd_accept_close(lua_State *L) {
     accept->buf = NULL;
   }
 
+  tcpd_accept_unref(accept);
   return 0;
 }
 
