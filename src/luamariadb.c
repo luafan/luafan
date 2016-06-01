@@ -135,6 +135,7 @@ typedef struct {
   int conn; /* reference to connection */
   int bind;
   int nums;
+  int has_bind_param;
 
   int rbind;
   int buffers;
@@ -803,7 +804,7 @@ LUA_API int stmt_execute_start(lua_State *L) {
   }
 }
 
-LUA_API int st_bind(lua_State *L) {
+LUA_API int st_bind_param(lua_State *L) {
   st_data *st = getstatement(L);
 
   unsigned long param_count = mysql_stmt_param_count(st->my_stmt);
@@ -847,6 +848,59 @@ LUA_API int st_bind(lua_State *L) {
   }
 
   mysql_stmt_bind_param(st->my_stmt, bind);
+
+  lua_pushvalue(L, 1);
+
+  return 1;
+}
+
+LUA_API int st_bind(lua_State *L) {
+  st_data *st = getstatement(L);
+
+  unsigned long param_count = mysql_stmt_param_count(st->my_stmt);
+  if (lua_gettop(L) != param_count + 1) {
+    luaL_error(L, "parameters number does not match, excepted %d, got %d",
+               param_count, lua_gettop(L) - 1);
+  }
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, st->table);
+  int tableidx = lua_gettop(L);
+
+  lua_rawgeti(L, tableidx, st->bind);
+  MYSQL_BIND *bind = lua_touserdata(L, -1);
+
+  lua_rawgeti(L, tableidx, st->nums);
+  double *nums = lua_touserdata(L, -1);
+
+  lua_pop(L, 3);
+
+  int i = 0;
+  for (; i < param_count; i++) {
+    int idx = i + 2;
+    switch (lua_type(L, idx)) {
+    case LUA_TSTRING: {
+      size_t sz = 0;
+      const char *str = lua_tolstring(L, idx, &sz);
+      MYSQL_SET_VARSTRING(&bind[i], (void *)str, sz);
+    } break;
+    case LUA_TNUMBER: {
+      nums[i] = lua_tonumber(L, idx);
+      MYSQL_SET_DOUBLE(&bind[i], &nums[i]);
+    } break;
+    case LUA_TBOOLEAN: {
+      nums[i] = lua_toboolean(L, idx);
+      MYSQL_SET_TINYINT(&bind[i], &nums[i]);
+      break;
+    }
+    default:
+      break;
+    }
+  }
+
+  if (!st->has_bind_param) {
+    mysql_stmt_bind_param(st->my_stmt, bind);
+    st->has_bind_param = 1;
+  }
 
   lua_pushvalue(L, 1);
 
@@ -1069,9 +1123,10 @@ LUA_API int stmt_prepare_start(lua_State *L) {
   MYSQL_STMT *stmt = mysql_stmt_init(conn->my_conn);
 
   st_data *st = (st_data *)lua_newuserdata(L, sizeof(st_data));
+  memset(st, 0, sizeof(st_data));
+  
   luasql_setmeta(L, LUASQL_STATEMENT_MYSQL);
   st->my_stmt = stmt;
-  st->closed = 0;
 
   lua_newtable(L);
 
@@ -1467,7 +1522,8 @@ static void create_metatables(lua_State *L) {
   struct luaL_Reg statement_methods[] = {
       {"__gc", st_gc},
       {"close", st_close},
-      {"bind_param", st_bind},
+      {"bind_param", st_bind_param},
+      {"bind", st_bind},
       {"execute", stmt_execute_start},
       {"fetch", stmt_fetch_start},
       {"pairs", st_pairs},
