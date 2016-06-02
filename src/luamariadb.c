@@ -734,6 +734,7 @@ static int stmt_execute_result(lua_State *L, st_data *st) {
       } break;
 
       default:
+        memset(&rbind[i], 0, sizeof(MYSQL_BIND));
         break;
       }
     }
