@@ -512,6 +512,11 @@ static int stmt_fetch_result(lua_State *L, st_data *st) {
     }
 
     switch (fields[i].type) {
+    case MYSQL_TYPE_TINY_BLOB:
+    case MYSQL_TYPE_MEDIUM_BLOB:
+    case MYSQL_TYPE_LONG_BLOB:
+    case MYSQL_TYPE_BLOB:
+
     case MYSQL_TYPE_VAR_STRING:
     case MYSQL_TYPE_STRING: {
       void *buffer =
@@ -703,6 +708,20 @@ static int stmt_execute_result(lua_State *L, st_data *st) {
     int i = 0;
     for (; i < field_count; i++) {
       switch (fields[i].type) {
+      case MYSQL_TYPE_TINY_BLOB:
+      case MYSQL_TYPE_MEDIUM_BLOB:
+      case MYSQL_TYPE_LONG_BLOB:
+      case MYSQL_TYPE_BLOB: {
+        // void *buffer = get_or_create_ud(L, tableidx, &buffers[i], 1024);
+        // rbind[i].buffer_type = MYSQL_TYPE_MEDIUM_BLOB;
+        // rbind[i].length = &bufferlens[i];
+        // rbind[i].is_null = &is_nulls[i];
+        // rbind[i].buffer = buffer;
+        // rbind[i].buffer_length = 1024;
+      }
+
+        // printf("fields[i].length = %d\n", fields[i].length);
+        // break;
       case MYSQL_TYPE_VAR_STRING:
       case MYSQL_TYPE_STRING: {
         void *buffer =
@@ -808,7 +827,7 @@ LUA_API int stmt_execute_start(lua_State *L) {
   }
 }
 
-LUA_API int st_bind_param(lua_State *L) {
+LUA_API int _st_bind(lua_State *L, int cache_bind) {
   st_data *st = getstatement(L);
 
   unsigned long param_count = mysql_stmt_param_count(st->my_stmt);
@@ -826,7 +845,7 @@ LUA_API int st_bind_param(lua_State *L) {
   lua_rawgeti(L, tableidx, st->nums);
   double *nums = lua_touserdata(L, -1);
 
-  lua_pop(L, 3);
+  lua_pop(L, 2);
 
   int i = 0;
   for (; i < param_count; i++) {
@@ -835,6 +854,8 @@ LUA_API int st_bind_param(lua_State *L) {
     case LUA_TSTRING: {
       size_t sz = 0;
       const char *str = lua_tolstring(L, idx, &sz);
+      lua_pushvalue(L, idx);
+      lua_rawseti(L, tableidx, i + 1000);
       MYSQL_SET_VARSTRING(&bind[i], (void *)str, sz);
     } break;
     case LUA_TNUMBER: {
@@ -844,64 +865,25 @@ LUA_API int st_bind_param(lua_State *L) {
     case LUA_TBOOLEAN: {
       nums[i] = lua_toboolean(L, idx);
       MYSQL_SET_TINYINT(&bind[i], &nums[i]);
-      break;
-    }
-    default:
-      break;
-    }
-  }
-
-  mysql_stmt_bind_param(st->my_stmt, bind);
-
-  lua_pushvalue(L, 1);
-
-  return 1;
-}
-
-LUA_API int st_bind(lua_State *L) {
-  st_data *st = getstatement(L);
-
-  unsigned long param_count = mysql_stmt_param_count(st->my_stmt);
-  if (lua_gettop(L) != param_count + 1) {
-    luaL_error(L, "parameters number does not match, excepted %d, got %d",
-               param_count, lua_gettop(L) - 1);
-  }
-
-  lua_rawgeti(L, LUA_REGISTRYINDEX, st->table);
-  int tableidx = lua_gettop(L);
-
-  lua_rawgeti(L, tableidx, st->bind);
-  MYSQL_BIND *bind = lua_touserdata(L, -1);
-
-  lua_rawgeti(L, tableidx, st->nums);
-  double *nums = lua_touserdata(L, -1);
-
-  lua_pop(L, 3);
-
-  int i = 0;
-  for (; i < param_count; i++) {
-    int idx = i + 2;
-    switch (lua_type(L, idx)) {
-    case LUA_TSTRING: {
-      size_t sz = 0;
-      const char *str = lua_tolstring(L, idx, &sz);
-      MYSQL_SET_VARSTRING(&bind[i], (void *)str, sz);
     } break;
-    case LUA_TNUMBER: {
-      nums[i] = lua_tonumber(L, idx);
-      MYSQL_SET_DOUBLE(&bind[i], &nums[i]);
+    case LUA_TLIGHTUSERDATA: {
+      void *data = lua_touserdata(L, idx);
+      if (data == NULL) {
+        memset(&bind[i], 0, sizeof(bind));
+        bind[i].buffer_type = MYSQL_TYPE_STRING;
+        bind[i].length = &nums[i];
+        bind[i].is_null = 0;
+      }
     } break;
-    case LUA_TBOOLEAN: {
-      nums[i] = lua_toboolean(L, idx);
-      MYSQL_SET_TINYINT(&bind[i], &nums[i]);
-      break;
-    }
     default:
+      printf("unknown type %d\n", lua_type(L, idx));
       break;
     }
   }
 
-  if (!st->has_bind_param) {
+  lua_pop(L, 1);
+
+  if (!cache_bind || !st->has_bind_param) {
     mysql_stmt_bind_param(st->my_stmt, bind);
     st->has_bind_param = 1;
   }
@@ -909,6 +891,67 @@ LUA_API int st_bind(lua_State *L) {
   lua_pushvalue(L, 1);
 
   return 1;
+}
+
+LUA_API int st_bind_param(lua_State *L) { return _st_bind(L, 0); }
+
+LUA_API int st_bind(lua_State *L) { return _st_bind(L, 1); }
+
+static int stmt_send_long_data_result(lua_State *L, st_data *st) {
+  lua_pushboolean(L, true);
+  return 1;
+}
+
+static void stmt_send_long_data_event(int fd, short event, void *_userdata) {
+  struct maria_status *ms = (struct maria_status *)_userdata;
+  st_data *st = (st_data *)ms->data;
+  lua_State *L = ms->L;
+
+  int ret = 0;
+  int status = mysql_stmt_execute_cont(&ret, st->my_stmt, ms->status);
+  int errorcode = mysql_stmt_errno(st->my_stmt);
+  if (errorcode) {
+    lua_pushnil(L);
+    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
+
+    utlua_resume(L, NULL, 2);
+  } else if (status) {
+    wait_for_status(L, st->conn_data, st, status, stmt_send_long_data_event,
+                    ms->extra);
+  } else if (ret == 0) {
+    int count = stmt_send_long_data_result(L, st);
+    utlua_resume(L, NULL, count);
+  } else {
+    lua_pushnil(L);
+    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
+
+    utlua_resume(L, NULL, 2);
+  }
+
+  event_free(ms->event);
+  free(ms);
+}
+
+LUA_API int st_send_long_data(lua_State *L) {
+  st_data *st = getstatement(L);
+
+  size_t size = 0;
+  int num = luaL_checkinteger(L, 2);
+  const char *data = luaL_checklstring(L, 3, &size);
+
+  int ret = 0;
+  int status =
+      mysql_stmt_send_long_data_start(&ret, st->my_stmt, num, data, size);
+  if (status) {
+    wait_for_status(L, st->conn_data, st, status, stmt_send_long_data_event, 0);
+    return lua_yield(L, 0);
+  } else if (ret == 0) {
+    return stmt_send_long_data_result(L, st);
+  } else {
+    lua_pushnil(L);
+    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
+    return 2;
+  }
 }
 
 /*
@@ -1534,6 +1577,7 @@ static void create_metatables(lua_State *L) {
       {"close", st_close},
       {"bind_param", st_bind_param},
       {"bind", st_bind},
+      {"send_long_data", st_send_long_data},
       {"execute", stmt_execute_start},
       {"fetch", stmt_fetch_start},
       {"pairs", st_pairs},
@@ -1558,5 +1602,9 @@ LUA_API int luaopen_fan_mariadb(lua_State *L) {
 
   lua_newtable(L);
   luaL_setfuncs(L, driver, 0);
+
+  lua_pushlightuserdata(L, NULL);
+  lua_setfield(L, -2, "LONG_DATA");
+
   return 1;
 }
