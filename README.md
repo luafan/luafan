@@ -9,6 +9,30 @@
 * [fan.http](#fanhttp) http request module.
 * [fan.mariadb](#fanmariadb) mariadb client module.
 
+## Quick Start
+* ubuntu 14.04 + luajit + luafanlite
+
+```
+cd
+apt-get update
+apt-get install -y wget lua5.1-dev lua5.1 luajit make gcc libc-dev libcurl4-openssl-dev libevent-dev git
+
+# install luarocks if have not installed.
+rm -rf luarocks-2.3.0.tar.gz
+wget http://luarocks.org/releases/luarocks-2.3.0.tar.gz
+tar xzf luarocks-2.3.0.tar.gz
+cd luarocks-2.3.0
+./configure
+make build
+make install
+cd
+rm -rf luarocks-2.3.0*
+
+luarocks install luafanlite
+```
+
+
+# APIs
 fan
 ===
 ### `fan.loop(startup:function?)`
