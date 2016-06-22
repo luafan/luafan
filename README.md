@@ -14,8 +14,8 @@
 
 ```
 cd
-apt-get update
-apt-get install -y wget lua5.1-dev lua5.1 luajit make gcc libc-dev libcurl4-openssl-dev libevent-dev git
+sudo apt-get update
+sudo apt-get install -y wget lua5.1-dev lua5.1 luajit make gcc libc-dev libcurl4-openssl-dev libevent-dev git
 
 # install luarocks if have not installed.
 rm -rf luarocks-2.3.0.tar.gz
@@ -24,13 +24,26 @@ tar xzf luarocks-2.3.0.tar.gz
 cd luarocks-2.3.0
 ./configure
 make build
-make install
+sudo make install
 cd
 rm -rf luarocks-2.3.0*
 
-luarocks install luafanlite
+sudo luarocks install luafanlite
 ```
 
+* more with mariadb
+
+```
+sudo apt-get install cmake libncurses5-dev g++
+
+wget https://downloads.mariadb.com/archives/MariaDB/mariadb-5.5.50/source/mariadb-5.5.50.tar.gz
+tar xzf mariadb-5.5.50.tar.gz 
+cd mariadb-5.5.50/
+cmake .
+make
+sudo make install
+sudo luarocks install luafan MARIADB_DIR=/usr/local/mysql
+```
 
 # APIs
 fan
