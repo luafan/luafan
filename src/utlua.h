@@ -123,6 +123,7 @@ void utlua_set_mainthread(lua_State *L);
 void d2tv(double x, struct timeval *tv);
 
 int regress_get_socket_port(evutil_socket_t fd);
+void regress_get_socket_host(evutil_socket_t fd, char *host);
 
 #if FAN_HAS_OPENSSL
 void die_most_horribly_from_openssl_error(const char *func);

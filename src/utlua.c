@@ -103,6 +103,23 @@ int regress_get_socket_port(evutil_socket_t fd) {
     return -1;
 }
 
+void regress_get_socket_host(evutil_socket_t fd, char *host) {
+  struct sockaddr_storage ss;
+  ev_socklen_t socklen = sizeof(ss);
+  if (getsockname(fd, (struct sockaddr *)&ss, &socklen) != 0)
+    return;
+
+  if (ss.ss_family == AF_INET) {
+    struct sockaddr_in *addr_in = (struct sockaddr_in *)&ss;
+    inet_ntop(addr_in->sin_family, (void *)&(addr_in->sin_addr), host,
+              INET_ADDRSTRLEN);
+  } else if (ss.ss_family == AF_INET6) {
+    struct sockaddr_in6 *addr_in = (struct sockaddr_in6 *)&ss;
+    inet_ntop(addr_in->sin6_family, (void *)&(addr_in->sin6_addr), host,
+              INET6_ADDRSTRLEN);
+  }
+}
+
 #if FAN_HAS_OPENSSL
 
 void die_most_horribly_from_openssl_error(const char *func) {
