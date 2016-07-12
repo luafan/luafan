@@ -62,7 +62,7 @@ typedef struct _SockInfo {
 
 #include <curl/curl.h>
 
-static CURLSH *share_handle = NULL;
+// static CURLSH *share_handle = NULL;
 
 #define CURL_TIMEOUT_DEFAULT 60
 
@@ -1099,7 +1099,7 @@ static int http_getpost(lua_State *L, int method) {
     curl_multi_setopt(multi, CURLMOPT_SOCKETDATA, NULL);
     curl_multi_setopt(multi, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
     curl_multi_setopt(multi, CURLMOPT_TIMERDATA, NULL);
-    curl_multi_setopt(multi, CURLOPT_SHARE, share_handle);
+    // curl_multi_setopt(multi, CURLOPT_SHARE, share_handle);
   }
 
   CURLMcode rc = curl_multi_add_handle(multi, conn->easy);
@@ -1252,10 +1252,10 @@ static const luaL_Reg httplib[] = {{"get", http_get},
 LUA_API int luaopen_fan_http(lua_State *L) {
   curl_global_init(CURL_GLOBAL_ALL);
 
-  if (!share_handle) {
-    share_handle = curl_share_init();
-    curl_share_setopt(share_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
-  }
+  // if (!share_handle) {
+  //   share_handle = curl_share_init();
+  //   curl_share_setopt(share_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+  // }
 
   if (!timer_event) {
     timer_event = evtimer_new(event_mgr_base(), timer_cb, NULL);

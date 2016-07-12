@@ -869,9 +869,9 @@ LUA_API int _st_bind(lua_State *L, int cache_bind) {
     case LUA_TLIGHTUSERDATA: {
       void *data = lua_touserdata(L, idx);
       if (data == NULL) {
-        memset(&bind[i], 0, sizeof(bind));
+        memset(&bind[i], 0, sizeof(bind[i]));
         bind[i].buffer_type = MYSQL_TYPE_STRING;
-        bind[i].length = &nums[i];
+        bind[i].length = (unsigned long *)&nums[i];
         bind[i].is_null = 0;
       }
     } break;
@@ -907,8 +907,8 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata) {
   st_data *st = (st_data *)ms->data;
   lua_State *L = ms->L;
 
-  int ret = 0;
-  int status = mysql_stmt_execute_cont(&ret, st->my_stmt, ms->status);
+  my_bool ret = 0;
+  int status = mysql_stmt_send_long_data_cont(&ret, st->my_stmt, ms->status);
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
     lua_pushnil(L);
@@ -939,7 +939,7 @@ LUA_API int st_send_long_data(lua_State *L) {
   int num = luaL_checkinteger(L, 2);
   const char *data = luaL_checklstring(L, 3, &size);
 
-  int ret = 0;
+  my_bool ret = 0;
   int status =
       mysql_stmt_send_long_data_start(&ret, st->my_stmt, num, data, size);
   if (status) {
