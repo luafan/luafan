@@ -4,7 +4,7 @@
 #include "utlua.h"
 
 #include "luasql.h"
-#include <mysql/mysql.h>
+#include <mysql.h>
 
 #define MYSQL_SET_VARSTRING(bind, buff, length)                                \
   {                                                                            \

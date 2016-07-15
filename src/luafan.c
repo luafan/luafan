@@ -203,13 +203,6 @@ LUA_API int luaopen_fan(lua_State *L) {
   utlua_set_mainthread(L);
 #endif
 
-#if FAN_HAS_OPENSSL
-  SSL_library_init();
-  ERR_load_crypto_strings();
-  SSL_load_error_strings();
-  OpenSSL_add_all_algorithms();
-#endif
-
   event_mgr_init();
 
   signal(SIGHUP, signal_handler);
