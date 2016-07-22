@@ -20,7 +20,7 @@ dependencies = {
 
 external_dependencies = {
    MARIADB = {
-      header = "mysql.h"
+      header = "mysql/mysql.h"
    },
    OPENSSL = {
       header = "openssl/opensslv.h"
