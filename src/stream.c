@@ -185,11 +185,32 @@ LUA_API int luafan_stream_get_string(lua_State *L) {
   return 1;
 }
 
+LUA_API int luafan_stream_get_bytes(lua_State *L) {
+  BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
+  uint32_t len = luaL_checkinteger(L, 2);
+
+  char *buff = malloc(len);
+  bytearray_readbuffer(ba, buff, len);
+  lua_pushlstring(L, buff, len);
+  free(buff);
+
+  return 1;
+}
+
 LUA_API int luafan_stream_add_string(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
   size_t len = 0;
   const char *data = luaL_checklstring(L, 2, &len);
   _luafan_stream_add_u30(ba, len);
+  bytearray_writebuffer(ba, data, len);
+
+  return 0;
+}
+
+LUA_API int luafan_stream_add_bytes(lua_State *L) {
+  BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
+  size_t len = 0;
+  const char *data = luaL_checklstring(L, 2, &len);
   bytearray_writebuffer(ba, data, len);
 
   return 0;
@@ -222,6 +243,7 @@ static const struct luaL_Reg streammtlib[] = {
     {"GetABCU32", luafan_stream_get_u30},
 
     {"GetD64", luafan_stream_get_d64},
+    {"GetBytes", luafan_stream_get_bytes},
     {"GetString", luafan_stream_get_string},
 
     {"AddU8", luafan_stream_add_u8},
@@ -234,6 +256,7 @@ static const struct luaL_Reg streammtlib[] = {
     {"AddABCS32", luafan_stream_add_u30},
 
     {"AddD64", luafan_stream_add_d64},
+    {"AddBytes", luafan_stream_add_bytes},
     {"AddString", luafan_stream_add_string},
 
     {"package", luafan_stream_package},
