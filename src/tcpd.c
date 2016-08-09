@@ -36,6 +36,7 @@ typedef struct {
   lua_State *L;
 
   int onAcceptRef;
+  int onSSLHostNameRef;
 
   char *host;
   int port;
@@ -128,6 +129,9 @@ LUA_API int lua_tcpd_server_gc(lua_State *L) {
   if (serv->onAcceptRef != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, serv->onAcceptRef);
   }
+  if (serv->onSSLHostNameRef != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, serv->onSSLHostNameRef);
+  }
   if (serv->host) {
     free(serv->host);
   }
@@ -179,7 +183,7 @@ static void tcpd_accept_eventcb(struct bufferevent *bev, short events,
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, accept->onDisconnectedRef);
 
-      if (events & BEV_EVENT_ERROR) {
+      if (events & BEV_EVENT_ERROR && EVUTIL_SOCKET_ERROR()) {
         lua_pushstring(co,
                        evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
       } else if (events & BEV_EVENT_TIMEOUT) {
@@ -353,10 +357,19 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
 #if FAN_HAS_OPENSSL
 
 static int ssl_servername_cb(SSL *s, int *ad, void *arg) {
-  const char *servername = SSL_get_servername(s, TLSEXT_NAMETYPE_host_name);
-  if (servername)
-    printf("Hostname in TLS extension: \"%s\"\n", servername);
+  const char *hostname = SSL_get_servername(s, TLSEXT_NAMETYPE_host_name);
+  // if (hostname)
+  //   printf("Hostname in TLS extension: \"%s\"\n", hostname);
 
+  SERVER *serv = (SERVER *)arg;
+  if (hostname && serv->onSSLHostNameRef != LUA_NOREF) {
+    lua_State *co = utlua_newthread(serv->L);
+    lua_pop(serv->L, 1);
+
+    lua_rawgeti(co, LUA_REGISTRYINDEX, serv->onSSLHostNameRef);
+    lua_pushstring(co, hostname);
+    utlua_resume(co, serv->L, 1);
+  }
   // if (!p->servername)
   //     return SSL_TLSEXT_ERR_NOACK;
 
@@ -379,6 +392,14 @@ LUA_API int tcpd_bind(lua_State *L) {
     serv->onAcceptRef = luaL_ref(L, LUA_REGISTRYINDEX);
   } else {
     serv->onAcceptRef = LUA_NOREF;
+    lua_pop(L, 1);
+  }
+
+  lua_getfield(L, 1, "onsslhostname");
+  if (lua_isfunction(L, -1)) {
+    serv->onSSLHostNameRef = luaL_ref(L, LUA_REGISTRYINDEX);
+  } else {
+    serv->onSSLHostNameRef = LUA_NOREF;
     lua_pop(L, 1);
   }
 

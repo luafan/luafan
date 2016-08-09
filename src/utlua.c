@@ -130,9 +130,11 @@ void die_most_horribly_from_openssl_error(const char *func) {
 
 void server_setup_certs(SSL_CTX *ctx, const char *certificate_chain,
                         const char *private_key) {
+#if DEBUG
   printf("Loading certificate chain from '%s'\n"
          "and private key from '%s'\n",
          certificate_chain, private_key);
+#endif
 
   if (1 != SSL_CTX_use_certificate_chain_file(ctx, certificate_chain)) {
     die_most_horribly_from_openssl_error("SSL_CTX_use_certificate_chain_file");
