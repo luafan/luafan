@@ -124,21 +124,29 @@ LUA_API int lua_tcpd_accept_gc(lua_State *L) {
   return 0;
 }
 
-LUA_API int lua_tcpd_server_gc(lua_State *L) {
+LUA_API int lua_tcpd_server_close(lua_State *L) {
   SERVER *serv = luaL_checkudata(L, 1, LUA_TCPD_SERVER_TYPE);
   if (serv->onAcceptRef != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, serv->onAcceptRef);
+    serv->onAcceptRef = LUA_NOREF;
   }
   if (serv->onSSLHostNameRef != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, serv->onSSLHostNameRef);
+    serv->onSSLHostNameRef = LUA_NOREF;
   }
   if (serv->host) {
     free(serv->host);
+    serv->host = NULL;
   }
   if (event_mgr_base() && serv->listener) {
     evconnlistener_free(serv->listener);
+    serv->listener = NULL;
   }
   return 0;
+}
+
+LUA_API int lua_tcpd_server_gc(lua_State *L) {
+  return lua_tcpd_server_close(L);
 }
 
 LUA_API int lua_tcpd_accept_tostring(lua_State *L) {
@@ -1105,12 +1113,20 @@ LUA_API int luaopen_fan_tcpd(lua_State *L) {
   lua_pop(L, 1);
 
   luaL_newmetatable(L, LUA_TCPD_SERVER_TYPE);
+  lua_pushstring(L, "close");
+  lua_pushcfunction(L, &lua_tcpd_server_close);
+  lua_rawset(L, -3);
+
   lua_pushstring(L, "__gc");
   lua_pushcfunction(L, &lua_tcpd_server_gc);
   lua_rawset(L, -3);
 
   lua_pushstring(L, "__tostring");
   lua_pushcfunction(L, &lua_tcpd_server_tostring);
+  lua_rawset(L, -3);
+
+  lua_pushstring(L, "__index");
+  lua_pushvalue(L, -2);
   lua_rawset(L, -3);
 
   lua_pop(L, 1);
