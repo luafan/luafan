@@ -26,6 +26,7 @@ int event_mgr_init() {
   if (!base) {
     base = event_base_new();
     dnsbase = evdns_base_new(base, 1);
+    evdns_base_set_option(dnsbase, "randomize-case:", "0");
 
 #if FAN_HAS_OPENSSL
     SSL_library_init();
