@@ -6,6 +6,8 @@
 #include "luasql.h"
 #include <mysql/mysql.h>
 
+static int LONG_DATA = 0; // &LONG_DATA used as mariadb const.
+
 #define MYSQL_SET_VARSTRING(bind, buff, length)                                \
   {                                                                            \
     (bind)->buffer_type = MYSQL_TYPE_VAR_STRING;                               \
@@ -860,7 +862,7 @@ LUA_API int _st_bind(lua_State *L, int cache_bind) {
     } break;
     case LUA_TLIGHTUSERDATA: {
       void *data = lua_touserdata(L, idx);
-      if (data == NULL) {
+      if (data == &LONG_DATA) {
         memset(&bind[i], 0, sizeof(bind[i]));
         bind[i].buffer_type = MYSQL_TYPE_STRING;
         bind[i].length = (unsigned long *)&nums[i];
@@ -868,7 +870,7 @@ LUA_API int _st_bind(lua_State *L, int cache_bind) {
       }
     } break;
     default:
-      printf("unknown type %d\n", lua_type(L, idx));
+      printf("unknown type %d, idx=%d\n", lua_type(L, idx), idx);
       break;
     }
   }
@@ -1619,7 +1621,7 @@ LUA_API int luaopen_fan_mariadb(lua_State *L) {
   lua_newtable(L);
   luaL_setfuncs(L, driver, 0);
 
-  lua_pushlightuserdata(L, NULL);
+  lua_pushlightuserdata(L, &LONG_DATA);
   lua_setfield(L, -2, "LONG_DATA");
 
   return 1;
