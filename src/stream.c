@@ -190,6 +190,7 @@ LUA_API int luafan_stream_get_bytes(lua_State *L) {
   uint32_t len = luaL_checkinteger(L, 2);
 
   char *buff = malloc(len);
+  memset(buff, 0, len);
   bytearray_readbuffer(ba, buff, len);
   lua_pushlstring(L, buff, len);
   free(buff);

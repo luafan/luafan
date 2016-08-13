@@ -124,25 +124,23 @@ struct maria_status {
 
 typedef struct {
   short closed;
-  int conn;               /* reference to connection */
   int numcols;            /* number of columns */
-  int colnames, coltypes; /* reference to column information tables */
+  int colnames, coltypes; // ref in registry
   MYSQL_RES *my_res;
   conn_data *conn_data;
 } cur_data;
 
 typedef struct {
   short closed;
-  int table;
-  int conn; /* reference to connection */
-  int bind;
-  int nums;
+  int table; // ref in registry
+  int bind; // index in table
+  int nums; // index in table
   int has_bind_param;
 
-  int rbind;
-  int buffers;
-  int bufferlens;
-  int is_nulls;
+  int rbind; // index in table
+  int buffers; // index in table
+  int bufferlens; // index in table
+  int is_nulls; // index in table
 
   MYSQL_STMT *my_stmt;
   conn_data *conn_data;
@@ -304,12 +302,6 @@ static void free_result_cont(int fd, short event, void *_userdata) {
     wait_for_status(L, ms->conn_data, cur->my_res, status, free_result_cont,
                     ms->extra);
   } else {
-    luaL_unref(L, LUA_REGISTRYINDEX, cur->conn);
-    luaL_unref(L, LUA_REGISTRYINDEX, cur->colnames);
-    luaL_unref(L, LUA_REGISTRYINDEX, cur->coltypes);
-
-    cur->conn_data = NULL;
-
     lua_pushboolean(L, true);
     utlua_resume(L, NULL, 1);
   }
@@ -321,7 +313,15 @@ static void free_result_cont(int fd, short event, void *_userdata) {
 static int free_result_start(lua_State *L, cur_data *cur) {
   cur->closed = 1;
 
+  luaL_unref(L, LUA_REGISTRYINDEX, cur->colnames);
+  cur->colnames = LUA_NOREF;
+
+  luaL_unref(L, LUA_REGISTRYINDEX, cur->coltypes);
+  cur->coltypes = LUA_NOREF;
+
   conn_data *conn = cur->conn_data;
+  cur->conn_data = NULL;
+
   int status = mysql_free_result_start(cur->my_res);
   if (status) {
     wait_for_status(L, conn, cur, status, free_result_cont, 0);
@@ -421,6 +421,7 @@ static void stmt_close_cont(int fd, short event, void *_userdata) {
     lua_pushboolean(L, 1);
     utlua_resume(L, NULL, 1);
   } else {
+    luaL_unref(L, LUA_REGISTRYINDEX, st->table);
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
   }
 }
@@ -1029,20 +1030,17 @@ LUA_API int cur_numrows(lua_State *L) {
 /*
 ** Create a new Cursor object and push it on top of the stack.
 */
-static int create_cursor(lua_State *L, int conn, MYSQL_RES *result, int cols) {
+static int create_cursor(lua_State *L, conn_data *conn_data, MYSQL_RES *result, int cols) {
   cur_data *cur = (cur_data *)lua_newuserdata(L, sizeof(cur_data));
   luasql_setmeta(L, LUASQL_CURSOR_MYSQL);
 
   /* fill in structure */
   cur->closed = 0;
-  cur->conn = LUA_NOREF;
   cur->numcols = cols;
   cur->colnames = LUA_NOREF;
   cur->coltypes = LUA_NOREF;
   cur->my_res = result;
-  lua_pushvalue(L, conn);
-  cur->conn_data = lua_touserdata(L, -1);
-  cur->conn = luaL_ref(L, LUA_REGISTRYINDEX);
+  cur->conn_data = conn_data;
 
   return 1;
 }
@@ -1195,9 +1193,6 @@ LUA_API int stmt_prepare_start(lua_State *L) {
   st->my_stmt = stmt;
 
   lua_newtable(L);
-
-  lua_pushvalue(L, 1);
-  st->conn = luaL_ref(L, -2);
   st->conn_data = conn;
 
   st->table = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -1269,8 +1264,7 @@ static int real_query_result(lua_State *L, conn_data *conn_data) {
   unsigned int num_cols = mysql_field_count(&conn_data->my_conn);
 
   if (res) {
-    int count = create_cursor(L, 1, res, num_cols);
-    return count;
+    return create_cursor(L, conn_data, res, num_cols);
   } else {
     if (num_cols == 0) {
       lua_pushnumber(L, mysql_affected_rows(&conn_data->my_conn));

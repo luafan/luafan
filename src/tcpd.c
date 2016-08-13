@@ -65,34 +65,6 @@ typedef struct {
   int onDisconnectedRef;
 } ACCEPT;
 
-LUA_API int lua_tcpd_conn_gc(lua_State *L) {
-  Conn *conn = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
-  if (event_mgr_base() && conn->buf) {
-    bufferevent_free(conn->buf);
-  }
-  if (conn->onReadRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onReadRef);
-  }
-  if (conn->onSendReadyRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-  }
-  if (conn->onDisconnectedRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onDisconnectedRef);
-  }
-  if (conn->onConnectedRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onConnectedRef);
-  }
-  if (conn->host) {
-    free(conn->host);
-  }
-#if FAN_HAS_OPENSSL
-  if (conn->ssl_ctx) {
-    SSL_CTX_free(conn->ssl_ctx);
-  }
-#endif
-  return 0;
-}
-
 static void tcpd_accept_unref(ACCEPT *accept) {
   if (accept->onSendReadyRef != LUA_NOREF) {
     luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onSendReadyRef);
@@ -115,15 +87,6 @@ static void tcpd_accept_unref(ACCEPT *accept) {
   }
 }
 
-LUA_API int lua_tcpd_accept_gc(lua_State *L) {
-  ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
-  if (event_mgr_base() && accept->buf) {
-    bufferevent_free(accept->buf);
-  }
-  tcpd_accept_unref(accept);
-  return 0;
-}
-
 LUA_API int lua_tcpd_server_close(lua_State *L) {
   SERVER *serv = luaL_checkudata(L, 1, LUA_TCPD_SERVER_TYPE);
   if (serv->onAcceptRef != LUA_NOREF) {
@@ -142,6 +105,14 @@ LUA_API int lua_tcpd_server_close(lua_State *L) {
     evconnlistener_free(serv->listener);
     serv->listener = NULL;
   }
+
+#if FAN_HAS_OPENSSL
+  if (serv->ctx) {
+    SSL_CTX_free(serv->ctx);
+    serv->ctx = NULL;
+  }
+#endif
+
   return 0;
 }
 
@@ -220,7 +191,7 @@ static void tcpd_accept_readcb(struct bufferevent *bev, void *ctx) {
 
   char buf[BUFLEN];
   int n;
-  BYTEARRAY ba;
+  BYTEARRAY ba = {0};
   bytearray_alloc(&ba, BUFLEN * 2);
   struct evbuffer *input = bufferevent_get_input(bev);
   while ((n = evbuffer_remove(input, buf, sizeof(buf))) > 0) {
@@ -936,13 +907,40 @@ static const luaL_Reg tcpdlib[] = {
 
 LUA_API int tcpd_conn_close(lua_State *L) {
   Conn *conn = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
-  if (conn->buf) {
+  if (event_mgr_base() && conn->buf) {
     bufferevent_free(conn->buf);
     conn->buf = NULL;
   }
-
+  if (conn->onReadRef != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, conn->onReadRef);
+    conn->onReadRef = LUA_NOREF;
+  }
+  if (conn->onSendReadyRef != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, conn->onSendReadyRef);
+    conn->onSendReadyRef = LUA_NOREF;
+  }
+  if (conn->onDisconnectedRef != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, conn->onDisconnectedRef);
+    conn->onDisconnectedRef = LUA_NOREF;
+  }
+  if (conn->onConnectedRef != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, conn->onConnectedRef);
+    conn->onConnectedRef = LUA_NOREF;
+  }
+  if (conn->host) {
+    free(conn->host);
+    conn->host = NULL;
+  }
+#if FAN_HAS_OPENSSL
+  if (conn->ssl_ctx) {
+    SSL_CTX_free(conn->ssl_ctx);
+    conn->ssl_ctx = NULL;
+  }
+#endif
   return 0;
 }
+
+LUA_API int tcpd_conn_gc(lua_State *L) { return tcpd_conn_close(L); }
 
 LUA_API int tcpd_accept_remote(lua_State *L) {
   ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
@@ -959,13 +957,16 @@ LUA_API int tcpd_accept_remote(lua_State *L) {
 
 LUA_API int tcpd_accept_close(lua_State *L) {
   ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
-  if (accept->buf) {
+  if (event_mgr_base() && accept->buf) {
     bufferevent_free(accept->buf);
     accept->buf = NULL;
   }
-
   tcpd_accept_unref(accept);
   return 0;
+}
+
+LUA_API int lua_tcpd_accept_gc(lua_State *L) {
+  return tcpd_accept_close(L);
 }
 
 LUA_API int tcpd_accept_read_pause(lua_State *L) {
@@ -1071,7 +1072,7 @@ LUA_API int luaopen_fan_tcpd(lua_State *L) {
   lua_rawset(L, -3);
 
   lua_pushstring(L, "__gc");
-  lua_pushcfunction(L, &lua_tcpd_conn_gc);
+  lua_pushcfunction(L, &tcpd_conn_gc);
   lua_rawset(L, -3);
   lua_pop(L, 1);
 
