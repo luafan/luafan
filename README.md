@@ -8,8 +8,9 @@
 * [fan.httpd](#fanhttpd) httpd webserver module.
 * [fan.http](#fanhttp) http request module.
 * [fan.mariadb](#fanmariadb) mariadb client module.
+* [fan.stream](#fanstream) stream helper.
 
-## Quick Start
+## Quick Setup
 * ubuntu 14.04 + luajit + luafanlite
 
 ```
@@ -31,19 +32,41 @@ rm -rf luarocks-2.3.0*
 sudo luarocks install luafanlite
 ```
 
-* more with mariadb
+* ubuntu 14.04 + luajit + luafan with mariadb
 
 ```
-sudo apt-get install cmake libncurses5-dev g++
+cd
+apt-get update
+apt-get install -y wget lua5.1-dev lua5.1 luajit make gcc libc-dev libcurl4-openssl-dev libevent-dev git libevent-2.0-5 libevent-core-2.0-5 libevent-extra-2.0-5 libevent-openssl-2.0-5 libcurl3 cmake g++ bison libncurses5-dev libssl-dev
 
-wget https://downloads.mariadb.com/archives/MariaDB/mariadb-5.5.50/source/mariadb-5.5.50.tar.gz
-tar xzf mariadb-5.5.50.tar.gz 
-cd mariadb-5.5.50/
+# install luarocks if have not installed.
+rm -rf luarocks-2.3.0.tar.gz
+wget http://luarocks.org/releases/luarocks-2.3.0.tar.gz
+tar xzf luarocks-2.3.0.tar.gz
+cd luarocks-2.3.0
+./configure
+make build
+make install
+cd ..
+rm -rf luarocks-2.3.0*
+
+wget https://github.com/MariaDB/server/archive/mariadb-5.5.48.tar.gz 
+tar xzf mariadb-5.5.48.tar.gz
+cd server-mariadb-5.5.48
 cmake .
-make
-sudo make install
-sudo luarocks install luafan MARIADB_DIR=/usr/local/mysql
+cd libmysql
+make install
+cd ../include
+make install
+cd
+rm -rf mariadb-5.5.48.tar.gz server-mariadb-5.5.48
+luarocks install luafan MARIADB_DIR=/usr/local/mysql
 ```
+
+* Dockerfile
+	* [luafan-alpine](https://github.com/luafan/luafan-alpine)
+	* [luafan-ubuntu](https://github.com/luafan/luafan-ubuntu)
+
 
 # APIs
 fan
@@ -178,7 +201,7 @@ keys in the `arg`:
 	connection's write timeout.
 
 ---------
-conn apis:
+`conn` apis:
 
 ### `send(buf)`
 
@@ -206,6 +229,11 @@ resume `onread` callback.
 listening on tcp socket.
 
 ---------
+`serv` apis
+
+* `close()` shutdown the server.
+
+---------
 keys in the `arg`:
 
 * `host: string?`
@@ -219,7 +247,7 @@ keys in the `arg`:
 * `onaccept: function`
 	
 	new client connection callback, arg1 => [accept_connection](#acceptconnection)
-
+	
 * `ssl: boolean?`
 
 	listening as ssl server, default false.
@@ -232,6 +260,9 @@ keys in the `arg`:
 
 	ssl key file path.
 	
+* `onsslhostname: function`
+
+	ssl hostname (servername extension) callback, arg1 => hostname:string
 
 * `send_buffer_size: integer?`
 
@@ -460,6 +491,11 @@ keys in the responsetable:
 fan.mariadb
 ===========
 
+### Const
+* `mariadb.LONG_DATA` used as placeholder for `stmt:bind_param`
+
+---------
+
 ### `conn = connect(dbname:string, username:string, password:string, host:string?, port:integer?)`
 
 connect to mariadb server.
@@ -480,6 +516,44 @@ connect to mariadb server.
 
 ---------
 
+fan.stream
+==========
+
+### `stream_obj = stream.new(data:string?)`
+
+stream api in c to cross luajit and lua5.2+
+
+---------
+* `new()` create a new stream object for write.
+* `new(data:string)` create a new stream object for read, init with data.
+
+---------
+
+`stream` apis (LITTLE-ENDIAN)
+
+* `available()` get the available data length to read
+* `GetU8()` read byte(1) as integer.
+* `GetS24()` read byte(3) as integer.
+* `GetU24()` read byte(3) as unsigned integer.
+* `GetU16()` read byte(2) as unsigned integer.
+* `GetU32()` read byte(4) as unsigned integer.
+* `GetU30()` read byte(1-5) as unsigned integer.
+* `GetD64()` read byte(8) as double
+* `GetBytes(length:number)` read byte(length) as string.
+* `GetString()` read string.
+* `AddU8(value:uinteger)` write unsigned integer as byte(1)
+* `AddU16(value:uinteger)` write unsigned integer as byte(2)
+* `AddS24(value:integer)` write integer as byte(3)
+* `AddU24(value:uinteger)` write unsigned integer as byte(3)
+* `AddU30(value:uinteger)` write unsigned integer as byte(1-5)
+* `AddD64(value:uinteger)` write double as byte(8)
+* `AddBytes(value:string)` write string as byte(#value)
+* `AddString(value:string)` write string.
+* `package():string` package all data inside the write stream.
+
+---------
+
+
 PreparedStatement
 =================
 
@@ -487,6 +561,8 @@ PreparedStatement
 close statement.
 ### `bind_param(...)`
 bind statement parameters.
+### `send_long_data(idx, value:string)`
+if parameter n of `bind_param` (n start from 0) is `mariadb.LONG_DATA`, use `stmt: send_long_data(n, value:string)` to send the long data to n.
 ### `execute()`
 execute this statement
 ### `fetch()`
