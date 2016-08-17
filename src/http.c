@@ -40,6 +40,7 @@ typedef struct _ConnInfo {
 
   int headerref;
   int retref;
+  int bodyref;
 
   struct curl_slist *headers;
 } ConnInfo;
@@ -136,6 +137,11 @@ static void http_getpost_complete(ConnInfo *conn) {
     luaL_unref(L, LUA_REGISTRYINDEX, conn->oncompleteref);
 
     L = co;
+  }
+
+  if (conn->bodyref != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, conn->bodyref);
+    conn->bodyref = LUA_NOREF;
   }
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, conn->retref);
@@ -657,6 +663,7 @@ static int http_getpost(lua_State *L, int method) {
   conn->onwriteref = LUA_NOREF;
   conn->oncompleteref = LUA_NOREF;
   conn->coref = LUA_NOREF;
+  conn->bodyref = LUA_NOREF;
 
   bytearray_alloc(&conn->input, 1024);
 
@@ -1010,6 +1017,9 @@ static int http_getpost(lua_State *L, int method) {
       if (lua_isstring(L, -1)) {
         size_t len = 0;
         const char *data = lua_tolstring(L, -1, &len);
+        lua_pushvalue(L, -1);
+        conn->bodyref = luaL_ref(L, LUA_REGISTRYINDEX);
+        
         curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, len);
         curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, data);
       } else if (!lua_isnil(L, -1)) {
