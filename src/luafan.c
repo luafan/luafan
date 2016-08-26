@@ -3,52 +3,11 @@
 #endif
 
 #include "utlua.h"
-
-#include <signal.h>
 #include <sys/stat.h>
-
-static int signal_count = 0;
-static struct event signal_int;
-static struct event signal_pipe;
 
 static struct event *mainevent;
 static int main_ref;
 static lua_State *mainState;
-
-static void signal_handler(int sig) {
-  printf("singal %d\n", sig);
-  switch (sig) {
-  case SIGINT:
-    signal_count++;
-    if (signal_count > 1) {
-      printf("force exit.\n");
-      exit(0);
-    }
-  case SIGTERM:
-  case SIGHUP:
-  case SIGQUIT:
-    event_mgr_break();
-    break;
-  case SIGPIPE:
-    printf("ignore SIGPIPE.\n");
-    break;
-  }
-}
-
-static void signal_cb(evutil_socket_t fd, short event, void *arg) {
-  struct event *signal = arg;
-  printf("%s: got signal %d\n", __func__, EVENT_SIGNAL(signal));
-
-  switch (EVENT_SIGNAL(signal)) {
-  case SIGTERM:
-  case SIGHUP:
-  case SIGQUIT:
-  case SIGINT:
-    event_mgr_break();
-  default:
-    break;
-  }
-}
 
 static void main_handler(const int fd, const short which, void *arg) {
   evtimer_del(mainevent);
@@ -73,6 +32,7 @@ LUA_API int luafan_start(lua_State *L) {
       struct timeval t = {0, 1};
       mainevent = malloc(sizeof(struct event));
       evtimer_set(mainevent, main_handler, NULL);
+      event_mgr_init();
       event_base_set(event_mgr_base(), mainevent);
       evtimer_add(mainevent, &t);
     }
@@ -202,22 +162,6 @@ LUA_API int luaopen_fan(lua_State *L) {
 #if (LUA_VERSION_NUM < 502)
   utlua_set_mainthread(L);
 #endif
-
-  event_mgr_init();
-
-  signal(SIGHUP, signal_handler);
-  signal(SIGTERM, signal_handler);
-  signal(SIGINT, signal_handler);
-  signal(SIGQUIT, signal_handler);
-  signal(SIGPIPE, signal_handler);
-
-  event_assign(&signal_int, event_mgr_base(), SIGINT, EV_SIGNAL | EV_PERSIST,
-               signal_cb, &signal_int);
-  event_add(&signal_int, NULL);
-
-  event_assign(&signal_pipe, event_mgr_base(), SIGPIPE, EV_SIGNAL | EV_PERSIST,
-               signal_cb, &signal_pipe);
-  event_add(&signal_pipe, NULL);
 
   lua_newtable(L);
   luaL_register(L, "fan", fanlib);

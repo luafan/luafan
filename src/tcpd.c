@@ -5,11 +5,20 @@
 #define LUA_TCPD_SERVER_TYPE "<tcpd.bind %s %d>"
 #define LUA_TCPD_ACCEPT_TYPE "<tcpd.accept %s %d>"
 
+#if FAN_HAS_OPENSSL
+typedef struct {
+  SSL_CTX *ssl_ctx;
+  char *key;
+  int retainCount;
+} SSLCTX;
+#endif
+
 typedef struct {
   struct bufferevent *buf;
 
 #if FAN_HAS_OPENSSL
-  SSL_CTX *ssl_ctx;
+  SSLCTX *sslctx;
+
   int ssl_verifyhost;
   int ssl_verifypeer;
   const char *ssl_error;
@@ -27,9 +36,17 @@ typedef struct {
 
   int ipv6;
 
+  int send_buffer_size;
+  int receive_buffer_size;
+
   lua_Number read_timeout;
   lua_Number write_timeout;
 } Conn;
+
+#if FAN_HAS_OPENSSL
+#define VERIFY_DEPTH 5
+static int conn_index = 0;
+#endif
 
 typedef struct {
   struct evconnlistener *listener;
@@ -628,13 +645,13 @@ static void luatcpd_reconnect(Conn *conn) {
     bufferevent_free(conn->buf);
   }
 #if FAN_HAS_OPENSSL
-
   conn->ssl_error = 0;
 
-  if (conn->ssl_ctx) {
-    SSL *ssl = SSL_new(conn->ssl_ctx);
-    SSL_set_tlsext_host_name(ssl, conn->host);
+  if (conn->sslctx) {
+    SSL *ssl = SSL_new(conn->sslctx->ssl_ctx);
+    SSL_set_ex_data(ssl, conn_index, conn);
 
+    SSL_set_tlsext_host_name(ssl, conn->host);
     conn->buf = bufferevent_openssl_socket_new(
         event_mgr_base(), -1, ssl, BUFFEREVENT_SSL_CONNECTING,
         BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
@@ -655,6 +672,16 @@ static void luatcpd_reconnect(Conn *conn) {
                                                conn->ipv6 ? AF_INET6 : AF_INET,
                                                conn->host, conn->port);
 
+  evutil_socket_t fd = bufferevent_getfd(conn->buf);
+  if (conn->send_buffer_size) {
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &conn->send_buffer_size,
+               sizeof(conn->send_buffer_size));
+  }
+  if (conn->receive_buffer_size) {
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &conn->receive_buffer_size,
+               sizeof(conn->receive_buffer_size));
+  }
+
   if (rc < 0) {
     LOGE("could not connect to %s:%d %s", conn->host, conn->port,
          evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
@@ -672,7 +699,10 @@ static void luatcpd_reconnect(Conn *conn) {
 
 static int cert_verify_callback(X509_STORE_CTX *x509_ctx, void *arg) {
   //    char cert_str[256];
-  Conn *conn = (Conn *)arg;
+  SSL *ssl = X509_STORE_CTX_get_ex_data(x509_ctx,
+                                        SSL_get_ex_data_X509_STORE_CTX_idx());
+  Conn *conn = SSL_get_ex_data(ssl, conn_index);
+
   if (!conn->ssl_verifypeer) {
     return 1;
   }
@@ -743,9 +773,11 @@ LUA_API int tcpd_connect(lua_State *L) {
   Conn *conn = lua_newuserdata(L, sizeof(Conn));
   conn->buf = NULL;
 #if FAN_HAS_OPENSSL
-  conn->ssl_ctx = NULL;
+  conn->sslctx = NULL;
   conn->ssl_error = 0;
 #endif
+  conn->send_buffer_size = 0;
+  conn->receive_buffer_size = 0;
 
   lua_getfield(L, 1, "onread");
   if (lua_isfunction(L, -1)) {
@@ -809,32 +841,59 @@ LUA_API int tcpd_connect(lua_State *L) {
   conn->ipv6 = lua_toboolean(L, -1);
   lua_pop(L, 1);
 
-  lua_getfield(L, 1, "cainfo");
-  const char *cainfo = lua_tostring(L, -1);
-  lua_pop(L, 1);
-
-  lua_getfield(L, 1, "capath");
-  const char *capath = lua_tostring(L, -1);
-  lua_pop(L, 1);
-
   if (ssl) {
-    if (!cainfo) {
-      luaL_error(L, "cainfo has not been set.");
-    } else {
-      conn->ssl_ctx = SSL_CTX_new(SSLv23_method());
-      SSL_CTX_load_verify_locations(conn->ssl_ctx, cainfo, capath);
+    BYTEARRAY ba = {0};
+    bytearray_alloc(&ba, BUFLEN);
+    bytearray_writebuffer(&ba, "SSL_CTX:", strlen("SSL_CTX_"));
 
-      SSL_CTX_set_verify(conn->ssl_ctx, SSL_VERIFY_PEER, NULL);
-      SSL_CTX_set_cert_verify_callback(conn->ssl_ctx, cert_verify_callback,
-                                       conn);
+    lua_getfield(L, 1, "cainfo");
+    const char *cainfo = luaL_checkstring(L, -1);
+    if (cainfo) {
+      bytearray_writebuffer(&ba, cainfo, strlen(cainfo));
+    }
+    lua_pop(L, 1);
 
-      lua_getfield(L, 1, "pkcs12.path");
-      const char *p12path = luaL_optstring(L, -1, NULL);
-      lua_pop(L, 1);
+    lua_getfield(L, 1, "capath");
+    const char *capath = luaL_optstring(L, -1, NULL);
+    if (capath) {
+      bytearray_writebuffer(&ba, capath, strlen(capath));
+    }
+    lua_pop(L, 1);
 
-      lua_getfield(L, 1, "pkcs12.password");
-      const char *p12password = luaL_optstring(L, -1, NULL);
-      lua_pop(L, 1);
+    lua_getfield(L, 1, "pkcs12.path");
+    const char *p12path = luaL_optstring(L, -1, NULL);
+    if (p12path) {
+      bytearray_writebuffer(&ba, p12path, strlen(p12path));
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "pkcs12.password");
+    const char *p12password = luaL_optstring(L, -1, NULL);
+    if (p12password) {
+      bytearray_writebuffer(&ba, p12password, strlen(p12password));
+    }
+    lua_pop(L, 1);
+
+    bytearray_write8(&ba, 0);
+    bytearray_read_ready(&ba);
+
+    lua_getfield(L, LUA_REGISTRYINDEX, (const char *)ba.buffer);
+    if (lua_isnil(L, -1)) {
+      SSLCTX *sslctx = lua_newuserdata(L, sizeof(SSLCTX));
+      sslctx->key = strdup((const char *)ba.buffer);
+      sslctx->ssl_ctx = SSL_CTX_new(SSLv23_method());
+      conn->sslctx = sslctx;
+      sslctx->retainCount = 1;
+      lua_setfield(L, LUA_REGISTRYINDEX, (const char *)ba.buffer);
+
+      SSL_CTX_load_verify_locations(sslctx->ssl_ctx, cainfo, capath);
+#ifdef SSL_MODE_RELEASE_BUFFERS
+      SSL_CTX_set_mode(sslctx->ssl_ctx, SSL_MODE_RELEASE_BUFFERS);
+#endif
+      SSL_CTX_set_options(sslctx->ssl_ctx, SSL_OP_NO_COMPRESSION);
+      SSL_CTX_set_verify(sslctx->ssl_ctx, SSL_VERIFY_PEER, NULL);
+      SSL_CTX_set_cert_verify_callback(sslctx->ssl_ctx, cert_verify_callback,
+                                       NULL);
 
       while (p12path) {
         FILE *fp = NULL;
@@ -860,14 +919,14 @@ LUA_API int tcpd_connect(lua_State *L) {
           fprintf(stderr, "Error parsing PKCS#12 file\n");
           ERR_print_errors_fp(stderr);
         } else {
-          SSL_CTX_use_certificate(conn->ssl_ctx, cert);
+          SSL_CTX_use_certificate(sslctx->ssl_ctx, cert);
           if (ca && sk_X509_num(ca)) {
             int i = 0;
             for (i = 0; i < sk_X509_num(ca); i++) {
-              SSL_CTX_use_certificate(conn->ssl_ctx, sk_X509_value(ca, i));
+              SSL_CTX_use_certificate(sslctx->ssl_ctx, sk_X509_value(ca, i));
             }
           }
-          SSL_CTX_use_PrivateKey(conn->ssl_ctx, pkey);
+          SSL_CTX_use_PrivateKey(sslctx->ssl_ctx, pkey);
 
           sk_X509_pop_free(ca, X509_free);
           X509_free(cert);
@@ -879,9 +938,32 @@ LUA_API int tcpd_connect(lua_State *L) {
 
         break;
       }
+    } else {
+      SSLCTX *sslctx = lua_touserdata(L, -1);
+      sslctx->retainCount++;
+      conn->sslctx = sslctx;
     }
+    lua_pop(L, 1);
+
+    bytearray_dealloc(&ba);
   }
 #endif
+
+  lua_getfield(L, 1, "send_buffer_size");
+  if (!lua_isnil(L, -1)) {
+    conn->send_buffer_size = (int)lua_tointeger(L, -1);
+  } else {
+    conn->send_buffer_size = 0;
+  }
+  lua_pop(L, 1);
+
+  lua_getfield(L, 1, "receive_buffer_size");
+  if (!lua_isnil(L, -1)) {
+    conn->receive_buffer_size = (int)lua_tointeger(L, -1);
+  } else {
+    conn->receive_buffer_size = 0;
+  }
+  lua_pop(L, 1);
 
   lua_getfield(L, 1, "read_timeout");
   lua_Number read_timeout = (int)luaL_optnumber(L, -1, 0);
@@ -932,9 +1014,16 @@ LUA_API int tcpd_conn_close(lua_State *L) {
     conn->host = NULL;
   }
 #if FAN_HAS_OPENSSL
-  if (conn->ssl_ctx) {
-    SSL_CTX_free(conn->ssl_ctx);
-    conn->ssl_ctx = NULL;
+  if (conn->sslctx) {
+    conn->sslctx->retainCount--;
+    if (conn->sslctx->retainCount <= 0) {
+      lua_pushnil(L);
+      lua_setfield(L, LUA_REGISTRYINDEX, conn->sslctx->key);
+
+      SSL_CTX_free(conn->sslctx->ssl_ctx);
+      free(conn->sslctx->key);
+    }
+    conn->sslctx = NULL;
   }
 #endif
   return 0;
@@ -965,9 +1054,7 @@ LUA_API int tcpd_accept_close(lua_State *L) {
   return 0;
 }
 
-LUA_API int lua_tcpd_accept_gc(lua_State *L) {
-  return tcpd_accept_close(L);
-}
+LUA_API int lua_tcpd_accept_gc(lua_State *L) { return tcpd_accept_close(L); }
 
 LUA_API int tcpd_accept_read_pause(lua_State *L) {
   ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
@@ -1050,6 +1137,10 @@ LUA_API int tcpd_accept_send(lua_State *L) {
 }
 
 LUA_API int luaopen_fan_tcpd(lua_State *L) {
+#if FAN_HAS_OPENSSL
+  conn_index = SSL_get_ex_new_index(0, "conn_index", NULL, NULL, NULL);
+#endif
+
   luaL_newmetatable(L, LUA_TCPD_CONNECTION_TYPE);
 
   lua_pushcfunction(L, &tcpd_conn_send);

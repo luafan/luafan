@@ -133,14 +133,14 @@ typedef struct {
 typedef struct {
   short closed;
   int table; // ref in registry
-  int bind; // index in table
-  int nums; // index in table
+  int bind;  // index in table
+  int nums;  // index in table
   int has_bind_param;
 
-  int rbind; // index in table
-  int buffers; // index in table
+  int rbind;      // index in table
+  int buffers;    // index in table
   int bufferlens; // index in table
-  int is_nulls; // index in table
+  int is_nulls;   // index in table
 
   MYSQL_STMT *my_stmt;
   conn_data *conn_data;
@@ -211,7 +211,7 @@ static st_data *getstatement(lua_State *L) {
   return st;
 }
 
-static int luamariadb_push_errno(lua_State *L, conn_data *conn){
+static int luamariadb_push_errno(lua_State *L, conn_data *conn) {
   int errorcode = mysql_errno(&conn->my_conn);
   if (errorcode) {
     lua_pushnil(L);
@@ -715,8 +715,8 @@ static int stmt_execute_result(lua_State *L, st_data *st) {
         // rbind[i].buffer_length = 1024;
       }
 
-        // printf("fields[i].length = %d\n", fields[i].length);
-        // break;
+      // printf("fields[i].length = %d\n", fields[i].length);
+      // break;
       case MYSQL_TYPE_VAR_STRING:
       case MYSQL_TYPE_STRING: {
         void *buffer =
@@ -1030,7 +1030,8 @@ LUA_API int cur_numrows(lua_State *L) {
 /*
 ** Create a new Cursor object and push it on top of the stack.
 */
-static int create_cursor(lua_State *L, conn_data *conn_data, MYSQL_RES *result, int cols) {
+static int create_cursor(lua_State *L, conn_data *conn_data, MYSQL_RES *result,
+                         int cols) {
   cur_data *cur = (cur_data *)lua_newuserdata(L, sizeof(cur_data));
   luasql_setmeta(L, LUASQL_CURSOR_MYSQL);
 
@@ -1200,9 +1201,15 @@ LUA_API int stmt_prepare_start(lua_State *L) {
   unsigned long type = (unsigned long)CURSOR_TYPE_READ_ONLY;
   unsigned long prefetch_rows = 5;
   int rc = mysql_stmt_attr_set(stmt, STMT_ATTR_CURSOR_TYPE, (void *)&type);
+  if (rc != 0) {
+    printf("ATTR SET STMT_ATTR_CURSOR_TYPE %ld, rc=%d\n", type, rc);
+  }
   /* ... check return value ... */
   rc = mysql_stmt_attr_set(stmt, STMT_ATTR_PREFETCH_ROWS,
                            (void *)&prefetch_rows);
+  if (rc != 0) {
+    printf("ATTR SET STMT_ATTR_PREFETCH_ROWS %ld, rc=%d\n", prefetch_rows, rc);
+  }
 
   int ret = 0;
   int status = mysql_stmt_prepare_start(&ret, stmt, statement, st_len);
@@ -1540,8 +1547,8 @@ LUA_API int real_connect_start(lua_State *L) {
   /* fill in structure */
   cdata->closed = 0;
 
-  int status = mysql_real_connect_start(&ret, &cdata->my_conn, host, username, password,
-                                        sourcename, port, NULL, 0);
+  int status = mysql_real_connect_start(&ret, &cdata->my_conn, host, username,
+                                        password, sourcename, port, NULL, 0);
   if (status) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     wait_for_status(L, cdata, &cdata->my_conn, status, real_connect_cont, ref);

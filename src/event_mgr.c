@@ -3,17 +3,62 @@
 #include "utlua.h"
 #include <lua.h>
 
+#include <signal.h>
+
 static struct event_base *base = NULL;
 static struct evdns_base *dnsbase = NULL;
 
+static int signal_count = 0;
+static struct event signal_int;
+static struct event signal_pipe;
+
+static int setup = 0;
 static int looping = 0;
 
 struct event_base *event_mgr_base() {
+  if (!base) {
+    base = event_base_new();
+  }
   return base;
 }
 
 struct evdns_base *event_mgr_dnsbase() {
   return dnsbase;
+}
+
+static void signal_handler(int sig) {
+  printf("%s: got singal %d\n", __func__, sig);
+  switch (sig) {
+  case SIGINT:
+    signal_count++;
+    if (signal_count > 1) {
+      printf("force exit.\n");
+      exit(0);
+    }
+  case SIGTERM:
+  case SIGHUP:
+  case SIGQUIT:
+    event_mgr_break();
+    break;
+  case SIGPIPE:
+    printf("ignore SIGPIPE.\n");
+    break;
+  }
+}
+
+static void signal_cb(evutil_socket_t fd, short event, void *arg) {
+  struct event *signal = arg;
+  printf("%s: got signal %d\n", __func__, EVENT_SIGNAL(signal));
+
+  switch (EVENT_SIGNAL(signal)) {
+  case SIGTERM:
+  case SIGHUP:
+  case SIGQUIT:
+  case SIGINT:
+    event_mgr_break();
+  default:
+    break;
+  }
 }
 
 void event_mgr_break() {
@@ -23,9 +68,9 @@ void event_mgr_break() {
 }
 
 int event_mgr_init() {
-  if (!base) {
-    base = event_base_new();
-    dnsbase = evdns_base_new(base, 1);
+  if (!setup) {
+    setup = 1;
+    dnsbase = evdns_base_new(event_mgr_base(), 1);
     evdns_base_set_option(dnsbase, "randomize-case:", "0");
 
 #if FAN_HAS_OPENSSL
@@ -35,6 +80,19 @@ int event_mgr_init() {
     OpenSSL_add_all_algorithms();
 #endif
 
+    signal(SIGHUP, signal_handler);
+    signal(SIGTERM, signal_handler);
+    signal(SIGINT, signal_handler);
+    signal(SIGQUIT, signal_handler);
+    signal(SIGPIPE, signal_handler);
+
+    event_assign(&signal_int, event_mgr_base(), SIGINT, EV_SIGNAL | EV_PERSIST,
+                 signal_cb, &signal_int);
+    event_add(&signal_int, NULL);
+
+    event_assign(&signal_pipe, event_mgr_base(), SIGPIPE,
+                 EV_SIGNAL | EV_PERSIST, signal_cb, &signal_pipe);
+    event_add(&signal_pipe, NULL);
     return 0;
   }
 
@@ -61,6 +119,7 @@ int event_mgr_loop() {
     base = NULL;
     dnsbase = NULL;
     looping = 0;
+    setup = 0;
     return 0;
   }
 
