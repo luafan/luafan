@@ -222,6 +222,8 @@ LUA_API int udpd_new(lua_State *L) {
 
   Conn *conn = lua_newuserdata(L, sizeof(Conn));
   conn->socket_fd = 0;
+  conn->write_ev = NULL;
+  conn->read_ev = NULL;
 
   lua_getfield(L, 1, "onread");
   if (lua_isfunction(L, -1)) {
@@ -272,9 +274,7 @@ LUA_API int udpd_new(lua_State *L) {
 
   conn->L = utlua_mainthread(L);
 
-  if (conn->bind_port) {
-    luaudpd_reconnect(conn, L);
-  }
+  luaudpd_reconnect(conn, L);
 
   return 1;
 }
@@ -302,7 +302,6 @@ LUA_API int udpd_conn_send(lua_State *L) {
 
 LUA_API int udpd_conn_send_request(lua_State *L) {
   Conn *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
-
   if (conn->write_ev) {
     event_add(conn->write_ev, NULL);
   } else {
