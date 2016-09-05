@@ -50,7 +50,7 @@ make install
 cd ..
 rm -rf luarocks-2.3.0*
 
-wget https://github.com/MariaDB/server/archive/mariadb-5.5.48.tar.gz 
+wget https://github.com/MariaDB/server/archive/mariadb-5.5.48.tar.gz
 tar xzf mariadb-5.5.48.tar.gz
 cd server-mariadb-5.5.48
 cmake .
@@ -93,7 +93,7 @@ fan.fifo
 ========
 ### `conn = fifo.connect(arg:table)`
 
-connect to fifo file, create a new one if not exist, [Samples](#fifosample)
+connect to fifo file, create a new one if not exist, [Samples](#fifo-sample)
 
 ---------
 keys in the `arg`:
@@ -101,7 +101,7 @@ keys in the `arg`:
 * `name: string`
 
 	fifo file name/path.
-	
+
 * `mode: integer`
 
 	fifo file permission, default 0600.
@@ -117,11 +117,11 @@ keys in the `arg`:
 * `onsendready: function`
 
 	stream output complete callback, available if `rwmode` is "w", no arg
-	
+
 * `ondisconnected: function`
 
 	reader disconnected callback, available if `rwmode` is "w", arg1 => reason:string
-	
+
 ---------
 conn apis:
 
@@ -245,21 +245,21 @@ keys in the `arg`:
 	port to listen, if not set, use random port which is available.
 
 * `onaccept: function`
-	
+
 	new client connection callback, arg1 => [accept_connection](#acceptconnection)
-	
+
 * `ssl: boolean?`
 
 	listening as ssl server, default false.
-	
+
 * `cert: string?`
 
 	ssl cert file path.
-	
+
 * `key: string?`
 
 	ssl key file path.
-	
+
 * `onsslhostname: function`
 
 	ssl hostname (servername extension) callback, arg1 => hostname:string
@@ -381,7 +381,7 @@ if arg is string, use it as `url` key in the following arg table.
 keys in the `arg`:
 
 * `url: string`
- 
+
 	the url path string
 
 * `headers: table?`
@@ -391,11 +391,11 @@ keys in the `arg`:
 * `verbose: boolean?`
 
 	save all request message to file named verbose.log
-	
+
 * `dns_servers: string?`
 
 	customize the dns servers, format `1.2.3.4,2.3.4.5`, refer to `CURLOPT_DNS_SERVERS`
-	
+
 * `onprogress: function?`
 
 	progress callback, arg1 => dltotal:integer, arg2 => dlnow:integer, arg3 => ultotal:integer, arg4 => ulnow:integer, refer to `CURLOPT_PROGRESSFUNCTION`
@@ -403,11 +403,11 @@ keys in the `arg`:
 * `timeout: number?`
 
 	low speed timeout, less than 0 in 1min, refer to `CURLOPT_LOW_SPEED_TIME`
-	
+
 * `conntimeout: number?`
 
 	connection timeout, `CURLOPT_TIMEOUT`
-	
+
 * `ssl_verifypeer: integer?`, refer to `CURLOPT_SSL_VERIFYPEER`
 
 * `ssl_verifyhost: integer?`, refer to `CURLOPT_SSL_VERIFYHOST`
@@ -437,7 +437,7 @@ keys in the `arg`:
 * `onsend: function?`
 
 	callback for data upload, refer to `CURLOPT_READFUNCTION`
-	
+
 * `body: string?`
 
 	full body for data to be sent, available if onsend not defined.
@@ -445,11 +445,11 @@ keys in the `arg`:
 * `onreceive: function?`
 
 	callback on receive data from remote, if not set, get the response body from reponsetable.body, arg1 => data:string
-	
+
 * `onheader: function?`
 
 	callback on receive the header part, arg1 => header:table
-	
+
 * `oncomplete: function?`
 
 	callback on http request complete, the http operation return nothing, if not set, the http operation return the responsetable only the request completed. arg1 => responsetable:table
@@ -474,7 +474,7 @@ keys in the responsetable:
 * `body: string`
 
 	response body, available on `onreceive` callback not set.
-	
+
 * `headers: table`
 
 	response headers, format as `{singlekey = "value", multikey = {"value1", "value2"}}`
@@ -482,7 +482,7 @@ keys in the responsetable:
 * `cookies: table`
 
 	list of cookies.
-	
+
 * `error: string`
 
 	error during request, must check this to make sure http request fully complete.

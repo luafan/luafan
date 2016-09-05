@@ -105,7 +105,7 @@ int event_mgr_loop() {
 
     looping = 1;
 
-    event_base_dispatch(base);
+    event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
 
 #if FAN_HAS_OPENSSL
     EVP_cleanup();
