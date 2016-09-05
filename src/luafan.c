@@ -4,6 +4,7 @@
 
 #include "utlua.h"
 #include <sys/stat.h>
+#include <unistd.h>
 
 static struct event *mainevent;
 static int main_ref;
@@ -145,6 +146,11 @@ LUA_API int luafan_gettime(lua_State *L) {
   return 2;
 }
 
+LUA_API int luafan_fork(lua_State *L) {
+  lua_pushinteger(L, fork());
+  return 1;
+}
+
 static const struct luaL_Reg fanlib[] = {
     {"loop", luafan_start},
     {"loopbreak", luafan_stop},
@@ -154,6 +160,8 @@ static const struct luaL_Reg fanlib[] = {
 
     {"data2hex", data2hex},
     {"hex2data", hex2data},
+
+    {"fork", luafan_fork},
 
     {NULL, NULL},
 };
