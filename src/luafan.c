@@ -171,6 +171,8 @@ LUA_API int luaopen_fan(lua_State *L) {
   utlua_set_mainthread(L);
 #endif
 
+  event_mgr_init();
+
   lua_newtable(L);
   luaL_register(L, "fan", fanlib);
   return 1;
