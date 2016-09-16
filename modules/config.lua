@@ -14,7 +14,7 @@ local function load_config(dir)
             end
         end
     else
-      print(string.format("config [%s] not found!", dir))
+      print(string.format("config [%s] not found, ignored.", dir))
     end
 end
 

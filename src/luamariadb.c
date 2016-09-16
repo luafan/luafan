@@ -1161,14 +1161,7 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata) {
       lua_rawgeti(L, LUA_REGISTRYINDEX, ms->extra);
       utlua_resume(L, NULL, 1);
     } else {
-      if (ret) {
-        lua_pushnil(L);
-        lua_pushstring(L, mysql_error(st->my_stmt->mysql));
-
-        utlua_resume(L, NULL, 2);
-      } else {
-        utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-      }
+      utlua_resume(L, NULL, luamariadb_push_errno(L, st->conn_data));
     }
   }
 
@@ -1217,10 +1210,13 @@ LUA_API int stmt_prepare_start(lua_State *L) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     wait_for_status(L, conn, st, status, stmt_prepare_cont, ref);
     return lua_yield(L, 0);
-  } else {
-    stmt_prepare_result(L, st);
-    return 1;
-  }
+  } else if (ret == 0) {
+      stmt_prepare_result(L, st);
+      // st_data on the top.
+      return 1;
+    } else {
+      return luamariadb_push_errno(L, st->conn_data);
+    }
 }
 
 static int conn_ping_result(lua_State *L, conn_data *conn_data) {
