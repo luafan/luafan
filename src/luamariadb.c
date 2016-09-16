@@ -223,6 +223,13 @@ static int luamariadb_push_errno(lua_State *L, conn_data *conn) {
   }
 }
 
+static int luamariadb_push_stmt_error(lua_State *L, st_data *st) {
+  lua_pushnil(L);
+  lua_pushstring(L, mysql_stmt_error(st->my_stmt));
+
+  return 2;
+}
+
 static void pushvalue(lua_State *L, void *row, long int len) {
   if (row == NULL)
     lua_pushnil(L);
@@ -580,25 +587,20 @@ static void stmt_fetch_cont(int fd, short event, void *_userdata) {
   lua_State *L = ms->L;
 
   int ret = 0;
-  int status = mysql_stmt_fetch_cont(&ret, st->my_stmt, ms->status);
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-
-    utlua_resume(L, NULL, 2);
-  } else if (status) {
-    wait_for_status(L, st->conn_data, st, status, stmt_fetch_cont, ms->extra);
-  } else if (ret == 0) {
-    int count = stmt_fetch_result(L, st);
-    utlua_resume(L, NULL, count);
+    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
   } else {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-
-    utlua_resume(L, NULL, 2);
+    int status = mysql_stmt_fetch_cont(&ret, st->my_stmt, ms->status);
+    if (status) {
+      wait_for_status(L, st->conn_data, st, status, stmt_fetch_cont, ms->extra);
+    } else if (ret == 0) {
+      int count = stmt_fetch_result(L, st);
+      utlua_resume(L, NULL, count);
+    } else {
+      utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    }
   }
-
   event_free(ms->event);
   free(ms);
 }
@@ -617,10 +619,7 @@ LUA_API int stmt_fetch_start(lua_State *L) {
   } else if (ret == MYSQL_NO_DATA) {
     return 0;
   } else {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-
-    return 2;
+    return luamariadb_push_stmt_error(L, st);
   }
 }
 
@@ -637,25 +636,22 @@ static void stmt_store_result_cont(int fd, short event, void *_userdata) {
   st_data *st = (st_data *)ms->data;
   lua_State *L = ms->L;
 
-  int ret = 0;
-  int status = mysql_stmt_store_result_cont(&ret, st->my_stmt, ms->status);
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-
-    utlua_resume(L, NULL, 2);
-  } else if (status) {
-    wait_for_status(L, st->conn_data, st, status, stmt_store_result_cont,
-                    ms->extra);
-  } else if (ret == 0) {
-    utlua_resume(L, NULL, 0);
+    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
   } else {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-    utlua_resume(L, NULL, 2);
-  }
+    int ret = 0;
+    int status = mysql_stmt_store_result_cont(&ret, st->my_stmt, ms->status);
 
+    if (status) {
+      wait_for_status(L, st->conn_data, st, status, stmt_store_result_cont,
+                      ms->extra);
+    } else if (ret == 0) {
+      utlua_resume(L, NULL, 0);
+    } else {
+      utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    }
+  }
   event_free(ms->event);
   free(ms);
 }
@@ -670,9 +666,7 @@ static int stmt_store_result_start(lua_State *L, st_data *st) {
   } else if (ret == 0) {
     return 0;
   } else {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-    return 2;
+    return luamariadb_push_stmt_error(L, st);
   }
 }
 
@@ -759,9 +753,7 @@ static int stmt_execute_result(lua_State *L, st_data *st) {
     lua_pop(L, 1); // pop table
 
     if (mysql_stmt_bind_result(st->my_stmt, rbind)) {
-      lua_pushnil(L);
-      lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-      return 2;
+      return luamariadb_push_stmt_error(L, st);
     }
 
     return stmt_store_result_start(L, st);
@@ -773,28 +765,24 @@ static void stmt_execute_cont(int fd, short event, void *_userdata) {
   st_data *st = (st_data *)ms->data;
   lua_State *L = ms->L;
 
-  int ret = 0;
-  int status = mysql_stmt_execute_cont(&ret, st->my_stmt, ms->status);
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-
-    utlua_resume(L, NULL, 2);
-  } else if (status) {
-    wait_for_status(L, st->conn_data, st, status, stmt_execute_cont, ms->extra);
-  } else if (ret == 0) {
-    int count = stmt_execute_result(L, st);
-    if (count != CONTINUE_YIELD) {
-      utlua_resume(L, NULL, count);
-    }
+    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
   } else {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-
-    utlua_resume(L, NULL, 2);
+    int ret = 0;
+    int status = mysql_stmt_execute_cont(&ret, st->my_stmt, ms->status);
+    if (status) {
+      wait_for_status(L, st->conn_data, st, status, stmt_execute_cont,
+                      ms->extra);
+    } else if (ret == 0) {
+      int count = stmt_execute_result(L, st);
+      if (count != CONTINUE_YIELD) {
+        utlua_resume(L, NULL, count);
+      }
+    } else {
+      utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    }
   }
-
   event_free(ms->event);
   free(ms);
 }
@@ -816,9 +804,7 @@ LUA_API int stmt_execute_start(lua_State *L) {
       return lua_yield(L, 0);
     }
   } else {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-    return 2;
+    return luamariadb_push_stmt_error(L, st);
   }
 }
 
@@ -902,25 +888,21 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata) {
   st_data *st = (st_data *)ms->data;
   lua_State *L = ms->L;
 
-  my_bool ret = 0;
-  int status = mysql_stmt_send_long_data_cont(&ret, st->my_stmt, ms->status);
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-
-    utlua_resume(L, NULL, 2);
-  } else if (status) {
-    wait_for_status(L, st->conn_data, st, status, stmt_send_long_data_event,
-                    ms->extra);
-  } else if (ret == 0) {
-    int count = stmt_send_long_data_result(L, st);
-    utlua_resume(L, NULL, count);
+    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
   } else {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-
-    utlua_resume(L, NULL, 2);
+    my_bool ret = 0;
+    int status = mysql_stmt_send_long_data_cont(&ret, st->my_stmt, ms->status);
+    if (status) {
+      wait_for_status(L, st->conn_data, st, status, stmt_send_long_data_event,
+                      ms->extra);
+    } else if (ret == 0) {
+      int count = stmt_send_long_data_result(L, st);
+      utlua_resume(L, NULL, count);
+    } else {
+      utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    }
   }
 
   event_free(ms->event);
@@ -943,9 +925,7 @@ LUA_API int st_send_long_data(lua_State *L) {
   } else if (ret == 0) {
     return stmt_send_long_data_result(L, st);
   } else {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-    return 2;
+    return luamariadb_push_stmt_error(L, st);
   }
 }
 
@@ -1142,14 +1122,11 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata) {
 
   int skip_unref = 0;
 
-  int ret = 0;
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    lua_pushnil(L);
-    lua_pushstring(L, mysql_stmt_error(st->my_stmt));
-
-    utlua_resume(L, NULL, 2);
+    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
   } else {
+    int ret = 0;
     int status = mysql_stmt_prepare_cont(&ret, st->my_stmt, ms->status);
     if (status) {
       wait_for_status(L, ms->conn_data, st, status, stmt_prepare_cont,
@@ -1211,12 +1188,12 @@ LUA_API int stmt_prepare_start(lua_State *L) {
     wait_for_status(L, conn, st, status, stmt_prepare_cont, ref);
     return lua_yield(L, 0);
   } else if (ret == 0) {
-      stmt_prepare_result(L, st);
-      // st_data on the top.
-      return 1;
-    } else {
-      return luamariadb_push_errno(L, st->conn_data);
-    }
+    stmt_prepare_result(L, st);
+    // st_data on the top.
+    return 1;
+  } else {
+    return luamariadb_push_errno(L, st->conn_data);
+  }
 }
 
 static int conn_ping_result(lua_State *L, conn_data *conn_data) {
@@ -1229,20 +1206,23 @@ static void conn_ping_event(int fd, short event, void *_userdata) {
   MYSQL *conn = (MYSQL *)ms->data;
   lua_State *L = ms->L;
 
-  int ret = 0;
-  int status = mysql_ping_cont(&ret, conn, ms->status);
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-  } else if (status) {
-    wait_for_status(L, ms->conn_data, conn, status, conn_ping_event, ms->extra);
-  } else if (ret == 0) {
-    int count = conn_ping_result(L, ms->conn_data);
-    utlua_resume(L, NULL, count);
   } else {
-    utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-  }
+    int ret = 0;
+    int status = mysql_ping_cont(&ret, conn, ms->status);
 
+    if (status) {
+      wait_for_status(L, ms->conn_data, conn, status, conn_ping_event,
+                      ms->extra);
+    } else if (ret == 0) {
+      int count = conn_ping_result(L, ms->conn_data);
+      utlua_resume(L, NULL, count);
+    } else {
+      utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    }
+  }
   event_free(ms->event);
   free(ms);
 }
@@ -1283,20 +1263,22 @@ static void real_query_cont(int fd, short event, void *_userdata) {
   MYSQL *conn = (MYSQL *)ms->data;
   lua_State *L = ms->L;
 
-  int ret = 0;
-  int status = mysql_real_query_cont(&ret, conn, ms->status);
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-  } else if (status) {
-    wait_for_status(L, ms->conn_data, conn, status, real_query_cont, ms->extra);
-  } else if (ret == 0) {
-    int count = real_query_result(L, ms->conn_data);
-    utlua_resume(L, NULL, count);
   } else {
-    utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    int ret = 0;
+    int status = mysql_real_query_cont(&ret, conn, ms->status);
+    if (status) {
+      wait_for_status(L, ms->conn_data, conn, status, real_query_cont,
+                      ms->extra);
+    } else if (ret == 0) {
+      int count = real_query_result(L, ms->conn_data);
+      utlua_resume(L, NULL, count);
+    } else {
+      utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    }
   }
-
   event_free(ms->event);
   free(ms);
 }
@@ -1324,21 +1306,23 @@ static void conn_commit_event(int fd, short event, void *_userdata) {
   MYSQL *conn = (MYSQL *)ms->data;
   lua_State *L = ms->L;
 
-  my_bool ret = 0;
-  int status = mysql_commit_cont(&ret, conn, ms->status);
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-  } else if (status) {
-    wait_for_status(L, ms->conn_data, conn, status, conn_commit_event,
-                    ms->extra);
-  } else if (ret == 0) {
-    lua_pushboolean(L, true);
-    utlua_resume(L, NULL, 1);
   } else {
-    utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-  }
+    my_bool ret = 0;
+    int status = mysql_commit_cont(&ret, conn, ms->status);
 
+    if (status) {
+      wait_for_status(L, ms->conn_data, conn, status, conn_commit_event,
+                      ms->extra);
+    } else if (ret == 0) {
+      lua_pushboolean(L, true);
+      utlua_resume(L, NULL, 1);
+    } else {
+      utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    }
+  }
   event_free(ms->event);
   free(ms);
 }
@@ -1364,21 +1348,22 @@ static void conn_rollback_event(int fd, short event, void *_userdata) {
   MYSQL *conn = (MYSQL *)ms->data;
   lua_State *L = ms->L;
 
-  my_bool ret = 0;
-  int status = mysql_rollback_cont(&ret, conn, ms->status);
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-  } else if (status) {
-    wait_for_status(L, ms->conn_data, conn, status, conn_rollback_event,
-                    ms->extra);
-  } else if (ret == 0) {
-    lua_pushboolean(L, true);
-    utlua_resume(L, NULL, 1);
   } else {
-    utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    my_bool ret = 0;
+    int status = mysql_rollback_cont(&ret, conn, ms->status);
+    if (status) {
+      wait_for_status(L, ms->conn_data, conn, status, conn_rollback_event,
+                      ms->extra);
+    } else if (ret == 0) {
+      lua_pushboolean(L, true);
+      utlua_resume(L, NULL, 1);
+    } else {
+      utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    }
   }
-
   event_free(ms->event);
   free(ms);
 }
@@ -1403,21 +1388,22 @@ static void conn_autocommit_event(int fd, short event, void *_userdata) {
   MYSQL *conn = (MYSQL *)ms->data;
   lua_State *L = ms->L;
 
-  my_bool ret = 0;
-  int status = mysql_autocommit_cont(&ret, conn, ms->status);
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-  } else if (status) {
-    wait_for_status(L, ms->conn_data, conn, status, conn_autocommit_event,
-                    ms->extra);
-  } else if (ret == 0) {
-    lua_pushboolean(L, true);
-    utlua_resume(L, NULL, 1);
   } else {
-    utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    my_bool ret = 0;
+    int status = mysql_autocommit_cont(&ret, conn, ms->status);
+    if (status) {
+      wait_for_status(L, ms->conn_data, conn, status, conn_autocommit_event,
+                      ms->extra);
+    } else if (ret == 0) {
+      lua_pushboolean(L, true);
+      utlua_resume(L, NULL, 1);
+    } else {
+      utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    }
   }
-
   event_free(ms->event);
   free(ms);
 }
