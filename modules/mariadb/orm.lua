@@ -165,29 +165,25 @@ local function make_row_mt(t)
 end
 
 local function make_rows(t, stmt)
-  local order = t[KEY_ORDER]
   local lines = {}
   while true do
-    local results = { stmt:fetch() }
+    local row = stmt:fetch()
 
-    if not results[1] then
-      if results[2] then
-        print(results[2])
-      end
+    if not row then
       break
     end
 
-    local row = {}
-    local r = {}
-    for i,v in ipairs(order) do
-      row[v] = results[i + 1]
-      r[v] = results[i + 1]
+    if not t[KEY_CONTEXT]._readonly then
+      local attr = {}
+      for k,v in pairs(row) do
+        attr[k] = v
+      end
+
+      row[KEY_ATTR] = attr
+      setmetatable(row, make_row_mt(t))
     end
 
-    r[KEY_ATTR] = row
-    setmetatable(r, make_row_mt(t))
-
-    table.insert(lines, r)
+    table.insert(lines, row)
   end
 
   return lines
@@ -196,25 +192,23 @@ end
 local function each_rows(t, stmt, eachfunc)
   local order = t[KEY_ORDER]
   while true do
-    local results = { stmt:fetch() }
+    local row = stmt:fetch()
 
-    if not results[1] then
-      if results[2] then
-        print(results[2])
-      end
+    if not row then
       break
     end
 
-    local row = {}
-    local r = {}
-    for i,v in ipairs(order) do
-      row[v] = results[i + 1]
-      r[v] = results[i + 1]
+    if not t[KEY_CONTEXT]._readonly then
+      local attr = {}
+      for k,v in pairs(row) do
+        attr[k] = v
+      end
+
+      row[KEY_ATTR] = attr
+      setmetatable(row, make_row_mt(t))
     end
 
-    r[KEY_ATTR] = row
-    setmetatable(r, make_row_mt(t))
-    eachfunc(r)
+    eachfunc(row)
   end
 
   return lines
@@ -466,7 +460,9 @@ local function update_schema(ctx, db, tablename, model)
 end
 
 local function new(db, models)
-  local ctx = {}
+  local ctx = {
+    _readonly = false,
+  }
 
   local mt = {
     db = db,
@@ -483,9 +479,9 @@ local function new(db, models)
 
           local lines = {}
           while true do
-            local column = {stmt:fetch()}
-            if #(column) > 0 then
-              table.insert(lines, column)
+            local row = stmt:fetch()
+            if row then
+              table.insert(lines, row)
             else
               break
             end

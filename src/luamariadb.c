@@ -504,81 +504,84 @@ static int stmt_fetch_result(lua_State *L, st_data *st) {
   my_bool *is_nulls = get_or_create_ud(L, tableidx, &st->is_nulls,
                                        field_count * sizeof(my_bool));
 
-  lua_pushboolean(L, true);
+  lua_newtable(L);
 
   int i = 0;
   for (; i < field_count; i++) {
+    MYSQL_FIELD field = fields[i];
+
     if (is_nulls[i]) {
       lua_pushnil(L);
-      continue;
-    }
+    } else {
+      switch (field.type) {
+      case MYSQL_TYPE_TINY_BLOB:
+      case MYSQL_TYPE_MEDIUM_BLOB:
+      case MYSQL_TYPE_LONG_BLOB:
+      case MYSQL_TYPE_BLOB:
 
-    switch (fields[i].type) {
-    case MYSQL_TYPE_TINY_BLOB:
-    case MYSQL_TYPE_MEDIUM_BLOB:
-    case MYSQL_TYPE_LONG_BLOB:
-    case MYSQL_TYPE_BLOB:
+      case MYSQL_TYPE_VAR_STRING:
+      case MYSQL_TYPE_STRING: {
+        void *buffer = get_or_create_ud(L, tableidx, &buffers[i], field.length);
+        lua_pushlstring(L, buffer, bufferlens[i]);
+      } break;
+      case MYSQL_TYPE_DECIMAL:
+      case MYSQL_TYPE_SHORT:
+      case MYSQL_TYPE_LONG:
+      case MYSQL_TYPE_FLOAT:
+      case MYSQL_TYPE_DOUBLE:
+      case MYSQL_TYPE_LONGLONG:
+      case MYSQL_TYPE_INT24:
+      case MYSQL_TYPE_YEAR:
+      case MYSQL_TYPE_TINY: {
+        void *buffer =
+            get_or_create_ud(L, tableidx, &buffers[i], sizeof(double));
+        lua_pushnumber(L, *((double *)buffer));
+      } break;
+      case MYSQL_TYPE_DATE:
+      case MYSQL_TYPE_TIME:
+      case MYSQL_TYPE_DATETIME:
+      case MYSQL_TYPE_TIMESTAMP: {
+        MYSQL_TIME *buffer = (MYSQL_TIME *)get_or_create_ud(
+            L, tableidx, &buffers[i], sizeof(MYSQL_TIME));
 
-    case MYSQL_TYPE_VAR_STRING:
-    case MYSQL_TYPE_STRING: {
-      void *buffer =
-          get_or_create_ud(L, tableidx, &buffers[i], fields[i].length);
-      lua_pushlstring(L, buffer, bufferlens[i]);
-    } break;
-    case MYSQL_TYPE_DECIMAL:
-    case MYSQL_TYPE_SHORT:
-    case MYSQL_TYPE_LONG:
-    case MYSQL_TYPE_FLOAT:
-    case MYSQL_TYPE_DOUBLE:
-    case MYSQL_TYPE_LONGLONG:
-    case MYSQL_TYPE_INT24:
-    case MYSQL_TYPE_YEAR:
-    case MYSQL_TYPE_TINY: {
-      void *buffer = get_or_create_ud(L, tableidx, &buffers[i], sizeof(double));
-      lua_pushnumber(L, *((double *)buffer));
-    } break;
-    case MYSQL_TYPE_DATE:
-    case MYSQL_TYPE_TIME:
-    case MYSQL_TYPE_DATETIME:
-    case MYSQL_TYPE_TIMESTAMP: {
-      MYSQL_TIME *buffer = (MYSQL_TIME *)get_or_create_ud(
-          L, tableidx, &buffers[i], sizeof(MYSQL_TIME));
+        if (buffer->time_type > 0) {
+          lua_newtable(L);
 
-      if (buffer->time_type > 0) {
-        lua_newtable(L);
+          lua_pushinteger(L, buffer->year);
+          lua_setfield(L, -2, "year");
 
-        lua_pushinteger(L, buffer->year);
-        lua_setfield(L, -2, "year");
+          lua_pushinteger(L, buffer->month);
+          lua_setfield(L, -2, "month");
 
-        lua_pushinteger(L, buffer->month);
-        lua_setfield(L, -2, "month");
+          lua_pushinteger(L, buffer->day);
+          lua_setfield(L, -2, "day");
 
-        lua_pushinteger(L, buffer->day);
-        lua_setfield(L, -2, "day");
+          lua_pushinteger(L, buffer->hour);
+          lua_setfield(L, -2, "hour");
 
-        lua_pushinteger(L, buffer->hour);
-        lua_setfield(L, -2, "hour");
+          lua_pushinteger(L, buffer->minute);
+          lua_setfield(L, -2, "minute");
 
-        lua_pushinteger(L, buffer->minute);
-        lua_setfield(L, -2, "minute");
+          lua_pushinteger(L, buffer->second);
+          lua_setfield(L, -2, "second");
 
-        lua_pushinteger(L, buffer->second);
-        lua_setfield(L, -2, "second");
+          lua_pushinteger(L, buffer->second_part);
+          lua_setfield(L, -2, "second_part");
+        } else {
+          lua_pushnil(L);
+        }
+      } break;
 
-        lua_pushinteger(L, buffer->second_part);
-        lua_setfield(L, -2, "second_part");
-      } else {
+      default:
         lua_pushnil(L);
+        break;
       }
-    } break;
-
-    default:
-      lua_pushnil(L);
-      break;
     }
+
+    lua_setfield(L, -2, field.name);
   }
 
-  return field_count + 1;
+  return 1;
 }
 
 static void stmt_fetch_cont(int fd, short event, void *_userdata) {
@@ -696,7 +699,9 @@ static int stmt_execute_result(lua_State *L, st_data *st) {
 
     int i = 0;
     for (; i < field_count; i++) {
-      switch (fields[i].type) {
+      MYSQL_FIELD field = fields[i];
+
+      switch (field.type) {
       case MYSQL_TYPE_TINY_BLOB:
       case MYSQL_TYPE_MEDIUM_BLOB:
       case MYSQL_TYPE_LONG_BLOB:
@@ -709,13 +714,12 @@ static int stmt_execute_result(lua_State *L, st_data *st) {
         // rbind[i].buffer_length = 1024;
       }
 
-      // printf("fields[i].length = %d\n", fields[i].length);
+      // printf("field.length = %d\n", field.length);
       // break;
       case MYSQL_TYPE_VAR_STRING:
       case MYSQL_TYPE_STRING: {
-        void *buffer =
-            get_or_create_ud(L, tableidx, &buffers[i], fields[i].length);
-        MYSQL_SET_VARSTRING(&rbind[i], buffer, fields[i].length);
+        void *buffer = get_or_create_ud(L, tableidx, &buffers[i], field.length);
+        MYSQL_SET_VARSTRING(&rbind[i], buffer, field.length);
         rbind[i].length = &bufferlens[i];
         rbind[i].is_null = &is_nulls[i];
       } break;
