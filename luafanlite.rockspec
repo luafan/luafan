@@ -1,5 +1,5 @@
 package = "luafanlite"
-version = "0.3"
+version = "0.3-1"
 source = {
    url = "git://github.com/luafan/luafan",
    tag = "v0.3"
