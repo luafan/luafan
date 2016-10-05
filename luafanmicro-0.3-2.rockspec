@@ -1,5 +1,5 @@
 package = "luafanmicro"
-version = "0.3-1"
+version = "0.3-2"
 source = {
    url = "git://github.com/luafan/luafan",
    tag = "v0.3"
@@ -44,6 +44,10 @@ build = {
          incdirs = { "$(LIBEVENT_INCDIR)" },
          libdirs = { "$(LIBEVENT_LIBDIR)" }
       },
+      ["fan.connector.init"] = "modules/fan/connector/init.lua",
+      ["fan.connector.tcp"] = "modules/fan/connector/tcp.lua",
+      ["fan.connector.udp"] = "modules/fan/connector/udp.lua",
+      ["fan.connector.fifo"] = "modules/fan/connector/fifo.lua",
       ["config"] = "modules/config.lua",
       ["sqlite3.orm"] = "modules/sqlite3/orm.lua"
    }

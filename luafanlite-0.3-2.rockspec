@@ -1,5 +1,5 @@
-package = "luafan"
-version = "0.3-1"
+package = "luafanlite"
+version = "0.3-2"
 source = {
    url = "git://github.com/luafan/luafan",
    tag = "v0.3"
@@ -19,9 +19,6 @@ dependencies = {
 }
 
 external_dependencies = {
-   MARIADB = {
-      header = "mysql/mysql.h"
-   },
    OPENSSL = {
       header = "openssl/opensslv.h"
    },
@@ -50,16 +47,16 @@ build = {
             "src/fifo.c",
             "src/http.c",
             "src/httpd.c",
-            "src/luasql.c",
-            "src/luamariadb.c",
          },
          defines = {"FAN_HAS_OPENSSL=1", "FAN_HAS_LUAJIT=1"},
-         libraries = { "event", "event_openssl", "ssl", "crypto", "curl", "resolv", "mysqlclient" },
-         incdirs = { "$(CURL_INCDIR)", "$(LIBEVENT_INCDIR)", "$(OPENSSL_INCDIR)", "$(MARIADB_INCDIR)" },
-         libdirs = { "$(CURL_LIBDIR)", "$(LIBEVENT_LIBDIR)", "$(OPENSSL_LIBDIR)", "$(MARIADB_LIBDIR)" }
+         libraries = { "event", "event_openssl", "ssl", "crypto", "curl", "resolv" },
+         incdirs = { "$(CURL_INCDIR)", "$(LIBEVENT_INCDIR)", "$(OPENSSL_INCDIR)" },
+         libdirs = { "$(CURL_LIBDIR)", "$(LIBEVENT_LIBDIR)", "$(OPENSSL_LIBDIR)" }
       },
-      ["mariadb.orm"] = "modules/mariadb/orm.lua",
-      ["mariadb.pool"] = "modules/mariadb/pool.lua",
+      ["fan.connector.init"] = "modules/fan/connector/init.lua",
+      ["fan.connector.tcp"] = "modules/fan/connector/tcp.lua",
+      ["fan.connector.udp"] = "modules/fan/connector/udp.lua",
+      ["fan.connector.fifo"] = "modules/fan/connector/fifo.lua",
       ["config"] = "modules/config.lua",
       ["sqlite3.orm"] = "modules/sqlite3/orm.lua"
    }

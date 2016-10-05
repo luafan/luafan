@@ -125,8 +125,8 @@ LUA_API int luafan_stream_get_s24(lua_State *L) {
   bytearray_readbuffer(ba, value, 3);
 
   if (value[2] & 0x80) {
-    lua_pushinteger(L, -1 - ((value[2] << 16 | value[1] << 8 | value[0]) ^
-                           0xffffff));
+    lua_pushinteger(
+        L, -1 - ((value[2] << 16 | value[1] << 8 | value[0]) ^ 0xffffff));
   } else {
     lua_pushinteger(L, value[2] << 16 | value[1] << 8 | value[0]);
   }
@@ -227,11 +227,35 @@ LUA_API int luafan_stream_package(lua_State *L) {
   return 1;
 }
 
+LUA_API int luafan_stream_prepare_get(lua_State *L) {
+  BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
+
+  lua_pushboolean(L, bytearray_read_ready(ba));
+  return 1;
+}
+
+LUA_API int luafan_stream_prepare_add(lua_State *L) {
+  BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
+
+  lua_pushboolean(L, bytearray_write_ready(ba));
+  return 1;
+}
+
+LUA_API int luafan_stream_empty(lua_State *L) {
+  BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
+
+  lua_pushboolean(L, bytearray_empty(ba));
+  return 1;
+}
+
 static const struct luaL_Reg streamlib[] = {
     {"new", luafan_stream_new}, {NULL, NULL},
 };
 
 static const struct luaL_Reg streammtlib[] = {
+    {"prepare_get", luafan_stream_prepare_get},
+    {"prepare_add", luafan_stream_prepare_add},
+    {"empty", luafan_stream_empty},
     {"available", luafan_stream_available},
     {"GetU8", luafan_stream_get_u8},
     {"GetS24", luafan_stream_get_s24},
