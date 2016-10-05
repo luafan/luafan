@@ -43,13 +43,13 @@ local function connect(host, port, path)
     end
   }
 
-  local conn = fifo.connect{
+  local conn, err = fifo.connect{
     name = path,
     rwmode = "w"
   }
 
   if not conn then
-    return nil, "unable to connect"
+    return nil, err
   end
 
   local output = stream.new()

@@ -104,6 +104,8 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
   luaL_getmetatable(L, LUA_FIFO_CONNECTION_TYPE);
   lua_setmetatable(L, -2);
   fifo->L = utlua_mainthread(L);
+  fifo->read_ev = NULL;
+  fifo->write_ev = NULL;
 
   lua_getfield(L, 1, "rwmode");
   const char *rwmode = luaL_optstring(L, -1, "rn");
@@ -154,8 +156,9 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
 
   int socket = open(fifoname, rwmodei | O_NONBLOCK, 0);
   if (socket == -1) {
-    perror("open");
-    return 0;
+    lua_pushnil(L);
+    lua_pushstring(L, strerror(errno));
+    return 2;
   }
 
   fifo->socket = socket;
