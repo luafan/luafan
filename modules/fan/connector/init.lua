@@ -12,13 +12,13 @@ local function extract_url(url)
 
   local _,_,scheme,twoslash,others = string.find(url, "^(%w+):([/]?[/]?)(.*)")
   local path,server,host,port
-  if twoslash and #(twoslash) > 0 then
+  if twoslash and #(twoslash) == 2 then
     _,_,server,path = string.find(others, "([^/]*)(.*)")
     if #(server) > 0 then
       _,_,host,port = string.find(server, "^([^:]+):(%d+)$")
     end
   else
-    path = others
+    path = twoslash .. others
   end
 
   return scheme, host, port, path
@@ -52,7 +52,16 @@ local function bind(url)
   return connector.bind(host, port, path)
 end
 
+local function tmpfifoname()
+  local fifoname = os.tmpname()
+  print(fifoname)
+  os.remove(fifoname)
+
+  return fifoname
+end
+
 return {
   connect = connect,
   bind = bind,
+  tmpfifoname = tmpfifoname,
 }

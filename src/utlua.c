@@ -3,15 +3,23 @@
 int GLOBAL_VERBOSE = 0;
 
 static void luathread_table_bind(lua_State *co) {
+  lua_lock(co);
+
   lua_pushlightuserdata(co, co);
   lua_pushthread(co);
   lua_rawset(co, LUA_REGISTRYINDEX);
+
+  lua_unlock(co);
 }
 
 static void luathread_table_unbind(lua_State *co) {
+  lua_lock(co);
+
   lua_pushlightuserdata(co, co);
   lua_pushnil(co);
   lua_rawset(co, LUA_REGISTRYINDEX);
+
+  lua_unlock(co);
 }
 
 lua_State *utlua_newthread(lua_State *L) {
@@ -51,6 +59,15 @@ lua_State *utlua_mainthread(lua_State *L) {
   lua_pop(L, 1);
   lua_unlock(L);
   return mt;
+}
+
+void utlua_protect_thread(lua_State *co) {
+  luathread_table_bind(co);
+}
+
+int utlua_yield(lua_State *L, int nresults){
+  luathread_table_bind(L);
+  return lua_yield(L, nresults);
 }
 
 int utlua_resume(lua_State *co, lua_State *from, int count) {

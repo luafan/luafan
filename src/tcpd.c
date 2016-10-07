@@ -599,7 +599,7 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
     conn->buf = NULL;
 
     if (conn->onDisconnectedRef != LUA_NOREF) {
-      lua_State *co = lua_newthread(conn->L);
+      lua_State *co = utlua_newthread(conn->L);
       lua_pop(conn->L, 1);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onDisconnectedRef);

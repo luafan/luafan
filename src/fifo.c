@@ -8,6 +8,7 @@
 
 typedef struct {
   int socket;
+  char *name; // name for delete
   int onReadRef;
 
   int onSendReadyRef;
@@ -41,7 +42,7 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
 
   if (len <= 0) {
     if (fifo->onDisconnectedRef != LUA_NOREF) {
-      lua_State *co = lua_newthread(fifo->L);
+      lua_State *co = utlua_newthread(fifo->L);
       lua_pop(fifo->L, 1);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
@@ -101,11 +102,20 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
   }
 
   FIFO *fifo = (FIFO *)lua_newuserdata(L, sizeof(FIFO));
+  memset(fifo, 0, sizeof(FIFO));
+
   luaL_getmetatable(L, LUA_FIFO_CONNECTION_TYPE);
   lua_setmetatable(L, -2);
   fifo->L = utlua_mainthread(L);
-  fifo->read_ev = NULL;
-  fifo->write_ev = NULL;
+  // fifo->read_ev = NULL;
+  // fifo->write_ev = NULL;
+  // fifo->name = NULL;
+
+  lua_getfield(L, 1, "delete_on_close");
+  if (lua_toboolean(L, -1)) {
+    fifo->name = strdup(fifoname);
+  }
+  lua_pop(L, 1);
 
   lua_getfield(L, 1, "rwmode");
   const char *rwmode = luaL_optstring(L, -1, "rn");
@@ -209,7 +219,7 @@ LUA_API int luafan_fifo_send(lua_State *L) {
     int len = write(fifo->socket, data, data_len);
     if (len <= 0) {
       if (fifo->onDisconnectedRef != LUA_NOREF) {
-        lua_State *co = lua_newthread(fifo->L);
+        lua_State *co = utlua_newthread(fifo->L);
         lua_pop(fifo->L, 1);
 
         lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
@@ -260,12 +270,22 @@ LUA_API int luafan_fifo_close(lua_State *L) {
     fifo->socket = 0;
   }
 
+  if (fifo->name) {
+    if (unlink(fifo->name)) {
+      if (errno != ENOENT) {
+        printf("unlink %s, error = %s\n", fifo->name, strerror(errno));
+      }
+    } else {
+      printf("unlinked %s\n", fifo->name);
+    }
+    free(fifo->name);
+    fifo->name = NULL;
+  }
+
   return 0;
 }
 
-LUA_API int luafan_fifo_gc(lua_State *L) {
-  return luafan_fifo_close(L);
-}
+LUA_API int luafan_fifo_gc(lua_State *L) { return luafan_fifo_close(L); }
 
 static const struct luaL_Reg fifolib[] = {
     {"connect", luafan_fifo_connect}, {NULL, NULL},

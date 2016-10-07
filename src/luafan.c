@@ -4,7 +4,10 @@
 
 #include "utlua.h"
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
+#include <signal.h>
+#include <fcntl.h>
 
 static struct event *mainevent;
 static int main_ref;
@@ -73,7 +76,8 @@ LUA_API int luafan_sleep(lua_State *L) {
   evtimer_set(&args->clockevent, clock_handler, args);
   event_base_set(base, &args->clockevent);
   evtimer_add(&args->clockevent, &t);
-  return lua_yield(L, 0);
+
+  return utlua_yield(L, 0);
 }
 // -- luafan_sleep end --
 
@@ -146,9 +150,80 @@ LUA_API int luafan_gettime(lua_State *L) {
   return 2;
 }
 
+static int luafan_push_result(lua_State *L, int result) {
+  if (result == -1) {
+    lua_pushboolean(L, false);
+    lua_pushstring(L, strerror(errno));
+    return 2;
+  } else {
+    lua_pushinteger(L, result);
+    return 1;
+  }
+}
+
 LUA_API int luafan_fork(lua_State *L) {
-  lua_pushinteger(L, fork());
+  int result = fork();
+  return luafan_push_result(L, result);
+}
+
+LUA_API int luafan_getpid(lua_State *L) {
+  lua_pushinteger(L, getpid());
   return 1;
+}
+
+LUA_API int luafan_getdtablesize(lua_State *L) {
+  lua_pushinteger(L, getdtablesize());
+  return 1;
+}
+
+LUA_API int luafan_setpgid(lua_State *L) {
+  int result = setpgid(luaL_optinteger(L, 1, 0), luaL_optinteger(L, 2, 0));
+  return luafan_push_result(L, result);
+}
+
+LUA_API int luafan_open(lua_State *L) {
+  int result = open(luaL_checkstring(L, 1), luaL_optinteger(L, 2, O_RDWR), luaL_optinteger(L, 3, 0));
+  return luafan_push_result(L, result);
+}
+
+LUA_API int luafan_close(lua_State *L) {
+  int result = close(luaL_checkinteger(L, 1));
+  return luafan_push_result(L, result);
+}
+
+LUA_API int luafan_setsid(lua_State *L) {
+  int result = setsid();
+  return luafan_push_result(L, result);
+}
+
+LUA_API int luafan_getpgid(lua_State *L) {
+  int result = getpgid(luaL_optinteger(L, 1, 0));
+  return luafan_push_result(L, result);
+}
+
+LUA_API int luafan_kill(lua_State *L) {
+  if (kill(luaL_optinteger(L, 1, -1), luaL_optinteger(L, 2, SIGTERM))) {
+    lua_pushboolean(L, false);
+    lua_pushstring(L, strerror(errno));
+    return 2;
+  } else {
+    lua_pushboolean(L, true);
+    return 1;
+  }
+}
+
+LUA_API int luafan_waitpid(lua_State *L) {
+  int stat = 0;
+  int result = waitpid(luaL_optinteger(L, 1, -1), &stat, luaL_optinteger(L, 2, -1));
+  if (result == -1) {
+    lua_pushnil(L);
+    lua_pushstring(L, strerror(errno));
+    return 2;
+  } else {
+    lua_pushinteger(L, result);
+    lua_pushinteger(L, stat);
+    return 2;
+  }
 }
 
 static const struct luaL_Reg fanlib[] = {
@@ -162,6 +237,15 @@ static const struct luaL_Reg fanlib[] = {
     {"hex2data", hex2data},
 
     {"fork", luafan_fork},
+    {"getpid", luafan_getpid},
+    {"waitpid", luafan_waitpid},
+    {"kill", luafan_kill},
+    {"setpgid", luafan_setpgid},
+    {"getpgid", luafan_getpgid},
+    {"setsid", luafan_setsid},
+    {"getdtablesize", luafan_getdtablesize},
+    {"open", luafan_open},
+    {"close", luafan_close},
 
     {NULL, NULL},
 };
@@ -170,8 +254,6 @@ LUA_API int luaopen_fan(lua_State *L) {
 #if (LUA_VERSION_NUM < 502)
   utlua_set_mainthread(L);
 #endif
-
-  event_mgr_init();
 
   lua_newtable(L);
   luaL_register(L, "fan", fanlib);

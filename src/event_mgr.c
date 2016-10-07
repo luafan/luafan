@@ -12,13 +12,16 @@ static int signal_count = 0;
 static struct event signal_int;
 static struct event signal_pipe;
 
-static int setup = 0;
 static int looping = 0;
+static int initialized = 0;
 
 struct event_base *event_mgr_base() {
   if (!base) {
     base = event_base_new();
   }
+
+  event_mgr_init();
+
   return base;
 }
 
@@ -68,8 +71,9 @@ void event_mgr_break() {
 }
 
 int event_mgr_init() {
-  if (!setup) {
-    setup = 1;
+  if (!initialized) {
+    initialized = 1;
+
     dnsbase = evdns_base_new(event_mgr_base(), 1);
     evdns_base_set_option(dnsbase, "randomize-case:", "0");
 
@@ -107,6 +111,15 @@ int event_mgr_loop() {
 
     event_base_dispatch(base);
 
+    signal(SIGHUP, SIG_IGN);
+    signal(SIGTERM, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
+    signal(SIGQUIT, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN);
+
+    event_del(&signal_int);
+    event_del(&signal_pipe);
+
 #if FAN_HAS_OPENSSL
     EVP_cleanup();
     CRYPTO_cleanup_all_ex_data();
@@ -115,11 +128,9 @@ int event_mgr_loop() {
 #endif
 
     evdns_base_free(dnsbase, 0);
-    event_base_free(base);
-    base = NULL;
     dnsbase = NULL;
     looping = 0;
-    setup = 0;
+    initialized = 0;
     return 0;
   }
 
