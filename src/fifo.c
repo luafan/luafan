@@ -91,7 +91,7 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
   }
 
   if (!found_fifo) {
-    printf("creating %s\n", fifoname);
+    // printf("creating %s\n", fifoname);
     unlink(fifoname);
     int ret = mkfifo(fifoname, mode);
     if (ret != 0) {
@@ -233,7 +233,7 @@ LUA_API int luafan_fifo_send(lua_State *L) {
   return 0;
 }
 
-LUA_API int luafan_fifo_gc(lua_State *L) {
+LUA_API int luafan_fifo_close(lua_State *L) {
   FIFO *fifo = luaL_checkudata(L, 1, LUA_FIFO_CONNECTION_TYPE);
   if (fifo->onReadRef != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, fifo->onReadRef);
@@ -255,7 +255,16 @@ LUA_API int luafan_fifo_gc(lua_State *L) {
     fifo->write_ev = NULL;
   }
 
+  if (fifo->socket) {
+    close(fifo->socket);
+    fifo->socket = 0;
+  }
+
   return 0;
+}
+
+LUA_API int luafan_fifo_gc(lua_State *L) {
+  return luafan_fifo_close(L);
 }
 
 static const struct luaL_Reg fifolib[] = {
@@ -277,6 +286,11 @@ LUA_API int luaopen_fan_fifo(lua_State *L) {
   lua_pushstring(L, "__gc");
   lua_pushcfunction(L, &luafan_fifo_gc);
   lua_rawset(L, -3);
+
+  lua_pushstring(L, "close");
+  lua_pushcfunction(L, &luafan_fifo_close);
+  lua_rawset(L, -3);
+
   lua_pop(L, 1);
 
   lua_newtable(L);
