@@ -3,11 +3,11 @@
 #endif
 
 #include "utlua.h"
+#include <fcntl.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <signal.h>
-#include <fcntl.h>
 
 static struct event *mainevent;
 static int main_ref;
@@ -182,7 +182,8 @@ LUA_API int luafan_setpgid(lua_State *L) {
 }
 
 LUA_API int luafan_open(lua_State *L) {
-  int result = open(luaL_checkstring(L, 1), luaL_optinteger(L, 2, O_RDWR), luaL_optinteger(L, 3, 0));
+  int result = open(luaL_checkstring(L, 1), luaL_optinteger(L, 2, O_RDWR),
+                    luaL_optinteger(L, 3, 0));
   return luafan_push_result(L, result);
 }
 
@@ -194,6 +195,16 @@ LUA_API int luafan_close(lua_State *L) {
 LUA_API int luafan_setsid(lua_State *L) {
   int result = setsid();
   return luafan_push_result(L, result);
+}
+
+extern char *__progname;
+
+LUA_API int luafan_setprogname(lua_State *L) {
+  size_t size = 0;
+  const char *name = luaL_checklstring(L, 1, &size);
+  memset(__progname, 0, PATH_MAX);
+  strncpy(__progname, name, PATH_MAX > size ? size : PATH_MAX);
+  return 0;
 }
 
 LUA_API int luafan_getpgid(lua_State *L) {
@@ -214,7 +225,8 @@ LUA_API int luafan_kill(lua_State *L) {
 
 LUA_API int luafan_waitpid(lua_State *L) {
   int stat = 0;
-  int result = waitpid(luaL_optinteger(L, 1, -1), &stat, luaL_optinteger(L, 2, -1));
+  int result =
+      waitpid(luaL_optinteger(L, 1, -1), &stat, luaL_optinteger(L, 2, -1));
   if (result == -1) {
     lua_pushnil(L);
     lua_pushstring(L, strerror(errno));
@@ -246,9 +258,11 @@ static const struct luaL_Reg fanlib[] = {
     {"getdtablesize", luafan_getdtablesize},
     {"open", luafan_open},
     {"close", luafan_close},
+    {"setprogname", luafan_setprogname},
 
     {NULL, NULL},
 };
+
 
 LUA_API int luaopen_fan(lua_State *L) {
 #if (LUA_VERSION_NUM < 502)

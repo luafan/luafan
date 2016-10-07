@@ -40,13 +40,15 @@ local function new(funcmap, slavecount)
 
   local master = false
   local slave_pids = {}
+  local slave_index
+  local master_pid = fan.getpid()
 
   for i=1,slavecount do
-    print("forking")
     local pid = assert(fan.fork())
     master = pid > 0
 
     if not master then
+      slave_index = i
       break
     else
       -- assert(fan.setpgid(pid, pid))
@@ -55,6 +57,7 @@ local function new(funcmap, slavecount)
   end
 
   if master then
+    fan.setprogname(string.format("fan: master-%d (%d)", master_pid, slavecount))
     local obj = {slaves = {}, slave_pids = slave_pids, func_names = {}}
     for k,v in pairs(funcmap) do
       obj.func_names[k] = k
@@ -91,6 +94,8 @@ local function new(funcmap, slavecount)
     return obj
   else
     local pid = fan.getpid()
+    fan.setprogname(string.format("fan: slave-%d-%d", master_pid, slave_index))
+
     -- assert(fan.setpgid())
 
     -- for i=1,3 do
