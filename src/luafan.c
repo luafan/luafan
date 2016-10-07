@@ -202,8 +202,8 @@ extern char *__progname;
 LUA_API int luafan_setprogname(lua_State *L) {
   size_t size = 0;
   const char *name = luaL_checklstring(L, 1, &size);
-  memset(__progname, 0, 256);
-  strncpy(__progname, name, 255 > size ? size : 255);
+  memset(__progname, 0, 128);
+  strncpy(__progname, name, 127 > size ? size : 127);
 
   return 0;
 }
