@@ -276,7 +276,7 @@ LUA_API int luafan_fifo_close(lua_State *L) {
         printf("unlink %s, error = %s\n", fifo->name, strerror(errno));
       }
     } else {
-      printf("unlinked %s\n", fifo->name);
+      // printf("unlinked %s\n", fifo->name);
     }
     free(fifo->name);
     fifo->name = NULL;

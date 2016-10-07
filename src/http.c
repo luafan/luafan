@@ -1019,7 +1019,7 @@ static int http_getpost(lua_State *L, int method) {
         const char *data = lua_tolstring(L, -1, &len);
         lua_pushvalue(L, -1);
         conn->bodyref = luaL_ref(L, LUA_REGISTRYINDEX);
-        
+
         curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, len);
         curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, data);
       } else if (!lua_isnil(L, -1)) {
@@ -1165,7 +1165,7 @@ ERROR:
 
 LUA_API int http_get(lua_State *L) {
   if (http_getpost(L, HTTP_GET) == LUA_YIELD) {
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1173,7 +1173,7 @@ LUA_API int http_get(lua_State *L) {
 
 LUA_API int http_post(lua_State *L) {
   if (http_getpost(L, HTTP_POST) == LUA_YIELD) {
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1181,7 +1181,7 @@ LUA_API int http_post(lua_State *L) {
 
 LUA_API int http_put(lua_State *L) {
   if (http_getpost(L, HTTP_PUT) == LUA_YIELD) {
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1189,7 +1189,7 @@ LUA_API int http_put(lua_State *L) {
 
 LUA_API int http_update(lua_State *L) {
   if (http_getpost(L, HTTP_UPDATE) == LUA_YIELD) {
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1197,7 +1197,7 @@ LUA_API int http_update(lua_State *L) {
 
 LUA_API int http_delete(lua_State *L) {
   if (http_getpost(L, HTTP_DELETE) == LUA_YIELD) {
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1205,7 +1205,7 @@ LUA_API int http_delete(lua_State *L) {
 
 LUA_API int http_head(lua_State *L) {
   if (http_getpost(L, HTTP_HEAD) == LUA_YIELD) {
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else {
     return 0;
   }

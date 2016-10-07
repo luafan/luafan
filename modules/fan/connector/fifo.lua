@@ -43,11 +43,14 @@ function apt_mt:close()
   self.disconnected = true
 
   self:_onread(nil)
-  self._fifo_write:close()
-  self._fifo_write = nil
-
-  self._fifo_read:close()
-  self._fifo_read = nil
+  if self._fifo_write then
+    self._fifo_write:close()
+    self._fifo_write = nil
+  end
+  if self._fifo_read then
+    self._fifo_read:close()
+    self._fifo_read = nil
+  end
 end
 
 local function connect(host, port, path)

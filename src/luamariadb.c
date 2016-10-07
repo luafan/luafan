@@ -402,11 +402,11 @@ LUA_API int fetch_row_start(lua_State *L) {
 
   if (status) {
     wait_for_status(L, cur->conn_data, cur, status, fetch_row_cont, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else {
     int count = fetch_row_result(L, cur, row);
     if (count == CONTINUE_YIELD) {
-      return lua_yield(L, 0);
+      return utlua_yield(L, 0);
     } else {
       return count;
     }
@@ -440,7 +440,7 @@ LUA_API int stmt_close_start(lua_State *L, st_data *st) {
   int status = mysql_stmt_close_start(&ret, st->my_stmt);
   if (status) {
     wait_for_status(L, st->conn_data, st, status, stmt_close_cont, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     luaL_unref(L, LUA_REGISTRYINDEX, st->table);
     lua_pushboolean(L, 1);
@@ -615,7 +615,7 @@ LUA_API int stmt_fetch_start(lua_State *L) {
   int status = mysql_stmt_fetch_start(&ret, st->my_stmt);
   if (status) {
     wait_for_status(L, st->conn_data, st, status, stmt_fetch_cont, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     int count = stmt_fetch_result(L, st);
     return count;
@@ -799,13 +799,13 @@ LUA_API int stmt_execute_start(lua_State *L) {
 
   if (status) {
     wait_for_status(L, st->conn_data, st, status, stmt_execute_cont, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     int count = stmt_execute_result(L, st);
     if (count >= 0) {
       return count;
     } else {
-      return lua_yield(L, 0);
+      return utlua_yield(L, 0);
     }
   } else {
     return luamariadb_push_stmt_error(L, st);
@@ -925,7 +925,7 @@ LUA_API int st_send_long_data(lua_State *L) {
       mysql_stmt_send_long_data_start(&ret, st->my_stmt, num, data, size);
   if (status) {
     wait_for_status(L, st->conn_data, st, status, stmt_send_long_data_event, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     return stmt_send_long_data_result(L, st);
   } else {
@@ -940,7 +940,7 @@ LUA_API int cur_gc(lua_State *L) {
   cur_data *cur = (cur_data *)luaL_checkudata(L, 1, LUASQL_CURSOR_MYSQL);
   if (cur != NULL && !(cur->closed)) {
     if (free_result_start(L, cur) == CONTINUE_YIELD) {
-      return lua_yield(L, 0);
+      return utlua_yield(L, 0);
     } else {
       lua_pushboolean(L, true);
       return 1;
@@ -962,7 +962,7 @@ LUA_API int cur_close(lua_State *L) {
   }
 
   if (free_result_start(L, cur) < 0) {
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else {
     lua_pushboolean(L, 1);
     return 1;
@@ -1062,7 +1062,7 @@ LUA_API int conn_close_start(lua_State *L) {
     int status = mysql_close_start(&conn->my_conn);
     if (status) {
       wait_for_status(L, conn, &conn->my_conn, status, conn_close_cont, 0);
-      return lua_yield(L, 0);
+      return utlua_yield(L, 0);
     } else {
       lua_pushboolean(L, 1);
       return 1;
@@ -1190,7 +1190,7 @@ LUA_API int stmt_prepare_start(lua_State *L) {
   if (status) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     wait_for_status(L, conn, st, status, stmt_prepare_cont, ref);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     stmt_prepare_result(L, st);
     // st_data on the top.
@@ -1238,7 +1238,7 @@ LUA_API int conn_ping_start(lua_State *L) {
   int status = mysql_ping_start(&ret, &conn->my_conn);
   if (status) {
     wait_for_status(L, conn, &conn->my_conn, status, conn_ping_event, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     return conn_ping_result(L, conn);
   } else {
@@ -1297,7 +1297,7 @@ LUA_API int real_query_start(lua_State *L) {
 
   if (status) {
     wait_for_status(L, conn, &conn->my_conn, status, real_query_cont, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     return real_query_result(L, conn);
   } else {
@@ -1338,7 +1338,7 @@ LUA_API int conn_commit_start(lua_State *L) {
   int status = mysql_commit_start(&ret, &conn->my_conn);
   if (status) {
     wait_for_status(L, conn, &conn->my_conn, status, conn_commit_event, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     lua_pushboolean(L, true);
     return 1;
@@ -1378,7 +1378,7 @@ LUA_API int conn_rollback_start(lua_State *L) {
   int status = mysql_rollback_start(&ret, &conn->my_conn);
   if (status) {
     wait_for_status(L, conn, &conn->my_conn, status, conn_rollback_event, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     lua_pushboolean(L, true);
     return 1;
@@ -1420,7 +1420,7 @@ LUA_API int conn_autocommit_start(lua_State *L) {
   int status = mysql_autocommit_start(&ret, &conn->my_conn, auto_mode);
   if (status) {
     wait_for_status(L, conn, &conn->my_conn, status, conn_autocommit_event, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     lua_pushboolean(L, true);
     return 1;
@@ -1468,7 +1468,7 @@ LUA_API int set_character_set_start(lua_State *L) {
   int status = mysql_set_character_set_start(&ret, &conn->my_conn, charset);
   if (status) {
     wait_for_status(L, conn, &conn->my_conn, status, set_character_set_cont, 0);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == 0) {
     lua_pushboolean(L, 1);
     return 1;
@@ -1538,7 +1538,7 @@ LUA_API int real_connect_start(lua_State *L) {
   if (status) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     wait_for_status(L, cdata, &cdata->my_conn, status, real_connect_cont, ref);
-    return lua_yield(L, 0);
+    return utlua_yield(L, 0);
   } else if (ret == &cdata->my_conn) {
     mysql_options(&cdata->my_conn, MYSQL_OPT_RECONNECT, &value);
     return 1;
