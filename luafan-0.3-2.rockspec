@@ -63,6 +63,7 @@ build = {
       ["fan.connector.udp"] = "modules/fan/connector/udp.lua",
       ["fan.connector.fifo"] = "modules/fan/connector/fifo.lua",
       ["fan.worker.init"] = "modules/fan/worker/init.lua",
+      ["fan.objectbuf"] = "modules/fan/objectbuf.lua",
       ["mariadb.orm"] = "modules/mariadb/orm.lua",
       ["mariadb.pool"] = "modules/mariadb/pool.lua",
       ["config"] = "modules/config.lua",

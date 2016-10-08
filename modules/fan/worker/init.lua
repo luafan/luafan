@@ -1,5 +1,5 @@
 local fan = require "fan"
-local cjson = require "cjson"
+local objectbuf = require "fan.objectbuf"
 local connector = require "fan.connector"
 require "compat53"
 
@@ -21,7 +21,7 @@ master_mt.__index = function(obj, k)
       local args = {k, ...}
       local slave = next(obj.slaves) -- TODO slave pool impl
       local output = stream.new()
-      output:AddString(cjson.encode(args))
+      output:AddString(objectbuf.encode(args))
 
       if not slave:send(output:package()) then
         obj.slaves[slave] = nil
@@ -74,18 +74,11 @@ local function new(funcmap, slavecount)
       apt.onread = function(input)
         local str = input:GetString()
         -- print("onread master", str)
-        local args = cjson.decode(str)
+        local args = objectbuf.decode(str)
 
         if apt.master_running then
           local master_running = apt.master_running
           apt.master_running = nil
-
-          for i,v in ipairs(args) do
-            if v == cjson.null then
-              args[i] = nil
-            end
-          end
-
           coroutine.resume(master_running, table.unpack(args, 1, maxn(args)))
         end
       end
@@ -121,13 +114,13 @@ local function new(funcmap, slavecount)
           local str = input:GetString()
           -- print(pid, "onread slave", str)
 
-          local args = cjson.decode(str)
+          local args = objectbuf.decode(str)
 
           local func = funcmap[args[1]]
           local ret = ""
           if func then
             local results = { func(table.unpack(args, 2, maxn(args))) }
-            ret = cjson.encode(results)
+            ret = objectbuf.encode(results)
           end
 
           local output = stream.new()

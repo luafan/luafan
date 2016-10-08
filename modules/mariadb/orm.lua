@@ -12,7 +12,6 @@ local math = math
 
 local mariadb = require "fan.mariadb"
 
-local json = require "cjson"
 local config = require "config"
 
 local KEY_CONTEXT = "^context"
@@ -53,18 +52,18 @@ local function bind_values(stmt, ...)
   if config.debug then
     print("bind_values", ...)
   end
-  local tb = {...}
-  for i,v in ipairs(tb) do
-    if v == json.null then
-      tb[i] = nil
-    end
-  end
+  -- local tb = {...}
+  -- for i,v in ipairs(tb) do
+  --   if v == json.null then
+  --     tb[i] = nil
+  --   end
+  -- end
 
   if not stmt then
     print(debug.traceback())
   end
 
-  stmt:bind_param(table.unpack(tb, 1, maxn(tb)))
+  stmt:bind_param(...) -- table.unpack(tb, 1, maxn(tb))
 end
 
 local function execute(db, ...)

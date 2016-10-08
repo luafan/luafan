@@ -10,8 +10,6 @@ local ipairs = ipairs
 local error = error
 local sqlite3 = require "lsqlite3"
 
-local json = require "cjson"
-
 local KEY_CONTEXT = "^context"
 local KEY_TABLE = "^table"
 local KEY_ATTR = "^attr"
@@ -43,14 +41,14 @@ end
 
 local function bind_values(stmt, ...)
 	-- print("bind_values", ...)
-	local tb = {...}
-	for i,v in ipairs(tb) do
-		if v == json.null then
-			tb[i] = nil
-		end
-	end
+	-- local tb = {...}
+	-- for i,v in ipairs(tb) do
+	-- 	if v == json.null then
+	-- 		tb[i] = nil
+	-- 	end
+	-- end
 
-	stmt:bind_values(table.unpack(tb, 1, maxn(tb)))
+	stmt:bind_values(...) -- table.unpack(tb, 1, maxn(tb))
 end
 
 local function execute(db, ...)
@@ -160,7 +158,7 @@ local function make_rows(t, stmt)
 		}
 
 		setmetatable(r, make_row_mt(t))
-		
+
 		for k,v in pairs(row) do
 			r[k] = v
 		end
@@ -173,7 +171,7 @@ end
 
 local field_mt = {
 	__index = function(f, key)
-		
+
 	end,
 	__call = function(f, fmt, ...)
 		local t = f[KEY_TABLE]
