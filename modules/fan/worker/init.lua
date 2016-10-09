@@ -48,6 +48,14 @@ local function new(funcmap, slavecount)
   local slave_index
   local master_pid = fan.getpid()
 
+  local cpu_count = fan.getcpucount()
+  local cpu_masks = {}
+  if cpu_count > 1 then
+    for i=1,cpu_count-1 do
+      table.insert(cpu_masks, 2^(i - 1))
+    end
+  end
+
   for i=1,slavecount do
     local pid = assert(fan.fork())
     master = pid > 0
@@ -62,7 +70,10 @@ local function new(funcmap, slavecount)
   end
 
   if master then
-    fan.setprogname(string.format("fan: master-%d (%d)", master_pid, slavecount))
+    if cpu_count > 1 then
+      fan.setaffinity(2 ^ (cpu_count - 1))
+    end
+    fan.setprogname(string.format("fan: master-%d U(%X)", master_pid, slavecount, fan.getaffinity()))
     local obj = {slave_pool = pool.new(), slave_pids = slave_pids, func_names = {}}
     for k,v in pairs(funcmap) do
       obj.func_names[k] = k
@@ -97,8 +108,19 @@ local function new(funcmap, slavecount)
 
     return obj
   else
+    if cpu_count > 1 then
+      local st = fan.setaffinity(cpu_masks[(slave_index - 1) % #(cpu_masks) + 1])
+      if not st then
+        local mask = 0
+        for i=1,cpu_count-1 do
+          mask = mask + 2 ^ (i-1)
+        end
+        fan.setaffinity(mask)
+      end
+    end
+
     local pid = fan.getpid()
-    fan.setprogname(string.format("fan: slave-%d-%d", master_pid, slave_index))
+    fan.setprogname(string.format("fan: slave-%d-%d U(%X)", master_pid, slave_index, fan.getaffinity()))
 
     -- assert(fan.setpgid())
 
@@ -144,8 +166,10 @@ local function new(funcmap, slavecount)
         end
       end)
 
-    cli:close()
-    cli = nil
+    if cli then
+      cli:close()
+      cli = nil
+    end
     print(string.format("quiting pid=%d", pid))
     os.exit()
   end

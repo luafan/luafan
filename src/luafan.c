@@ -213,6 +213,102 @@ LUA_API int luafan_getpgid(lua_State *L) {
   return luafan_push_result(L, result);
 }
 
+#ifdef __linux__
+#define __USE_GNU
+#include <sched.h>
+#endif
+
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+
+#define SYSCTL_CORE_COUNT "machdep.cpu.core_count"
+
+typedef struct cpu_set { uint32_t count; } cpu_set_t;
+
+static inline void CPU_ZERO(cpu_set_t *cs) { cs->count = 0; }
+
+static inline void CPU_SET(int num, cpu_set_t *cs) { cs->count |= (1 << num); }
+
+static inline int CPU_ISSET(int num, cpu_set_t *cs) {
+  return (cs->count & (1 << num));
+}
+
+int sched_getaffinity(pid_t pid, size_t cpu_size, cpu_set_t *cpu_set) {
+  int32_t core_count = 0;
+  size_t len = sizeof(core_count);
+  int ret = sysctlbyname(SYSCTL_CORE_COUNT, &core_count, &len, 0, 0);
+  if (ret) {
+    printf("error while get core count %d\n", ret);
+    return -1;
+  }
+  cpu_set->count = 0;
+  for (int i = 0; i < core_count; i++) {
+    cpu_set->count |= (1 << i);
+  }
+
+  return 0;
+}
+
+#endif
+
+static int get_cpu_count() { return sysconf(_SC_NPROCESSORS_CONF); }
+
+LUA_API int luafan_getaffinity(lua_State *L) {
+  unsigned long bitmask = 0;
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
+
+  if (sched_getaffinity(0, sizeof(cpu_set_t), &mask) == -1) {
+    lua_pushnil(L);
+    lua_pushstring(L, strerror(errno));
+    return 2;
+  } else {
+    int cpu_count = get_cpu_count();
+    int i = 0;
+    for (; i < cpu_count; i++) {
+      if (CPU_ISSET(i, &mask)) {
+        bitmask |= (unsigned long)0x01 << i;
+      }
+    }
+
+    lua_pushinteger(L, bitmask);
+    return 1;
+  }
+}
+
+LUA_API int luafan_setaffinity(lua_State *L) {
+#ifdef __linux__
+  unsigned long mask_value = luaL_checkinteger(L, 1);
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
+
+  int cpu_count = get_cpu_count();
+  int i = 0;
+  for (; i < cpu_count; i++) {
+    if (mask_value & ((unsigned long)0x01 << i)) {
+      CPU_SET(i, &mask);
+    }
+  }
+
+  if (sched_setaffinity(0, sizeof(cpu_set_t), &mask) == -1) {
+    lua_pushnil(L);
+    lua_pushfstring(L, "sched_setaffinity: %s", strerror(errno));
+    return 2;
+  } else {
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+#else
+  lua_pushboolean(L, 1);
+  return 1;
+#endif
+}
+
+LUA_API int luafan_getcpucount(lua_State *L) {
+  lua_pushinteger(L, get_cpu_count());
+  return 1;
+}
+
 LUA_API int luafan_kill(lua_State *L) {
   if (kill(luaL_optinteger(L, 1, -1), luaL_optinteger(L, 2, SIGTERM))) {
     lua_pushboolean(L, false);
@@ -260,10 +356,12 @@ static const struct luaL_Reg fanlib[] = {
     {"open", luafan_open},
     {"close", luafan_close},
     {"setprogname", luafan_setprogname},
+    {"setaffinity", luafan_setaffinity},
+    {"getaffinity", luafan_getaffinity},
+    {"getcpucount", luafan_getcpucount},
 
     {NULL, NULL},
 };
-
 
 LUA_API int luaopen_fan(lua_State *L) {
 #if (LUA_VERSION_NUM < 502)
