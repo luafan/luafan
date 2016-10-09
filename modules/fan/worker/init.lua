@@ -1,34 +1,39 @@
 local fan = require "fan"
+local pool = require "fan.pool"
 local objectbuf = require "fan.objectbuf"
 local connector = require "fan.connector"
 require "compat53"
 
 local function maxn(t)
-    local n = 0
-    for k,v in pairs(t) do
-        if k > n then
-            n = k
-        end
+  local n = 0
+  for k,v in pairs(t) do
+    if k > n then
+      n = k
     end
+  end
 
-    return n
+  return n
 end
 
 local master_mt = {}
 master_mt.__index = function(obj, k)
   if obj.func_names[k] then
     return function(obj, ...)
-      local args = {k, ...}
-      local slave = next(obj.slaves) -- TODO slave pool impl
+      local slave = obj.slave_pool:pop()
+
+      local task_key = string.format("%d", slave.task_index)
+      slave.task_index = slave.task_index + 1
+      local args = {task_key, k, ...}
+
       local output = stream.new()
       output:AddString(objectbuf.encode(args))
 
       if not slave:send(output:package()) then
-        obj.slaves[slave] = nil
+        print("salve dead.")
         return
       end
 
-      slave.master_running = coroutine.running()
+      slave.task_map[task_key] = coroutine.running()
       return coroutine.yield()
     end
   end
@@ -58,7 +63,7 @@ local function new(funcmap, slavecount)
 
   if master then
     fan.setprogname(string.format("fan: master-%d (%d)", master_pid, slavecount))
-    local obj = {slaves = {}, slave_pids = slave_pids, func_names = {}}
+    local obj = {slave_pool = pool.new(), slave_pids = slave_pids, func_names = {}}
     for k,v in pairs(funcmap) do
       obj.func_names[k] = k
     end
@@ -68,18 +73,24 @@ local function new(funcmap, slavecount)
     obj.serv = connector.bind(url)
 
     obj.serv.onaccept = function(apt)
-      print("onaccept", apt)
-      obj.slaves[apt] = apt
+      -- print("onaccept", apt)
+      apt.task_map = {}
+      apt.task_index = 1
+      obj.slave_pool:push(apt)
 
       apt.onread = function(input)
-        local str = input:GetString()
-        -- print("onread master", str)
-        local args = objectbuf.decode(str)
+        while input:available() > 0 do
+          local str = input:GetString()
+          -- print("onread master", str)
+          local args = objectbuf.decode(str)
 
-        if apt.master_running then
-          local master_running = apt.master_running
-          apt.master_running = nil
-          coroutine.resume(master_running, table.unpack(args, 1, maxn(args)))
+          obj.slave_pool:push(apt)
+
+          if apt.task_map[args[1]] then
+            local running = apt.task_map[args[1]]
+            apt.task_map[args[1]] = nil
+            assert(coroutine.resume(running, table.unpack(args, 2, maxn(args))))
+          end
         end
       end
     end
@@ -92,7 +103,7 @@ local function new(funcmap, slavecount)
     -- assert(fan.setpgid())
 
     -- for i=1,3 do
-    --   assert(fan.close(i - 1))
+    -- assert(fan.close(i - 1))
     -- end
     --
     -- local f0 = fan.open("/dev/null")
@@ -116,10 +127,14 @@ local function new(funcmap, slavecount)
 
           local args = objectbuf.decode(str)
 
-          local func = funcmap[args[1]]
+          local task_key = args[1]
+          local func = funcmap[args[2]]
+
+          -- print(pid, "process", task_key, args[2], table.unpack(args, 3, maxn(args)))
+
           local ret = ""
           if func then
-            local results = { func(table.unpack(args, 2, maxn(args))) }
+            local results = {task_key, func(table.unpack(args, 3, maxn(args))) }
             ret = objectbuf.encode(results)
           end
 
