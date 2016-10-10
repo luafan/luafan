@@ -73,7 +73,7 @@ local function new(funcmap, slavecount)
     if cpu_count > 1 then
       fan.setaffinity(2 ^ (cpu_count - 1))
     end
-    fan.setprogname(string.format("fan: master-%d U(%X)", master_pid, slavecount, fan.getaffinity()))
+    fan.setprogname(string.format("fan: master-%d U(%X/%d)", master_pid, slavecount, fan.getaffinity(), fan.getcpucount()))
     local obj = {slave_pool = pool.new(), slave_pids = slave_pids, func_names = {}}
     for k,v in pairs(funcmap) do
       obj.func_names[k] = k
@@ -120,7 +120,7 @@ local function new(funcmap, slavecount)
     end
 
     local pid = fan.getpid()
-    fan.setprogname(string.format("fan: slave-%d-%d U(%X)", master_pid, slave_index, fan.getaffinity()))
+    fan.setprogname(string.format("fan: slave-%d-%d U(%X/%d)", master_pid, slave_index, fan.getaffinity(), fan.getcpucount()))
 
     -- assert(fan.setpgid())
 
