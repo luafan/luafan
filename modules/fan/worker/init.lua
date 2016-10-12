@@ -15,11 +15,60 @@ local function maxn(t)
   return n
 end
 
+local loadbalance_mt = {}
+loadbalance_mt.__index = loadbalance_mt
+
+function loadbalance_mt.new(max_job_count)
+  local obj = {max_job_count = max_job_count, slaves = {}, yielding = {head = nil, tail = nil}}
+  setmetatable(obj, loadbalance_mt)
+  return obj
+end
+
+function loadbalance_mt:add(slave)
+  table.insert(self.slaves, slave)
+end
+
+local function compare_slave_jobcount(a, b)
+  return a.jobcount < b.jobcount
+end
+
+function loadbalance_mt:findbest()
+  table.sort(self.slaves, compare_slave_jobcount)
+  local slave = self.slaves[1]
+  if not slave or slave.jobcount >= self.max_job_count then
+    if not self.yielding.head then
+      self.yielding.head = {value = coroutine.running()}
+      self.yielding.tail = self.yielding.head
+    else
+      self.yielding.tail.next = {value = coroutine.running()}
+      self.yielding.tail = self.yielding.tail.next
+    end
+    slave = coroutine.yield()
+  end
+
+  slave.jobcount = slave.jobcount + 1
+  return slave
+end
+
+function loadbalance_mt:telldone(slave)
+  slave.jobcount = slave.jobcount - 1
+
+  if self.yielding.head then
+    local co = self.yielding.head.value
+    self.yielding.head = self.yielding.head.next
+    local st,msg = coroutine.resume(co, slave)
+    if not st then
+      print(msg)
+    end
+  end
+end
+
 local master_mt = {}
 master_mt.__index = function(obj, k)
   if obj.func_names[k] then
     return function(obj, ...)
-      local slave = obj.slave_pool:pop()
+      -- local slave = obj.slave_pool:pop()
+      local slave = obj.loadbalance:findbest()
 
       local task_key = string.format("%d", slave.task_index)
       slave.task_index = slave.task_index + 1
@@ -29,7 +78,8 @@ master_mt.__index = function(obj, k)
       output:AddString(objectbuf.encode(args))
 
       if not slave:send(output:package()) then
-        print("salve dead.")
+        print("slave dead.")
+        slave.status = "dead"
         return
       end
 
@@ -39,7 +89,7 @@ master_mt.__index = function(obj, k)
   end
 end
 
-local function new(funcmap, slavecount)
+local function new(funcmap, slavecount, max_job_count)
   local fifoname = connector.tmpfifoname()
   local url = "fifo:" .. fifoname
 
@@ -74,7 +124,7 @@ local function new(funcmap, slavecount)
       fan.setaffinity(2 ^ (cpu_count - 1))
     end
     fan.setprogname(string.format("fan: master-%d U(%X/%d)", master_pid, slavecount, fan.getaffinity(), fan.getcpucount()))
-    local obj = {slave_pool = pool.new(), slave_pids = slave_pids, func_names = {}}
+    local obj = {slave_pool = pool.new(), loadbalance = loadbalance_mt.new(max_job_count), slave_pids = slave_pids, slaves = {}, func_names = {}}
     for k,v in pairs(funcmap) do
       obj.func_names[k] = k
     end
@@ -87,7 +137,8 @@ local function new(funcmap, slavecount)
       -- print("onaccept", apt)
       apt.task_map = {}
       apt.task_index = 1
-      obj.slave_pool:push(apt)
+      apt.jobcount = 0
+      apt.status = "running"
 
       apt.onread = function(input)
         while input:available() > 0 do
@@ -95,15 +146,23 @@ local function new(funcmap, slavecount)
           -- print("onread master", str)
           local args = objectbuf.decode(str)
 
-          obj.slave_pool:push(apt)
-
           if apt.task_map[args[1]] then
             local running = apt.task_map[args[1]]
             apt.task_map[args[1]] = nil
-            assert(coroutine.resume(running, table.unpack(args, 2, maxn(args))))
+            local st,msg = coroutine.resume(running, table.unpack(args, 2, maxn(args)))
+            if not st then
+              print(msg)
+            end
           end
+
+          obj.loadbalance:telldone(apt)
         end
       end
+
+      table.insert(obj.slaves, apt)
+      print("accept push")
+      -- obj.slave_pool:push(apt)
+      obj.loadbalance:add(apt)
     end
 
     return obj
@@ -156,8 +215,15 @@ local function new(funcmap, slavecount)
 
           local ret = ""
           if func then
-            local results = {task_key, func(table.unpack(args, 3, maxn(args))) }
-            ret = objectbuf.encode(results)
+            local st,msg = pcall(function()
+                local results = {task_key, func(table.unpack(args, 3, maxn(args))) }
+                return objectbuf.encode(results)
+              end)
+            if not st then
+              print(msg)
+            else
+              ret = msg
+            end
           end
 
           local output = stream.new()

@@ -15,12 +15,33 @@ function apt_mt:send(buf)
   return #(buf)
 end
 
+-- function apt_mt:_check_read_timeout()
+--   fan.sleep(2)
+
+--   if self.receiving then
+--     print("read timeout")
+--     local receiving = self.receiving
+--     self.receiving = nil
+--     local st,msg = coroutine.resume(receiving)
+--     if not st then
+--       print(msg)
+--     end
+--   end
+-- end
+
 function apt_mt:receive()
   if self.disconnected then
     return nil
   end
 
   self.receiving = coroutine.running()
+
+  -- local co = coroutine.create(apt_mt._check_read_timeout)
+  -- local st,msg = coroutine.resume(co, apt_mt)
+  -- if not st then
+  --   print(msg)
+  -- end
+
   return coroutine.yield()
 end
 
@@ -29,7 +50,10 @@ function apt_mt:_onread(...)
     local receiving = self.receiving
     self.receiving = nil
 
-    coroutine.resume(receiving, ...)
+    local st,msg = coroutine.resume(receiving, ...)
+    if not st then
+      print(msg)
+    end
     return true
   end
 end
@@ -162,7 +186,10 @@ local function bind(host, port, path)
         apt:send(output:package())
 
         if obj.onaccept then
-          coroutine.resume(coroutine.create(obj.onaccept), apt)
+          local st,msg = coroutine.resume(coroutine.create(obj.onaccept), apt)
+          if not st then
+            print(msg)
+          end
         end
       end
     end

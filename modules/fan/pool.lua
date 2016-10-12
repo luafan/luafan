@@ -61,7 +61,10 @@ function pool_mt:push(ctx)
   if pool.yielding.head then
     local co = pool.yielding.head.value
     pool.yielding.head = pool.yielding.head.next
-    assert(coroutine.resume(co, pool_item))
+    local st,msg = coroutine.resume(co, pool_item)
+    if not st then
+      print(msg)
+    end
   else
     table.insert(pool.idle, pool_item)
   end
