@@ -133,6 +133,15 @@ local function new(funcmap, slavecount, max_job_count)
 
     obj.serv = connector.bind(url)
 
+    obj.wait_all_slaves = function()
+      if #(obj.slaves) == #(slave_pids) then
+        return
+      end
+
+      obj._wait_all_slaves_running = coroutine.running()
+      return coroutine.yield()
+    end
+
     obj.serv.onaccept = function(apt)
       -- print("onaccept", apt)
       apt.task_map = {}
@@ -160,9 +169,15 @@ local function new(funcmap, slavecount, max_job_count)
       end
 
       table.insert(obj.slaves, apt)
-      print("accept push")
-      -- obj.slave_pool:push(apt)
       obj.loadbalance:add(apt)
+
+      if #(obj.slaves) == #(slave_pids) then
+        if obj._wait_all_slaves_running then
+          local running = obj._wait_all_slaves_running
+          obj._wait_all_slaves_running = nil
+          coroutine.resume(running, obj)
+        end
+      end
     end
 
     return obj
