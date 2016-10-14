@@ -5,7 +5,7 @@ local HEAD_SIZE = 2 + 2 + 2
 local BODY_SIZE = MTU - HEAD_SIZE
 
 local TIMEOUT = 2
-local WAITING_COUNT = 100
+local WAITING_COUNT = 10 * 1024 -- about 5mb
 
 local function gettime()
   local sec,usec = fan.gettime()
@@ -129,8 +129,6 @@ function apt_mt:_onsendready()
   end
 
   if self._output_wait_count >= WAITING_COUNT then
-    fan.sleep(0.1)
-    self.conn:send_req()
     return false
   end
 
@@ -185,7 +183,7 @@ local function connect(host, port, path)
     end,
     onsendready = function()
       if not t:_onsendready() then
-        fan.sleep(0.1)
+        fan.sleep(1)
         t.conn:send_req()
       end
     end
@@ -206,7 +204,7 @@ local function bind(host, port, path)
         end
       end
 
-      fan.sleep(0.1)
+      fan.sleep(1)
       obj.serv:send_req()
     end,
     onread = function(buf, from)
