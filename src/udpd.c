@@ -175,8 +175,11 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L) {
 
       struct sockaddr *addr = answer->ai_addr;
 
+      // printf("binding fd=%d %s:%d\n", socket_fd, conn->bind_host, conn->bind_port);
+
       if (bind(socket_fd, (const struct sockaddr *)&addr, answer->ai_addrlen) ==
           -1) {
+        luaL_error(L, "udp bind: %s", strerror(errno));
         return 0;
       }
     } else {
@@ -281,6 +284,12 @@ LUA_API int udpd_new(lua_State *L) {
 
 static const luaL_Reg udpdlib[] = {{"new", udpd_new}, {NULL, NULL}};
 
+LUA_API int udpd_conn_tostring(lua_State *L) {
+  Conn *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
+  lua_pushfstring(L, "<host: %s, port: %d, bind_host: %s, bind_port: %d>",
+                  conn->host, conn->port, conn->bind_host, conn->bind_port);
+  return 1;
+}
 LUA_API int udpd_conn_send(lua_State *L) {
   Conn *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
   size_t len = 0;
@@ -289,8 +298,8 @@ LUA_API int udpd_conn_send(lua_State *L) {
   luaudpd_reconnect(conn, L);
 
   if (data && len > 0 && conn->socket_fd) {
-    if (lua_gettop(L) > 2) {
-      Dest *dest = lua_touserdata(L, 3);
+    if (!lua_isnoneornil(L, 3)) {
+      Dest *dest = luaL_checkudata(L, 3, LUA_UDPD_DEST_TYPE);
       sendto(conn->socket_fd, data, len, 0, (struct sockaddr *)&dest->si_client,
              dest->client_len);
     } else {
@@ -333,6 +342,20 @@ LUA_API int udpd_dest_port(lua_State *L) {
   return 1;
 }
 
+LUA_API int udpd_dest_tostring(lua_State *L) {
+  Dest *dest = luaL_checkudata(L, 1, LUA_UDPD_DEST_TYPE);
+
+  char buf[20];
+  const char *out =
+      inet_ntop(AF_INET, (void *)&dest->si_client.sin_addr, buf, 20);
+  if (out) {
+    lua_pushfstring(L, "%s:%d", out, ntohs(dest->si_client.sin_port));
+    return 1;
+  }
+
+  return 0;
+}
+
 LUA_API int luaopen_fan_udpd(lua_State *L) {
   luaL_newmetatable(L, LUA_UDPD_CONNECTION_TYPE);
 
@@ -341,6 +364,9 @@ LUA_API int luaopen_fan_udpd(lua_State *L) {
 
   lua_pushcfunction(L, &udpd_conn_send_request);
   lua_setfield(L, -2, "send_req");
+
+  lua_pushcfunction(L, &udpd_conn_tostring);
+  lua_setfield(L, -2, "__tostring");
 
   lua_pushstring(L, "__index");
   lua_pushvalue(L, -2);
@@ -357,6 +383,9 @@ LUA_API int luaopen_fan_udpd(lua_State *L) {
 
   lua_pushcfunction(L, &udpd_dest_port);
   lua_setfield(L, -2, "getPort");
+
+  lua_pushcfunction(L, &udpd_dest_tostring);
+  lua_setfield(L, -2, "__tostring");
 
   lua_pushstring(L, "__index");
   lua_pushvalue(L, -2);

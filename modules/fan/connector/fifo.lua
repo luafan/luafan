@@ -2,6 +2,8 @@ local fan = require "fan"
 local fifo = require "fan.fifo"
 local stream = require "fan.stream"
 
+local MAX_LINE_SIZE = 8192
+
 local apt_mt = {}
 apt_mt.__index = apt_mt
 
@@ -16,13 +18,10 @@ function apt_mt:send(buf)
   end
 
   -- print("write", #(buf))
-  if #(buf) == 1 then
-    print(debug.traceback())
-  end
-  if #(buf) > 8192 then
-    local count = math.floor(#(buf) / 8192)
+  if #(buf) > MAX_LINE_SIZE then
+    local count = math.floor(#(buf) / MAX_LINE_SIZE)
     for i=0,count do
-      table.insert(self._output_queue, string.sub(buf, i * 8192 + 1, i * 8192 + 8192))
+      table.insert(self._output_queue, string.sub(buf, i * MAX_LINE_SIZE + 1, i * MAX_LINE_SIZE + MAX_LINE_SIZE))
     end
   else
     table.insert(self._output_queue, buf)
