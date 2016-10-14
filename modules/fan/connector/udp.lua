@@ -4,7 +4,13 @@ local MTU = 576 - 8 - 20
 local HEAD_SIZE = 2 + 2 + 2
 local BODY_SIZE = MTU - HEAD_SIZE
 
+local TIMEOUT = 2
 local WAITING_COUNT = 100
+
+local function gettime()
+  local sec,usec = fan.gettime()
+  return sec + usec/1000000.0
+end
 
 local apt_mt = {}
 apt_mt.__index = apt_mt
@@ -84,6 +90,9 @@ function apt_mt:_onread(buf)
       end
     end
 
+    -- print(self.dest, string.format("fail rate: %d/%d", self._output_wait_timeout_count_map[output_index] or 0, count))
+    -- self._output_wait_timeout_count_map[output_index] = nil
+
     if self.onread then
       coroutine.wrap(self.onread)(table.concat(incoming_items))
     end
@@ -108,14 +117,19 @@ function apt_mt:_onsendready()
   end
 
   for k,v in pairs(self._output_wait_ack) do
-    if os.time() - v > 5 then
+    if gettime() - v >= TIMEOUT then
       self:_send(self._output_wait_package[k])
-      self._output_wait_ack[k] = os.time()
+      self._output_wait_ack[k] = gettime()
+
+      -- local output_index = string.unpack("<I2", k)
+      -- local timeout_count = self._output_wait_timeout_count_map[output_index] or 0
+      -- self._output_wait_timeout_count_map[output_index] = timeout_count + 1
       return true
     end
   end
 
   if self._output_wait_count >= WAITING_COUNT then
+    fan.sleep(0.1)
     self.conn:send_req()
     return false
   end
@@ -124,7 +138,7 @@ function apt_mt:_onsendready()
     local package = string.pack(string.format("<c%dc%d", #(k), #(v)), k, v)
     self:_send(package)
     self._output_wait_package[k] = package
-    self._output_wait_ack[k] = os.time()
+    self._output_wait_ack[k] = gettime()
     self._output_wait_count = self._output_wait_count + 1
     -- print("_output_wait_count", self._output_wait_count)
 
@@ -156,6 +170,7 @@ local function connect(host, port, path)
     _output_wait_ack = {},
     _output_wait_package = {},
     _output_wait_count = 0,
+    -- _output_wait_timeout_count_map = {},
     _output_ack_package = {},
     _incoming_map = {},
   }
@@ -169,7 +184,10 @@ local function connect(host, port, path)
       t:_onread(buf)
     end,
     onsendready = function()
-      t:_onsendready()
+      if not t:_onsendready() then
+        fan.sleep(0.1)
+        t.conn:send_req()
+      end
     end
   }
 
@@ -184,9 +202,12 @@ local function bind(host, port, path)
     onsendready = function()
       for k,apt in pairs(obj.clientmap) do
         if apt:_moretosend() and apt:_onsendready() then
-          break
+          return
         end
       end
+
+      fan.sleep(0.1)
+      obj.serv:send_req()
     end,
     onread = function(buf, from)
       local client_key = tostring(from)
@@ -200,6 +221,7 @@ local function bind(host, port, path)
           _output_wait_ack = {},
           _output_wait_package = {},
           _output_wait_count = 0,
+          -- _output_wait_timeout_count_map = {},
           _output_ack_package = {},
           _incoming_map = {},
         }

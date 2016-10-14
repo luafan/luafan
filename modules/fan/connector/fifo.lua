@@ -144,6 +144,8 @@ local function connect(host, port, path)
 
   -- print("waiting for write pipe", fifo_read_name)
 
+  local running = coroutine.running()
+
   obj._fifo_read = fifo.connect{
     name = obj._fifo_read_name,
     delete_on_close = true,
@@ -166,6 +168,7 @@ local function connect(host, port, path)
             obj:_ondisconnected(msg)
           end
         }
+        coroutine.resume(running)
       else
         if not obj:_onread(obj._readstream) and obj.onread then
           obj.onread(obj._readstream)
@@ -180,6 +183,9 @@ local function connect(host, port, path)
   local output = stream.new()
   output:AddString(obj._fifo_read_name)
   conn:send(output:package())
+
+  coroutine.yield()
+
   return obj
 end
 

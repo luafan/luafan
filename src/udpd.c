@@ -297,16 +297,19 @@ LUA_API int udpd_conn_send(lua_State *L) {
 
   luaudpd_reconnect(conn, L);
 
+  int ret = 0;
   if (data && len > 0 && conn->socket_fd) {
     if (!lua_isnoneornil(L, 3)) {
       Dest *dest = luaL_checkudata(L, 3, LUA_UDPD_DEST_TYPE);
-      sendto(conn->socket_fd, data, len, 0, (struct sockaddr *)&dest->si_client,
+      ret = sendto(conn->socket_fd, data, len, 0, (struct sockaddr *)&dest->si_client,
              dest->client_len);
+
     } else {
-      sendto(conn->socket_fd, data, len, 0, &conn->addr, conn->addrlen);
+      ret = sendto(conn->socket_fd, data, len, 0, &conn->addr, conn->addrlen);
     }
   }
-  return 0;
+  lua_pushinteger(L, ret);
+  return 1;
 }
 
 LUA_API int udpd_conn_send_request(lua_State *L) {
