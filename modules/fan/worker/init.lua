@@ -1,6 +1,6 @@
 local fan = require "fan"
 local pool = require "fan.pool"
-local objectbuf = require "fan.objectbuf"
+local objectbuf = require "cjson" --require "fan.objectbuf"
 local connector = require "fan.connector"
 require "compat53"
 
@@ -89,9 +89,11 @@ master_mt.__index = function(obj, k)
   end
 end
 
-local function new(funcmap, slavecount, max_job_count)
-  local fifoname = connector.tmpfifoname()
-  local url = "fifo:" .. fifoname
+local function new(funcmap, slavecount, max_job_count, url)
+  if not url then
+    local fifoname = connector.tmpfifoname()
+    url = "fifo:" .. fifoname
+  end
 
   local master = false
   local slave_pids = {}
@@ -150,9 +152,13 @@ local function new(funcmap, slavecount, max_job_count)
       apt.status = "running"
 
       apt.onread = function(input)
+        -- print("onread master", input:available())
         while input:available() > 0 do
           local str = input:GetString()
-          -- print("onread master", str)
+          if not str then
+            break
+          end
+          -- print("onread master", #(str))
           local args = objectbuf.decode(str)
 
           if apt.task_map[args[1]] then
@@ -212,38 +218,47 @@ local function new(funcmap, slavecount, max_job_count)
           cli = connector.connect(url)
         end
 
+        local last_expect = 1
+
         while true do
-          local input = cli:receive()
+          local input = cli:receive(last_expect)
           if not input then
             break
           end
+          -- print(pid, "receive", input:available())
 
-          local str = input:GetString()
-          -- print(pid, "onread slave", str)
+          local str,expect = input:GetString()
+          if str then
+            last_expect = 1
+            -- print(pid, "onread slave", str)
 
-          local args = objectbuf.decode(str)
+            local args = objectbuf.decode(str)
 
-          local task_key = args[1]
-          local func = funcmap[args[2]]
+            local task_key = args[1]
+            local func = funcmap[args[2]]
 
-          -- print(pid, "process", task_key, args[2], table.unpack(args, 3, maxn(args)))
+            -- print(pid, "process", task_key, args[2], table.unpack(args, 3, maxn(args)))
 
-          local ret = ""
-          if func then
-            local st,msg = pcall(function()
-                local results = {task_key, func(table.unpack(args, 3, maxn(args))) }
-                return objectbuf.encode(results)
-              end)
-            if not st then
-              print(msg)
-            else
-              ret = msg
+            local ret = ""
+            if func then
+              local st,msg = pcall(function()
+                  local results = {task_key, func(table.unpack(args, 3, maxn(args))) }
+                  return objectbuf.encode(results)
+                end)
+              if not st then
+                print(msg)
+              else
+                ret = msg
+              end
             end
-          end
 
-          local output = stream.new()
-          output:AddString(ret)
-          cli:send(output:package())
+            local output = stream.new()
+            output:AddString(ret)
+            cli:send(output:package())
+          else
+            -- print(pid, "not enough, expect", expect)
+            last_expect = expect
+          end
         end
       end)
 

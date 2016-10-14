@@ -4,7 +4,7 @@
 
 #include "utlua.h"
 
-#define LUA_STREAM_TYPE "<fan.stream>"
+#define LUA_STREAM_TYPE "<fan.stream available=%d>"
 
 LUA_API int luafan_stream_new(lua_State *L) {
   size_t len = 0;
@@ -175,7 +175,18 @@ LUA_API int luafan_stream_add_d64(lua_State *L) {
 
 LUA_API int luafan_stream_get_string(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
+  size_t offset = ba->offset;
   uint32_t len = _luafan_stream_get_u30(ba);
+  size_t available = bytearray_read_available(ba);
+
+  if (len > available) {
+    // reset offset.
+    size_t diff = ba->offset - offset;
+    ba->offset = offset;
+    lua_pushnil(L);
+    lua_pushinteger(L, len + diff);
+    return 2;
+  }
 
   char *buff = malloc(len);
   bytearray_readbuffer(ba, buff, len);
@@ -187,7 +198,9 @@ LUA_API int luafan_stream_get_string(lua_State *L) {
 
 LUA_API int luafan_stream_get_bytes(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  uint32_t len = luaL_checkinteger(L, 2);
+  size_t available = bytearray_read_available(ba);
+  uint32_t len = luaL_optinteger(L, 2, available);
+  len = len > available ? available : len;
 
   char *buff = malloc(len);
   memset(buff, 0, len);
@@ -248,6 +261,12 @@ LUA_API int luafan_stream_empty(lua_State *L) {
   return 1;
 }
 
+LUA_API int luafan_stream_tostring(lua_State *L) {
+  BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
+  lua_pushfstring(L, LUA_STREAM_TYPE, bytearray_read_available(ba));
+  return 1;
+}
+
 static const struct luaL_Reg streamlib[] = {
     {"new", luafan_stream_new}, {NULL, NULL},
 };
@@ -294,6 +313,10 @@ LUA_API int luaopen_fan_stream(lua_State *L) {
 
   lua_pushstring(L, "__index");
   lua_pushvalue(L, -2);
+  lua_rawset(L, -3);
+
+  lua_pushstring(L, "__tostring");
+  lua_pushcfunction(L, &luafan_stream_tostring);
   lua_rawset(L, -3);
 
   lua_pushstring(L, "__gc");

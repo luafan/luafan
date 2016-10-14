@@ -10,47 +10,91 @@ function apt_mt:send(buf)
     return nil
   end
 
-  self._fifo_write:send(buf)
-
-  return #(buf)
-end
-
--- function apt_mt:_check_read_timeout()
---   fan.sleep(2)
-
---   if self.receiving then
---     print("read timeout")
---     local receiving = self.receiving
---     self.receiving = nil
---     local st,msg = coroutine.resume(receiving)
---     if not st then
---       print(msg)
---     end
---   end
--- end
-
-function apt_mt:receive()
-  if self.disconnected then
-    return nil
+  if self.send_running then
+    table.insert(self._sender_queue, coroutine.running())
+    coroutine.yield()
   end
 
-  self.receiving = coroutine.running()
+  -- print("write", #(buf))
+  if #(buf) == 1 then
+    print(debug.traceback())
+  end
+  if #(buf) > 8192 then
+    local count = math.floor(#(buf) / 8192)
+    for i=0,count do
+      table.insert(self._output_queue, string.sub(buf, i * 8192 + 1, i * 8192 + 8192))
+    end
+  else
+    table.insert(self._output_queue, buf)
+  end
 
-  -- local co = coroutine.create(apt_mt._check_read_timeout)
-  -- local st,msg = coroutine.resume(co, apt_mt)
-  -- if not st then
-  --   print(msg)
-  -- end
+  self.send_running = coroutine.running()
+  self._fifo_write:send_req()
 
   return coroutine.yield()
 end
 
-function apt_mt:_onread(...)
-  if self.receiving then
+function apt_mt:_onsendready()
+  if #(self._output_queue) > 0 then
+    local buf = self._output_queue[1]
+    table.remove(self._output_queue, 1)
+
+    -- print("send", #(buf))
+    self._fifo_write:send(buf)
+  end
+
+  if #(self._output_queue) > 0 and self._fifo_write then
+    -- print("send_req")
+    self._fifo_write:send_req()
+  elseif self.send_running then
+    local send_running = self.send_running
+    self.send_running = nil
+    if #(self._sender_queue) > 0 then
+      local running = self._sender_queue[1]
+      table.remove(self._sender_queue, 1)
+      coroutine.resume(running)
+    end
+    coroutine.resume(send_running, true)
+  end
+end
+
+-- function apt_mt:_check_read_timeout()
+-- fan.sleep(2)
+
+-- if self.receiving then
+-- print("read timeout")
+-- local receiving = self.receiving
+-- self.receiving = nil
+-- local st,msg = coroutine.resume(receiving)
+-- if not st then
+-- print(msg)
+-- end
+-- end
+-- end
+
+function apt_mt:receive(expect)
+  if self.disconnected then
+    return nil
+  end
+
+  expect = expect or 1
+
+  if self._readstream:available() >= expect then
+    return self._readstream
+  else
+    self.receiving_expect = expect
+    self.receiving = coroutine.running()
+    return coroutine.yield()
+  end
+end
+
+function apt_mt:_onread(input)
+  if self.receiving and (not input or input:available() >= self.receiving_expect) then
     local receiving = self.receiving
     self.receiving = nil
+    self.receiving_expect = 0
 
-    local st,msg = coroutine.resume(receiving, ...)
+    local st,msg = coroutine.resume(receiving, input)
     if not st then
       print(msg)
     end
@@ -75,6 +119,12 @@ function apt_mt:close()
     self._fifo_read:close()
     self._fifo_read = nil
   end
+
+  if self.send_running then
+    local send_running = self.send_running
+    self.send_running = nil
+    coroutine.resume(send_running)
+  end
 end
 
 local function connect(host, port, path)
@@ -87,7 +137,7 @@ local function connect(host, port, path)
     return nil, err
   end
 
-  local obj = {_fifo_read = nil, _fifo_write = nil, _readstream = stream.new()}
+  local obj = {_fifo_read = nil, _fifo_write = nil, _readstream = stream.new(), _output_queue = {}, _sender_queue = {}}
   setmetatable(obj, apt_mt)
 
   obj._fifo_read_name = os.tmpname()
@@ -110,6 +160,9 @@ local function connect(host, port, path)
           name = obj._fifo_write_name,
           delete_on_close = true,
           rwmode = "w",
+          onsendready = function()
+            obj:_onsendready()
+          end,
           ondisconnected = function(msg)
             obj:_ondisconnected(msg)
           end
@@ -143,7 +196,7 @@ local function bind(host, port, path)
       obj._readstream:prepare_get()
 
       while obj._readstream:available() > 0 do
-        local apt = {_fifo_read = nil, _fifo_write = nil, _readstream = stream.new(), receiving = nil}
+        local apt = {_fifo_read = nil, _fifo_write = nil, _readstream = stream.new(), _output_queue = {}, _sender_queue = {}, receiving = nil}
         setmetatable(apt, apt_mt)
 
         apt._fifo_write_name = obj._readstream:GetString()
@@ -152,6 +205,9 @@ local function bind(host, port, path)
           name = apt._fifo_write_name,
           delete_on_close = true,
           rwmode = "w",
+          onsendready = function()
+            apt:_onsendready()
+          end,
           ondisconnected = function(msg)
             apt:_ondisconnected(msg)
           end

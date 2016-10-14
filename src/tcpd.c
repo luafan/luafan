@@ -257,6 +257,7 @@ void connlistener_cb(struct evconnlistener *listener, evutil_socket_t fd,
     lua_rawgeti(co, LUA_REGISTRYINDEX, serv->onAcceptRef);
 
     ACCEPT *accept = lua_newuserdata(co, sizeof(ACCEPT));
+    memset(accept, 0, sizeof(ACCEPT));
     accept->buf = NULL;
     accept->L = serv->L;
     accept->selfRef = LUA_NOREF;
@@ -387,6 +388,8 @@ LUA_API int tcpd_bind(lua_State *L) {
   lua_settop(L, 1);
 
   SERVER *serv = lua_newuserdata(L, sizeof(SERVER));
+  memset(serv, 0, sizeof(SERVER));
+
   lua_getfield(L, 1, "onaccept");
   if (lua_isfunction(L, -1)) {
     serv->onAcceptRef = luaL_ref(L, LUA_REGISTRYINDEX);

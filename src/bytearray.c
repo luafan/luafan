@@ -131,6 +131,8 @@ bool bytearray_write_ready(BYTEARRAY *ba) {
       buf[i] = buf[i + ba->offset];
     }
     ba->offset = unreadleft;
+  } else {
+    ba->offset = ba->total;
   }
 
   ba->total = ba->buflen;

@@ -238,9 +238,13 @@ LUA_API int luafan_fifo_send(lua_State *L) {
       //   fifo->write_ev = NULL;
       // }
     }
+
+    lua_pushinteger(L, len);
+  } else {
+    lua_pushinteger(L, 0);
   }
 
-  return 0;
+  return 1;
 }
 
 LUA_API int luafan_fifo_close(lua_State *L) {
