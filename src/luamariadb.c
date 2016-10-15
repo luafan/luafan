@@ -111,6 +111,8 @@ LUA_API int luaopen_mariadb(lua_State *L);
 typedef struct {
   short closed;
   MYSQL my_conn;
+  int coref;
+  int coref_count;
 } conn_data;
 
 struct maria_status {
@@ -128,6 +130,8 @@ typedef struct {
   int colnames, coltypes; // ref in registry
   MYSQL_RES *my_res;
   conn_data *conn_data;
+  int coref;
+  int coref_count;
 } cur_data;
 
 typedef struct {
@@ -144,12 +148,31 @@ typedef struct {
 
   MYSQL_STMT *my_stmt;
   conn_data *conn_data;
+  int coref;
+  int coref_count;
 } st_data;
+
+#define REF_CO(x)                                                              \
+  if (x->coref == LUA_NOREF) {                                                 \
+    lua_pushthread(L);                                                         \
+    x->coref = luaL_ref(L, LUA_REGISTRYINDEX);                                 \
+    x->coref_count = 1;                                                        \
+  } else {                                                                     \
+    x->coref_count++;                                                          \
+  }
+
+#define UNREF_CO(x)                                                            \
+  if (x->coref != LUA_NOREF) {                                                 \
+    x->coref_count--;                                                          \
+    if (x->coref_count == 0) {                                                 \
+      luaL_unref(L, LUA_REGISTRYINDEX, x->coref);                              \
+      x->coref = LUA_NOREF;                                                    \
+    }                                                                          \
+  }
 
 static void wait_for_status(lua_State *L, conn_data *conn, void *data,
                             int status, event_callback_fn callback, int extra);
 
-#define LUASQL_ENVIRONMENT_MYSQL "MySQL environment"
 #define LUASQL_CONNECTION_MYSQL "MySQL connection"
 #define LUASQL_STATEMENT_MYSQL "MySQL prepared statement"
 #define LUASQL_CURSOR_MYSQL "MySQL cursor"
@@ -311,6 +334,7 @@ static void free_result_cont(int fd, short event, void *_userdata) {
   } else {
     lua_pushboolean(L, true);
     utlua_resume(L, NULL, 1);
+    UNREF_CO(cur);
   }
 
   event_free(ms->event);
@@ -384,6 +408,7 @@ static void fetch_row_cont(int fd, short event, void *_userdata) {
     int count = fetch_row_result(L, cur, row);
     if (count >= 0) {
       utlua_resume(L, NULL, count);
+      UNREF_CO(cur);
     } else if (count == CONTINUE_YIELD) {
       // continue yield
     }
@@ -401,12 +426,14 @@ LUA_API int fetch_row_start(lua_State *L) {
   int status = mysql_fetch_row_start(&row, res);
 
   if (status) {
+    REF_CO(cur);
     wait_for_status(L, cur->conn_data, cur, status, fetch_row_cont, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else {
     int count = fetch_row_result(L, cur, row);
     if (count == CONTINUE_YIELD) {
-      return utlua_yield(L, 0);
+      REF_CO(cur);
+      return lua_yield(L, 0);
     } else {
       return count;
     }
@@ -427,9 +454,11 @@ static void stmt_close_cont(int fd, short event, void *_userdata) {
 
     lua_pushboolean(L, 1);
     utlua_resume(L, NULL, 1);
+    UNREF_CO(st);
   } else {
     luaL_unref(L, LUA_REGISTRYINDEX, st->table);
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    UNREF_CO(st);
   }
 }
 
@@ -439,8 +468,9 @@ LUA_API int stmt_close_start(lua_State *L, st_data *st) {
   my_bool ret = 0;
   int status = mysql_stmt_close_start(&ret, st->my_stmt);
   if (status) {
+    REF_CO(st);
     wait_for_status(L, st->conn_data, st, status, stmt_close_cont, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     luaL_unref(L, LUA_REGISTRYINDEX, st->table);
     lua_pushboolean(L, 1);
@@ -593,6 +623,7 @@ static void stmt_fetch_cont(int fd, short event, void *_userdata) {
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    UNREF_CO(st);
   } else {
     int status = mysql_stmt_fetch_cont(&ret, st->my_stmt, ms->status);
     if (status) {
@@ -600,8 +631,10 @@ static void stmt_fetch_cont(int fd, short event, void *_userdata) {
     } else if (ret == 0) {
       int count = stmt_fetch_result(L, st);
       utlua_resume(L, NULL, count);
+      UNREF_CO(st);
     } else {
       utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+      UNREF_CO(st);
     }
   }
   event_free(ms->event);
@@ -614,8 +647,9 @@ LUA_API int stmt_fetch_start(lua_State *L) {
   int ret = 0;
   int status = mysql_stmt_fetch_start(&ret, st->my_stmt);
   if (status) {
+    REF_CO(st);
     wait_for_status(L, st->conn_data, st, status, stmt_fetch_cont, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     int count = stmt_fetch_result(L, st);
     return count;
@@ -642,6 +676,7 @@ static void stmt_store_result_cont(int fd, short event, void *_userdata) {
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    UNREF_CO(st);
   } else {
     int ret = 0;
     int status = mysql_stmt_store_result_cont(&ret, st->my_stmt, ms->status);
@@ -651,8 +686,10 @@ static void stmt_store_result_cont(int fd, short event, void *_userdata) {
                       ms->extra);
     } else if (ret == 0) {
       utlua_resume(L, NULL, 0);
+      UNREF_CO(st);
     } else {
       utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+      UNREF_CO(st);
     }
   }
   event_free(ms->event);
@@ -772,6 +809,7 @@ static void stmt_execute_cont(int fd, short event, void *_userdata) {
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    UNREF_CO(st);
   } else {
     int ret = 0;
     int status = mysql_stmt_execute_cont(&ret, st->my_stmt, ms->status);
@@ -782,9 +820,11 @@ static void stmt_execute_cont(int fd, short event, void *_userdata) {
       int count = stmt_execute_result(L, st);
       if (count != CONTINUE_YIELD) {
         utlua_resume(L, NULL, count);
+        UNREF_CO(st);
       }
     } else {
       utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+      UNREF_CO(st);
     }
   }
   event_free(ms->event);
@@ -798,14 +838,16 @@ LUA_API int stmt_execute_start(lua_State *L) {
   int status = mysql_stmt_execute_start(&ret, st->my_stmt);
 
   if (status) {
+    REF_CO(st);
     wait_for_status(L, st->conn_data, st, status, stmt_execute_cont, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     int count = stmt_execute_result(L, st);
     if (count >= 0) {
       return count;
     } else {
-      return utlua_yield(L, 0);
+      REF_CO(st);
+      return lua_yield(L, 0);
     }
   } else {
     return luamariadb_push_stmt_error(L, st);
@@ -895,6 +937,7 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata) {
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    UNREF_CO(st);
   } else {
     my_bool ret = 0;
     int status = mysql_stmt_send_long_data_cont(&ret, st->my_stmt, ms->status);
@@ -904,8 +947,10 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata) {
     } else if (ret == 0) {
       int count = stmt_send_long_data_result(L, st);
       utlua_resume(L, NULL, count);
+      UNREF_CO(st);
     } else {
       utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+      UNREF_CO(st);
     }
   }
 
@@ -924,8 +969,9 @@ LUA_API int st_send_long_data(lua_State *L) {
   int status =
       mysql_stmt_send_long_data_start(&ret, st->my_stmt, num, data, size);
   if (status) {
+    REF_CO(st);
     wait_for_status(L, st->conn_data, st, status, stmt_send_long_data_event, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     return stmt_send_long_data_result(L, st);
   } else {
@@ -940,7 +986,8 @@ LUA_API int cur_gc(lua_State *L) {
   cur_data *cur = (cur_data *)luaL_checkudata(L, 1, LUASQL_CURSOR_MYSQL);
   if (cur != NULL && !(cur->closed)) {
     if (free_result_start(L, cur) == CONTINUE_YIELD) {
-      return utlua_yield(L, 0);
+      REF_CO(cur);
+      return lua_yield(L, 0);
     } else {
       lua_pushboolean(L, true);
       return 1;
@@ -962,7 +1009,8 @@ LUA_API int cur_close(lua_State *L) {
   }
 
   if (free_result_start(L, cur) < 0) {
-    return utlua_yield(L, 0);
+    REF_CO(cur);
+    return lua_yield(L, 0);
   } else {
     lua_pushboolean(L, 1);
     return 1;
@@ -1018,6 +1066,7 @@ static int create_cursor(lua_State *L, conn_data *conn_data, MYSQL_RES *result,
                          int cols) {
   cur_data *cur = (cur_data *)lua_newuserdata(L, sizeof(cur_data));
   luasql_setmeta(L, LUASQL_CURSOR_MYSQL);
+  cur->coref = LUA_NOREF;
 
   /* fill in structure */
   cur->closed = 0;
@@ -1041,6 +1090,7 @@ LUA_API void conn_close_cont(int fd, short event, void *_userdata) {
   } else {
     lua_pushboolean(L, 1);
     utlua_resume(L, NULL, 1);
+    UNREF_CO(ms->conn_data);
   }
 
   event_free(ms->event);
@@ -1061,8 +1111,9 @@ LUA_API int conn_close_start(lua_State *L) {
 
     int status = mysql_close_start(&conn->my_conn);
     if (status) {
+      REF_CO(conn);
       wait_for_status(L, conn, &conn->my_conn, status, conn_close_cont, 0);
-      return utlua_yield(L, 0);
+      return lua_yield(L, 0);
     } else {
       lua_pushboolean(L, 1);
       return 1;
@@ -1129,6 +1180,7 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata) {
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    UNREF_CO(st);
   } else {
     int ret = 0;
     int status = mysql_stmt_prepare_cont(&ret, st->my_stmt, ms->status);
@@ -1141,8 +1193,10 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata) {
 
       lua_rawgeti(L, LUA_REGISTRYINDEX, ms->extra);
       utlua_resume(L, NULL, 1);
+      UNREF_CO(st);
     } else {
       utlua_resume(L, NULL, luamariadb_push_errno(L, st->conn_data));
+      UNREF_CO(st);
     }
   }
 
@@ -1163,6 +1217,7 @@ LUA_API int stmt_prepare_start(lua_State *L) {
 
   st_data *st = (st_data *)lua_newuserdata(L, sizeof(st_data));
   memset(st, 0, sizeof(st_data));
+  st->coref = LUA_NOREF;
 
   luasql_setmeta(L, LUASQL_STATEMENT_MYSQL);
   st->my_stmt = stmt;
@@ -1189,8 +1244,9 @@ LUA_API int stmt_prepare_start(lua_State *L) {
   int status = mysql_stmt_prepare_start(&ret, stmt, statement, st_len);
   if (status) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    REF_CO(st);
     wait_for_status(L, conn, st, status, stmt_prepare_cont, ref);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     stmt_prepare_result(L, st);
     // st_data on the top.
@@ -1213,6 +1269,7 @@ static void conn_ping_event(int fd, short event, void *_userdata) {
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    UNREF_CO(ms->conn_data);
   } else {
     int ret = 0;
     int status = mysql_ping_cont(&ret, conn, ms->status);
@@ -1223,8 +1280,10 @@ static void conn_ping_event(int fd, short event, void *_userdata) {
     } else if (ret == 0) {
       int count = conn_ping_result(L, ms->conn_data);
       utlua_resume(L, NULL, count);
+      UNREF_CO(ms->conn_data);
     } else {
       utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+      UNREF_CO(ms->conn_data);
     }
   }
   event_free(ms->event);
@@ -1237,8 +1296,9 @@ LUA_API int conn_ping_start(lua_State *L) {
   int ret = 0;
   int status = mysql_ping_start(&ret, &conn->my_conn);
   if (status) {
+    REF_CO(conn);
     wait_for_status(L, conn, &conn->my_conn, status, conn_ping_event, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     return conn_ping_result(L, conn);
   } else {
@@ -1270,6 +1330,7 @@ static void real_query_cont(int fd, short event, void *_userdata) {
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    UNREF_CO(ms->conn_data);
   } else {
     int ret = 0;
     int status = mysql_real_query_cont(&ret, conn, ms->status);
@@ -1279,8 +1340,10 @@ static void real_query_cont(int fd, short event, void *_userdata) {
     } else if (ret == 0) {
       int count = real_query_result(L, ms->conn_data);
       utlua_resume(L, NULL, count);
+      UNREF_CO(ms->conn_data);
     } else {
       utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+      UNREF_CO(ms->conn_data);
     }
   }
   event_free(ms->event);
@@ -1296,8 +1359,9 @@ LUA_API int real_query_start(lua_State *L) {
   int status = mysql_real_query_start(&ret, &conn->my_conn, statement, st_len);
 
   if (status) {
+    REF_CO(conn);
     wait_for_status(L, conn, &conn->my_conn, status, real_query_cont, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     return real_query_result(L, conn);
   } else {
@@ -1313,6 +1377,7 @@ static void conn_commit_event(int fd, short event, void *_userdata) {
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    UNREF_CO(ms->conn_data);
   } else {
     my_bool ret = 0;
     int status = mysql_commit_cont(&ret, conn, ms->status);
@@ -1323,8 +1388,10 @@ static void conn_commit_event(int fd, short event, void *_userdata) {
     } else if (ret == 0) {
       lua_pushboolean(L, true);
       utlua_resume(L, NULL, 1);
+      UNREF_CO(ms->conn_data);
     } else {
       utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+      UNREF_CO(ms->conn_data);
     }
   }
   event_free(ms->event);
@@ -1337,8 +1404,9 @@ LUA_API int conn_commit_start(lua_State *L) {
   my_bool ret = 0;
   int status = mysql_commit_start(&ret, &conn->my_conn);
   if (status) {
+    REF_CO(conn);
     wait_for_status(L, conn, &conn->my_conn, status, conn_commit_event, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     lua_pushboolean(L, true);
     return 1;
@@ -1355,6 +1423,7 @@ static void conn_rollback_event(int fd, short event, void *_userdata) {
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    UNREF_CO(ms->conn_data);
   } else {
     my_bool ret = 0;
     int status = mysql_rollback_cont(&ret, conn, ms->status);
@@ -1364,8 +1433,10 @@ static void conn_rollback_event(int fd, short event, void *_userdata) {
     } else if (ret == 0) {
       lua_pushboolean(L, true);
       utlua_resume(L, NULL, 1);
+      UNREF_CO(ms->conn_data);
     } else {
       utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+      UNREF_CO(ms->conn_data);
     }
   }
   event_free(ms->event);
@@ -1377,8 +1448,9 @@ LUA_API int conn_rollback_start(lua_State *L) {
   my_bool ret = 0;
   int status = mysql_rollback_start(&ret, &conn->my_conn);
   if (status) {
+    REF_CO(conn);
     wait_for_status(L, conn, &conn->my_conn, status, conn_rollback_event, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     lua_pushboolean(L, true);
     return 1;
@@ -1395,6 +1467,7 @@ static void conn_autocommit_event(int fd, short event, void *_userdata) {
   int errorcode = mysql_errno(conn);
   if (errorcode) {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    UNREF_CO(ms->conn_data);
   } else {
     my_bool ret = 0;
     int status = mysql_autocommit_cont(&ret, conn, ms->status);
@@ -1404,8 +1477,10 @@ static void conn_autocommit_event(int fd, short event, void *_userdata) {
     } else if (ret == 0) {
       lua_pushboolean(L, true);
       utlua_resume(L, NULL, 1);
+      UNREF_CO(ms->conn_data);
     } else {
       utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+      UNREF_CO(ms->conn_data);
     }
   }
   event_free(ms->event);
@@ -1419,8 +1494,9 @@ LUA_API int conn_autocommit_start(lua_State *L) {
   my_bool ret = 0;
   int status = mysql_autocommit_start(&ret, &conn->my_conn, auto_mode);
   if (status) {
+    REF_CO(conn);
     wait_for_status(L, conn, &conn->my_conn, status, conn_autocommit_event, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     lua_pushboolean(L, true);
     return 1;
@@ -1451,8 +1527,10 @@ static void set_character_set_cont(int fd, short event, void *_userdata) {
   } else if (ret == 0) {
     lua_pushboolean(L, 1);
     utlua_resume(L, NULL, 1);
+    UNREF_CO(ms->conn_data);
   } else {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    UNREF_CO(ms->conn_data);
   }
 
   event_free(ms->event);
@@ -1461,14 +1539,14 @@ static void set_character_set_cont(int fd, short event, void *_userdata) {
 
 LUA_API int set_character_set_start(lua_State *L) {
   conn_data *conn = getconnection(L);
-
   const char *charset = luaL_checkstring(L, 2);
 
   int ret = 0;
   int status = mysql_set_character_set_start(&ret, &conn->my_conn, charset);
   if (status) {
+    REF_CO(conn);
     wait_for_status(L, conn, &conn->my_conn, status, set_character_set_cont, 0);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == 0) {
     lua_pushboolean(L, 1);
     return 1;
@@ -1496,8 +1574,10 @@ static void real_connect_cont(int fd, short event, void *_userdata) {
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, ms->extra);
     utlua_resume(L, NULL, 1);
+    UNREF_CO(ms->conn_data);
   } else {
     utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    UNREF_CO(ms->conn_data);
   }
 
   if (!skip_unref) {
@@ -1522,6 +1602,7 @@ LUA_API int real_connect_start(lua_State *L) {
 
   conn_data *cdata = (conn_data *)lua_newuserdata(L, sizeof(conn_data));
   memset(cdata, 0, sizeof(conn_data));
+  cdata->coref = LUA_NOREF;
 
   luasql_setmeta(L, LUASQL_CONNECTION_MYSQL);
 
@@ -1537,8 +1618,9 @@ LUA_API int real_connect_start(lua_State *L) {
                                         password, sourcename, port, NULL, 0);
   if (status) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    REF_CO(cdata);
     wait_for_status(L, cdata, &cdata->my_conn, status, real_connect_cont, ref);
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else if (ret == &cdata->my_conn) {
     mysql_options(&cdata->my_conn, MYSQL_OPT_RECONNECT, &value);
     return 1;

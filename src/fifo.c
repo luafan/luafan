@@ -24,11 +24,12 @@ static void fifo_write_cb(evutil_socket_t fd, short event, void *arg) {
   FIFO *fifo = (FIFO *)arg;
 
   if (fifo->onSendReadyRef != LUA_NOREF) {
-    lua_State *co = utlua_newthread(fifo->L);
-    lua_pop(fifo->L, 1);
+    lua_State *co = lua_newthread(fifo->L);
+    PUSH_REF(fifo->L);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onSendReadyRef);
     utlua_resume(co, fifo->L, 0);
+    POP_REF(fifo->L);
   }
 }
 
@@ -42,8 +43,8 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
 
   if (len <= 0) {
     if (fifo->onDisconnectedRef != LUA_NOREF) {
-      lua_State *co = utlua_newthread(fifo->L);
-      lua_pop(fifo->L, 1);
+      lua_State *co = lua_newthread(fifo->L);
+      PUSH_REF(fifo->L);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
 
@@ -54,18 +55,20 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
       }
 
       utlua_resume(co, fifo->L, 1);
+      POP_REF(fifo->L);
     }
 
     return;
   }
 
   if (fifo->onReadRef != LUA_NOREF) {
-    lua_State *co = utlua_newthread(fifo->L);
-    lua_pop(fifo->L, 1);
+    lua_State *co = lua_newthread(fifo->L);
+    PUSH_REF(fifo->L);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onReadRef);
     lua_pushlstring(co, buf, len);
     utlua_resume(co, fifo->L, 1);
+    POP_REF(fifo->L);
   }
 }
 
@@ -219,8 +222,8 @@ LUA_API int luafan_fifo_send(lua_State *L) {
     int len = write(fifo->socket, data, data_len);
     if (len <= 0) {
       if (fifo->onDisconnectedRef != LUA_NOREF) {
-        lua_State *co = utlua_newthread(fifo->L);
-        lua_pop(fifo->L, 1);
+        lua_State *co = lua_newthread(fifo->L);
+        PUSH_REF(fifo->L);
 
         lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
 
@@ -231,6 +234,7 @@ LUA_API int luafan_fifo_send(lua_State *L) {
         }
 
         utlua_resume(co, fifo->L, 1);
+        POP_REF(fifo->L);
       }
 
       // if (fifo->write_ev) {

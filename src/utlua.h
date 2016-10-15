@@ -112,11 +112,18 @@
 #define lua_unlock(L) ((void)0)
 #endif
 
-lua_State *utlua_newthread(lua_State *L);
 int utlua_resume(lua_State *co, lua_State *from, int count);
 lua_State *utlua_mainthread(lua_State *L);
-void utlua_protect_thread(lua_State *co);
-int utlua_yield(lua_State *L, int nresults);
+
+#define PUSH_REF(L)                                                            \
+  lua_lock(L);                                                                 \
+  int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                  \
+  lua_unlock(L);
+
+#define POP_REF(L)                                                             \
+  lua_lock(L);                                                                 \
+  luaL_unref(L, LUA_REGISTRYINDEX, _ref_);                                     \
+  lua_unlock(L);
 
 #if (LUA_VERSION_NUM < 502)
 void utlua_set_mainthread(lua_State *L);

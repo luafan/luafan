@@ -65,11 +65,12 @@ static void udpd_writecb(evutil_socket_t fd, short what, void *arg) {
   Conn *conn = (Conn *)arg;
 
   if (conn->onSendReadyRef != LUA_NOREF) {
-    lua_State *co = utlua_newthread(conn->L);
-    lua_pop(conn->L, 1);
+    lua_State *co = lua_newthread(conn->L);
+    PUSH_REF(conn->L);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
     utlua_resume(co, conn->L, 0);
+    POP_REF(conn->L);
   }
 }
 
@@ -84,8 +85,8 @@ static void udpd_readcb(evutil_socket_t fd, short what, void *arg) {
                          (struct sockaddr *)&si_client, &client_len);
   if (len >= 0) {
     if (conn->onReadRef != LUA_NOREF) {
-      lua_State *co = utlua_newthread(conn->L);
-      lua_pop(conn->L, 1);
+      lua_State *co = lua_newthread(conn->L);
+      PUSH_REF(conn->L);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
       lua_pushlstring(co, (const char *)buf, len);
@@ -98,6 +99,7 @@ static void udpd_readcb(evutil_socket_t fd, short what, void *arg) {
       dest->client_len = client_len;
 
       utlua_resume(co, conn->L, 2);
+      POP_REF(conn->L);
     }
   }
 }

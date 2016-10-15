@@ -26,7 +26,7 @@ typedef struct _ConnInfo {
 
   BYTEARRAY input;
 
-  lua_State *L;
+  lua_State *mainthread;
 
   int verbose;
 
@@ -34,7 +34,6 @@ typedef struct _ConnInfo {
   int onheaderref;
   int onwriteref;
   int onreadref;
-  int oncompleteref;
 
   int coref; // unref on ResumeInfo
 
@@ -126,18 +125,11 @@ static const char *mcode_or_die(const char *where, CURLMcode code) {
 static void resume_cb(int fd, short kind, void *userp);
 
 static void http_getpost_complete(ConnInfo *conn) {
-  lua_State *L = conn->L;
+  lua_lock(conn->mainthread);
 
-  lua_lock(L);
-
-  if (conn->oncompleteref != LUA_NOREF) {
-    lua_State *co = utlua_newthread(L);
-
-    lua_rawgeti(co, LUA_REGISTRYINDEX, conn->oncompleteref);
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->oncompleteref);
-
-    L = co;
-  }
+  lua_rawgeti(conn->mainthread, LUA_REGISTRYINDEX, conn->coref);
+  lua_State *L = lua_tothread(conn->mainthread, -1);
+  lua_pop(conn->mainthread, 1);
 
   if (conn->bodyref != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, conn->bodyref);
@@ -145,6 +137,7 @@ static void http_getpost_complete(ConnInfo *conn) {
   }
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, conn->retref);
+  luaL_unref(L, LUA_REGISTRYINDEX, conn->retref);
 
   if (strlen(conn->error) < CURL_ERROR_SIZE && *conn->error != 0) {
     lua_pushstring(L, conn->error);
@@ -191,24 +184,27 @@ static void http_getpost_complete(ConnInfo *conn) {
 
   if (conn->onprogressref != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, conn->onprogressref);
+    conn->onprogressref = LUA_NOREF;
   }
 
   if (conn->onheaderref != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, conn->onheaderref);
+    conn->onheaderref = LUA_NOREF;
   }
 
   if (conn->onreadref != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, conn->onreadref);
+    conn->onreadref = LUA_NOREF;
   }
 
   if (conn->onwriteref != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, conn->onwriteref);
+    conn->onwriteref = LUA_NOREF;
   }
 
   luaL_unref(L, LUA_REGISTRYINDEX, conn->headerref);
-  luaL_unref(L, LUA_REGISTRYINDEX, conn->retref);
 
-  lua_unlock(L);
+  lua_unlock(conn->mainthread);
 
   ResumeInfo *info = malloc(sizeof(ResumeInfo));
   info->L = L;
@@ -216,6 +212,8 @@ static void http_getpost_complete(ConnInfo *conn) {
   info->resume_timer = evtimer_new(event_mgr_base(), resume_cb, info);
   struct timeval tv = {0, 10000};
   event_add(info->resume_timer, &tv);
+
+  conn->coref = LUA_NOREF;
 }
 
 /* Check for completed transfers, and remove their easy handles */
@@ -323,7 +321,7 @@ static void setsock(SockInfo *f, curl_socket_t s, CURL *e, int act,
 
 /* Initialize a new SockInfo structure */
 static void addsock(curl_socket_t s, CURL *easy, int action, void *data) {
-  SockInfo *fdp = calloc(sizeof(SockInfo), 1);
+  SockInfo *fdp = calloc(1, sizeof(SockInfo));
   setsock(fdp, s, easy, action, data);
   curl_multi_assign(multi, s, fdp);
 }
@@ -363,7 +361,7 @@ static size_t filldata(char *ptr, size_t size, size_t nmemb, ConnInfo *conn) {
 
 static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata) {
   ConnInfo *conn = (ConnInfo *)userdata;
-  lua_State *L = conn->L;
+  lua_State *L = conn->mainthread;
 
   lua_lock(L);
   size_t total = size * nmemb;
@@ -445,15 +443,15 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata) {
     lua_pushinteger(L, responseCode);
     lua_rawset(L, -3);
 
-    lua_State *co = utlua_newthread(L);
-    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_State *co = lua_newthread(L);
+    PUSH_REF(L);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onheaderref);
     lua_xmove(L, co, 1);
 
     utlua_resume(co, L, 1);
 
-    luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    POP_REF(L);
   }
 
   lua_pop(L, 1); // pop header ref
@@ -466,11 +464,11 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata) {
 static int onprogress(void *clientp, double dltotal, double dlnow,
                       double ultotal, double ulnow) {
   ConnInfo *conn = (ConnInfo *)clientp;
-  lua_State *L = conn->L;
+  lua_State *L = conn->mainthread;
 
   lua_lock(L);
-  lua_State *co = utlua_newthread(L);
-  int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lua_State *co = lua_newthread(L);
+  PUSH_REF(L);
 
   lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onprogressref);
   lua_unlock(L);
@@ -488,20 +486,18 @@ static int onprogress(void *clientp, double dltotal, double dlnow,
     }
   }
 
-  lua_lock(L);
-  luaL_unref(L, LUA_REGISTRYINDEX, ref);
-  lua_unlock(L);
+  POP_REF(L);
 
   return (int)ret;
 }
 
 static size_t onwrite(char *ptr, size_t size, size_t nmemb, void *userdata) {
   ConnInfo *conn = (ConnInfo *)userdata;
-  lua_State *L = conn->L;
+  lua_State *L = conn->mainthread;
 
   lua_lock(L);
-  lua_State *co = utlua_newthread(L);
-  int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lua_State *co = lua_newthread(L);
+  PUSH_REF(L);
   lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onwriteref);
   lua_unlock(L);
 
@@ -517,20 +513,18 @@ static size_t onwrite(char *ptr, size_t size, size_t nmemb, void *userdata) {
     ret = size * nmemb;
   }
 
-  lua_lock(L);
-  luaL_unref(L, LUA_REGISTRYINDEX, ref);
-  lua_unlock(L);
+  POP_REF(L);
 
   return (int)ret;
 }
 
 static size_t onread(void *ptr, size_t size, size_t nmemb, void *userdata) {
   ConnInfo *conn = (ConnInfo *)userdata;
-  lua_State *L = conn->L;
+  lua_State *L = conn->mainthread;
 
   lua_lock(L);
-  lua_State *co = utlua_newthread(L);
-  int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lua_State *co = lua_newthread(L);
+  PUSH_REF(L);
 
   size_t accept_size = size * nmemb;
 
@@ -554,16 +548,14 @@ static size_t onread(void *ptr, size_t size, size_t nmemb, void *userdata) {
       }
     }
   }
-  lua_lock(L);
-  luaL_unref(L, LUA_REGISTRYINDEX, ref);
-  lua_unlock(L);
+  POP_REF(L);
   return ret;
 }
 
 int debug_callback(CURL *curl_handle, curl_infotype infotype, char *buf,
                    size_t size, void *data) {
   ConnInfo *conn = (ConnInfo *)data;
-  lua_State *L = conn->L;
+  lua_State *L = conn->mainthread;
 
   lua_lock(L);
   if (conn->verbose) {
@@ -661,9 +653,10 @@ static int http_getpost(lua_State *L, int method) {
   conn->onprogressref = LUA_NOREF;
   conn->onreadref = LUA_NOREF;
   conn->onwriteref = LUA_NOREF;
-  conn->oncompleteref = LUA_NOREF;
   conn->coref = LUA_NOREF;
   conn->bodyref = LUA_NOREF;
+
+  int oncompleteref = LUA_NOREF;
 
   bytearray_alloc(&conn->input, 1024);
 
@@ -673,8 +666,6 @@ static int http_getpost(lua_State *L, int method) {
     fprintf(MSG_OUT, "curl_easy_init() failed, exiting!\n");
     exit(2);
   }
-
-  conn->L = L;
 
   //    printf("lua_gettop(L)=%d\n", lua_gettop(L));
 
@@ -1062,9 +1053,8 @@ static int http_getpost(lua_State *L, int method) {
 
     lua_getfield(L, 1, "oncomplete");
     if (lua_isfunction(L, -1)) {
-      conn->oncompleteref = luaL_ref(L, LUA_REGISTRYINDEX);
+      oncompleteref = luaL_ref(L, LUA_REGISTRYINDEX);
     } else if (lua_isnil(L, -1)) {
-      conn->oncompleteref = LUA_NOREF;
       lua_pop(L, 1);
     } else {
       err = "invalid oncomplete type in table parameter";
@@ -1102,6 +1092,18 @@ static int http_getpost(lua_State *L, int method) {
     goto ERROR;
   }
 
+  conn->mainthread = utlua_mainthread(L);
+
+  if (oncompleteref != LUA_NOREF) {
+    lua_State *co = lua_newthread(conn->mainthread);
+    conn->coref = luaL_ref(conn->mainthread, LUA_REGISTRYINDEX);
+
+    lua_rawgeti(co, LUA_REGISTRYINDEX, oncompleteref);
+  } else {
+    lua_pushthread(L);
+    conn->coref = luaL_ref(L, LUA_REGISTRYINDEX);
+  }
+
   if (!multi) {
     multi = curl_multi_init();
 
@@ -1118,11 +1120,8 @@ static int http_getpost(lua_State *L, int method) {
     goto ERROR;
   }
 
-  lua_pushthread(L);
-  conn->coref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-  if (conn->oncompleteref != LUA_NOREF) {
-    conn->L = utlua_mainthread(L);
+  if (oncompleteref != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, oncompleteref);
     return LUA_OK;
   } else {
     return LUA_YIELD;
@@ -1151,6 +1150,14 @@ ERROR:
     luaL_unref(L, LUA_REGISTRYINDEX, conn->onwriteref);
   }
 
+  if (conn->coref != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, conn->coref);
+  }
+
+  if (oncompleteref != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, oncompleteref);
+  }
+
   luaL_unref(L, LUA_REGISTRYINDEX, conn->headerref);
   luaL_unref(L, LUA_REGISTRYINDEX, conn->retref);
 
@@ -1165,7 +1172,7 @@ ERROR:
 
 LUA_API int http_get(lua_State *L) {
   if (http_getpost(L, HTTP_GET) == LUA_YIELD) {
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1173,7 +1180,7 @@ LUA_API int http_get(lua_State *L) {
 
 LUA_API int http_post(lua_State *L) {
   if (http_getpost(L, HTTP_POST) == LUA_YIELD) {
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1181,7 +1188,7 @@ LUA_API int http_post(lua_State *L) {
 
 LUA_API int http_put(lua_State *L) {
   if (http_getpost(L, HTTP_PUT) == LUA_YIELD) {
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1189,7 +1196,7 @@ LUA_API int http_put(lua_State *L) {
 
 LUA_API int http_update(lua_State *L) {
   if (http_getpost(L, HTTP_UPDATE) == LUA_YIELD) {
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1197,7 +1204,7 @@ LUA_API int http_update(lua_State *L) {
 
 LUA_API int http_delete(lua_State *L) {
   if (http_getpost(L, HTTP_DELETE) == LUA_YIELD) {
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else {
     return 0;
   }
@@ -1205,7 +1212,7 @@ LUA_API int http_delete(lua_State *L) {
 
 LUA_API int http_head(lua_State *L) {
   if (http_getpost(L, HTTP_HEAD) == LUA_YIELD) {
-    return utlua_yield(L, 0);
+    return lua_yield(L, 0);
   } else {
     return 0;
   }

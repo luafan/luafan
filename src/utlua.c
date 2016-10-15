@@ -2,35 +2,6 @@
 
 int GLOBAL_VERBOSE = 0;
 
-static void luathread_table_bind(lua_State *co) {
-  lua_lock(co);
-
-  lua_pushlightuserdata(co, co);
-  lua_pushthread(co);
-  lua_rawset(co, LUA_REGISTRYINDEX);
-
-  lua_unlock(co);
-}
-
-static void luathread_table_unbind(lua_State *co) {
-  lua_lock(co);
-
-  lua_pushlightuserdata(co, co);
-  lua_pushnil(co);
-  lua_rawset(co, LUA_REGISTRYINDEX);
-
-  lua_unlock(co);
-}
-
-lua_State *utlua_newthread(lua_State *L) {
-  lua_lock(L);
-  lua_State *co = lua_newthread(L);
-  luathread_table_bind(co);
-  lua_unlock(L);
-
-  return co;
-}
-
 #if (LUA_VERSION_NUM < 502)
 static int mainthread_ref = LUA_NOREF;
 
@@ -61,18 +32,8 @@ lua_State *utlua_mainthread(lua_State *L) {
   return mt;
 }
 
-void utlua_protect_thread(lua_State *co) {
-  luathread_table_bind(co);
-}
-
-int utlua_yield(lua_State *L, int nresults){
-  luathread_table_bind(L);
-  return lua_yield(L, nresults);
-}
-
 int utlua_resume(lua_State *co, lua_State *from, int count) {
   lua_lock(co);
-  luathread_table_bind(co);
 
 #if (LUA_VERSION_NUM >= 502)
   int status = lua_resume(co, from, count);
@@ -89,14 +50,10 @@ int utlua_resume(lua_State *co, lua_State *from, int count) {
 
   // printf("resume status = %d\n", status);
 
-  if (status == 0) {
-    luathread_table_unbind(co);
-  } else if (status == LUA_YIELD) {
-    // do nothing
-  } else {
+  if (status > LUA_YIELD) {
     fprintf(stderr, "Error: %s\n", lua_tostring(co, -1));
-    luathread_table_unbind(co);
   }
+
   lua_unlock(co);
 
   return status;

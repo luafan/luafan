@@ -47,8 +47,8 @@ static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
 
 static void httpd_handler_cgi_bin(struct evhttp_request *req,
                                   LuaServer *server) {
-  lua_State *co = utlua_newthread(server->L);
-  lua_pop(server->L, 1);
+  lua_State *co = lua_newthread(server->L);
+  PUSH_REF(server->L);
 
   lua_rawgeti(co, LUA_REGISTRYINDEX, server->onServiceRef);
 
@@ -60,6 +60,7 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req,
   lua_pushvalue(co, -1); // duplicate for req,resp
 
   utlua_resume(co, server->L, 2);
+  POP_REF(server->L);
 }
 
 static void request_push_body(lua_State *L, int idx) {

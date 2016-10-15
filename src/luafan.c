@@ -17,12 +17,16 @@ static void main_handler(const int fd, const short which, void *arg) {
   evtimer_del(mainevent);
   free(mainevent);
 
-  lua_State *co = utlua_newthread(mainState);
-  lua_pop(mainState, 1);
+  lua_State *co = lua_newthread(mainState);
+  PUSH_REF(mainState);
 
   lua_rawgeti(co, LUA_REGISTRYINDEX, main_ref);
   utlua_resume(co, NULL, 0);
+
   luaL_unref(co, LUA_REGISTRYINDEX, main_ref);
+  main_ref = LUA_NOREF;
+
+  POP_REF(mainState);
 }
 
 LUA_API int luafan_start(lua_State *L) {
@@ -53,16 +57,28 @@ LUA_API int luafan_stop(lua_State *L) {
 // -- luafan_sleep start --
 struct sleep_args {
   lua_State *L;
+  int threadRef;
   struct event clockevent;
 };
 
 static void clock_handler(const int fd, const short which, void *arg) {
   struct sleep_args *args = (struct sleep_args *)arg;
-  evtimer_del(&args->clockevent);
+
   lua_State *L = args->L;
+  int threadRef = args->threadRef;
+  evtimer_del(&args->clockevent);
+
   free(args);
 
-  utlua_resume(L, NULL, 0);
+  lua_lock(L);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, threadRef);
+  lua_State *co = lua_tothread(L, -1);
+  lua_pop(L, 1);
+  lua_unlock(L);
+
+  utlua_resume(co, NULL, 0);
+
+  luaL_unref(L, LUA_REGISTRYINDEX, threadRef);
 }
 
 LUA_API int luafan_sleep(lua_State *L) {
@@ -70,14 +86,19 @@ LUA_API int luafan_sleep(lua_State *L) {
   struct event_base *base = event_mgr_base();
 
   struct sleep_args *args = malloc(sizeof(struct sleep_args));
-  args->L = L;
+  memset(args, 0, sizeof(struct sleep_args));
+
+  args->L = utlua_mainthread(L);
+  lua_pushthread(L);
+  args->threadRef = luaL_ref(L, LUA_REGISTRYINDEX);
+
   struct timeval t = {0};
   d2tv(sec, &t);
   evtimer_set(&args->clockevent, clock_handler, args);
   event_base_set(base, &args->clockevent);
   evtimer_add(&args->clockevent, &t);
 
-  return utlua_yield(L, 0);
+  return lua_yield(L, 0);
 }
 // -- luafan_sleep end --
 
@@ -335,12 +356,18 @@ LUA_API int luafan_waitpid(lua_State *L) {
   }
 }
 
+LUA_API int luafan_gettop(lua_State *L) {
+  lua_pushinteger(L, lua_gettop(utlua_mainthread(L)));
+  return 1;
+}
+
 static const struct luaL_Reg fanlib[] = {
     {"loop", luafan_start},
     {"loopbreak", luafan_stop},
 
     {"sleep", luafan_sleep},
     {"gettime", luafan_gettime},
+    {"gettop", luafan_gettop},
 
     {"data2hex", data2hex},
     {"hex2data", hex2data},
