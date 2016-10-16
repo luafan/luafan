@@ -13,7 +13,7 @@ function apt_mt:send(buf)
   end
 
   if self.send_running then
-    table.insert(self._sender_queue, coroutine.running())
+    table.insert(self._sender_queue, (coroutine.running()))
     coroutine.yield()
   end
 

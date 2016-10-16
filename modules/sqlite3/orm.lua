@@ -1,3 +1,7 @@
+--[[
+luarocks install lsqlite3
+]]
+
 local setmetatable = setmetatable
 local getmetatable = getmetatable
 local pairs = pairs
@@ -169,6 +173,27 @@ local function make_rows(t, stmt)
 	return lines
 end
 
+local function each_rows(t, stmt, eachfunc)
+	local lines = {}
+	for row in stmt:nrows() do
+		local r = {
+			[KEY_ATTR] = row
+		}
+
+		setmetatable(r, make_row_mt(t))
+
+		for k,v in pairs(row) do
+			r[k] = v
+		end
+
+		if eachfunc(r) then
+			break
+		end
+	end
+end
+
+
+
 local field_mt = {
 	__index = function(f, key)
 
@@ -208,20 +233,49 @@ local table_mt = {
 		end
 	end,
 	__call = function(t, key, obj, ...)
-		if key == "select" or key == "list" then
+		if key == "select" or key == "list" or key == "one" then
 			local ctx = t[KEY_CONTEXT]
 			local db = getmetatable(ctx).db
 			local stmt
 			local fmt = obj
+			local suffix
+			if key == "one" then
+				suffix = " limit 1"
+			else
+				suffix = ""
+			end
+
 			if fmt then
-				stmt = prepare(db, "select * from " .. t[KEY_NAME] .. " where " .. fmt)
+				stmt = prepare(db, "select * from " .. t[KEY_NAME] .. " " .. fmt .. suffix)
 				bind_values(stmt, ...)
 			else
-				stmt = prepare(db, "select * from " .. t[KEY_NAME])
+				stmt = prepare(db, "select * from " .. t[KEY_NAME] .. suffix)
 			end
 			local lines = make_rows(t, stmt)
 			stmt:finalize()
-			return lines
+
+			if key == "one" then
+				return #(lines) > 0 and lines[1] or nil
+			else
+				return lines
+			end
+		elseif type(key) == "function" then
+			local ctx = t[KEY_CONTEXT]
+			local db = getmetatable(ctx).db
+			local stmt
+			local fmt = obj
+
+			if fmt then
+				local params = {...}
+				stmt = prepare(db, "select * from " .. t[KEY_NAME] .. " " .. fmt)
+				if #(params) > 0 then
+					bind_values(stmt, ...)
+				end
+			else
+				stmt = prepare(db, "select * from " .. t[KEY_NAME])
+			end
+			each_rows(t, stmt, key)
+			stmt:finalize()
 		elseif key == "delete" or key == "remove" then
 			local fmt = obj
 
@@ -323,7 +377,7 @@ local function update_schema(db, tablename, model)
     end
 end
 
-function new(db, models)
+local function new(db, models)
 	local ctx = {}
 	local mt = {
 		db = db,
