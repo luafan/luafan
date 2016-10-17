@@ -42,6 +42,10 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
   len = read(fd, buf, READ_BUFF_LEN);
 
   if (len <= 0) {
+    if (errno == EAGAIN) {
+      // printf("fifo_read_cb EAGAIN\n");
+      return;
+    }
     if (fifo->onDisconnectedRef != LUA_NOREF) {
       lua_State *co = lua_newthread(fifo->L);
       PUSH_REF(fifo->L);
@@ -221,6 +225,12 @@ LUA_API int luafan_fifo_send(lua_State *L) {
   if (data && data_len > 0) {
     int len = write(fifo->socket, data, data_len);
     if (len <= 0) {
+      if (errno == EAGAIN) {
+        // printf("luafan_fifo_send EAGAIN\n");
+        lua_pushinteger(L, 0);
+        return 1;
+      }
+
       if (fifo->onDisconnectedRef != LUA_NOREF) {
         lua_State *co = lua_newthread(fifo->L);
         PUSH_REF(fifo->L);

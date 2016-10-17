@@ -36,24 +36,31 @@ end
 function apt_mt:_onsendready()
   if #(self._output_queue) > 0 then
     local buf = self._output_queue[1]
-    table.remove(self._output_queue, 1)
-
-    -- print("send", #(buf))
-    self._fifo_write:send(buf)
-  end
-
-  if #(self._output_queue) > 0 and self._fifo_write then
-    -- print("send_req")
-    self._fifo_write:send_req()
+    -- print(self, "send", #(buf))
+    local sent = self._fifo_write:send(buf)
+    if sent > 0 then
+      if sent == 0 then
+        -- do nothing.
+      elseif sent < #(buf) then
+        self._output_queue[1] = buf:sub(sent + 1)
+      else
+        table.remove(self._output_queue, 1)
+      end
+    end
   elseif self.send_running then
     local send_running = self.send_running
     self.send_running = nil
     if #(self._sender_queue) > 0 then
-      local running = self._sender_queue[1]
-      table.remove(self._sender_queue, 1)
-      coroutine.resume(running)
+      local running = table.remove(self._sender_queue, 1)
+      assert(coroutine.resume(running))
     end
-    coroutine.resume(send_running, true)
+    assert(coroutine.resume(send_running, true))
+  else
+    return
+  end
+
+  if self._fifo_write then
+    self._fifo_write:send_req()
   end
 end
 
@@ -122,7 +129,7 @@ function apt_mt:close()
   if self.send_running then
     local send_running = self.send_running
     self.send_running = nil
-    coroutine.resume(send_running)
+    assert(coroutine.resume(send_running))
   end
 end
 
@@ -168,7 +175,7 @@ local function connect(host, port, path)
             obj:_ondisconnected(msg)
           end
         }
-        coroutine.resume(running)
+        assert(coroutine.resume(running))
       else
         if not obj:_onread(obj._readstream) and obj.onread then
           obj.onread(obj._readstream)
