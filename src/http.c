@@ -210,8 +210,11 @@ static void http_getpost_complete(ConnInfo *conn) {
   info->L = L;
   info->coref = conn->coref;
   info->resume_timer = evtimer_new(event_mgr_base(), resume_cb, info);
-  struct timeval tv = {0, 10000};
+  struct timeval tv = {0, 1};
   event_add(info->resume_timer, &tv);
+
+  // utlua_resume(L, NULL, 1);
+  // luaL_unref(L, LUA_REGISTRYINDEX, conn->coref);
 
   conn->coref = LUA_NOREF;
 }
