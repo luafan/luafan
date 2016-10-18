@@ -302,9 +302,28 @@ LUA_API int udpd_conn_send(lua_State *L) {
   int ret = 0;
   if (data && len > 0 && conn->socket_fd) {
     if (!lua_isnoneornil(L, 3)) {
-      Dest *dest = luaL_checkudata(L, 3, LUA_UDPD_DEST_TYPE);
-      ret = sendto(conn->socket_fd, data, len, 0, (struct sockaddr *)&dest->si_client,
-             dest->client_len);
+      if (!lua_isnoneornil(L, 4)) {
+        const char *host = luaL_checkstring(L, 3);
+        char portbuf[6];
+        evutil_snprintf(portbuf, sizeof(portbuf), "%d", (int)luaL_checkinteger(L, 4));
+
+        struct evutil_addrinfo hints = {0};
+        struct evutil_addrinfo *answer = NULL;
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        hints.ai_protocol = IPPROTO_UDP;
+        hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
+        int err = evutil_getaddrinfo(conn->host, portbuf, &hints, &answer);
+        if (err < 0) {
+          luaL_error(L, "invaild address %s:%d", conn->host, conn->port);
+        }
+
+        ret = sendto(conn->socket_fd, data, len, 0, answer->ai_addr, answer->ai_addrlen);
+      } else {
+        Dest *dest = luaL_checkudata(L, 3, LUA_UDPD_DEST_TYPE);
+        ret = sendto(conn->socket_fd, data, len, 0, (struct sockaddr *)&dest->si_client,
+               dest->client_len);
+      }
 
     } else {
       ret = sendto(conn->socket_fd, data, len, 0, &conn->addr, conn->addrlen);

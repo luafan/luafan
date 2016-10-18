@@ -15,12 +15,14 @@ end
 local apt_mt = {}
 apt_mt.__index = apt_mt
 
-function apt_mt:send(buf)
+function apt_mt:send(buf, ...)
   if not self.conn then
     return nil
   end
 
   self._output_index = self._output_index + 1
+
+  local dest = {...}
 
   if #(buf) > BODY_SIZE then
     local package_index = 1
@@ -31,10 +33,12 @@ function apt_mt:send(buf)
       package_index = package_index + 1
 
       self._output_queue[head] = package
+      self._output_dest[head] = dest
     end
   else
     local head = string.pack("<I2I2I2", self._output_index, 1, 1)
     self._output_queue[head] = buf
+    self._output_dest[head] = dest
   end
 
   self.conn:send_req()
@@ -54,11 +58,12 @@ function apt_mt:_moretosend()
   end
 end
 
-function apt_mt:_onread(buf)
+function apt_mt:_onread(buf, ...)
   -- print("read", self.dest, #(buf))
   if #(buf) == HEAD_SIZE then
     if self._output_wait_ack[buf] then
       self._output_wait_ack[buf] = nil
+      self._output_dest[buf] = nil
       self._output_wait_package[buf] = nil
       self._output_wait_count = self._output_wait_count - 1
       -- print("_output_wait_count", self._output_wait_count)
@@ -67,6 +72,7 @@ function apt_mt:_onread(buf)
   else
     local head = string.sub(buf, 1, HEAD_SIZE)
     table.insert(self._output_ack_package, head)
+    self._output_dest[head] = {...}
     self.conn:send_req()
     -- print("sending ack", #(head), #(self._output_ack_package))
 
@@ -102,9 +108,17 @@ function apt_mt:_onread(buf)
   end
 end
 
-function apt_mt:_send(buf)
-  -- print("send", self.dest, #(buf))
-  self.conn:send(buf, self.dest)
+function apt_mt:_send(buf, dest)
+  -- print("send", self.dest, #(buf), dest)
+  if type(dest) == "string" then
+    print(debug.traceback())
+  end
+  if dest and #(dest) > 0 then
+    self.conn:send(buf, table.unpack(dest))
+  else
+    self.conn:send(buf, self.dest)
+  end
+
   self.conn:send_req()
 end
 
@@ -112,13 +126,14 @@ function apt_mt:_onsendready()
   if #(self._output_ack_package) > 0 then
     local package = table.remove(self._output_ack_package)
     -- print("send ack")
-    self:_send(package)
+    self:_send(package, self._output_dest[package])
+    self._output_dest[package] = nil
     return true
   end
 
   for k,v in pairs(self._output_wait_ack) do
     if gettime() - v >= TIMEOUT then
-      self:_send(self._output_wait_package[k])
+      self:_send(self._output_wait_package[k], self._output_dest[k])
       self._output_wait_ack[k] = gettime()
 
       -- local output_index = string.unpack("<I2", k)
@@ -133,8 +148,8 @@ function apt_mt:_onsendready()
   end
 
   for k,v in pairs(self._output_queue) do
-    local package = string.pack(string.format("<c%dc%d", #(k), #(v)), k, v)
-    self:_send(package)
+    local package = k .. v
+    self:_send(package, self._output_dest[k])
     self._output_wait_package[k] = package
     self._output_wait_ack[k] = gettime()
     self._output_wait_count = self._output_wait_count + 1
@@ -165,6 +180,7 @@ local function connect(host, port, path)
   local t = {
     _output_index = 0,
     _output_queue = {},
+    _output_dest = {},
     _output_wait_ack = {},
     _output_wait_package = {},
     _output_wait_count = 0,
@@ -177,9 +193,9 @@ local function connect(host, port, path)
   t.conn = udpd.new{
     host = host,
     port = port,
-    onread = function(buf)
+    onread = function(buf, from)
       -- print("onread", #(buf))
-      t:_onread(buf)
+      t:_onread(buf, from:getHost(), from:getPort())
     end,
     onsendready = function()
       if not t:_onsendready() then
@@ -216,6 +232,7 @@ local function bind(host, port, path)
           conn = obj.serv,
           _output_index = 0,
           _output_queue = {},
+          _output_dest = {},
           _output_wait_ack = {},
           _output_wait_package = {},
           _output_wait_count = 0,
