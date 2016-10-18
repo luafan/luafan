@@ -313,7 +313,7 @@ LUA_API int udpd_conn_send(lua_State *L) {
         hints.ai_socktype = SOCK_DGRAM;
         hints.ai_protocol = IPPROTO_UDP;
         hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
-        int err = evutil_getaddrinfo(conn->host, portbuf, &hints, &answer);
+        int err = evutil_getaddrinfo(host, portbuf, &hints, &answer);
         if (err < 0) {
           luaL_error(L, "invaild address %s:%d", conn->host, conn->port);
         }
