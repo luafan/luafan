@@ -21,27 +21,35 @@ function apt_mt:send(buf, ...)
   end
 
   self._output_index = self._output_index + 1
+  local output_index = self._output_index
+
+  local package_index_map = {}
+  self._output_wait_index_map[output_index] = package_index_map
 
   local dest = {...}
 
   if #(buf) > BODY_SIZE then
     local package_index = 1
-    local count_index = math.floor(#(buf) / BODY_SIZE)
-    for i=0,count_index do
+    local index_count = math.floor(#(buf) / BODY_SIZE)
+    for i=0,index_count do
       local package = string.sub(buf, i * BODY_SIZE + 1, i * BODY_SIZE + BODY_SIZE)
-      local head = string.pack("<I2I2I2", self._output_index, count_index + 1, package_index)
+      local head = string.pack("<I2I2I2", output_index, index_count + 1, package_index)
+      package_index_map[package_index] = true
       package_index = package_index + 1
 
       self._output_queue[head] = package
       self._output_dest[head] = dest
     end
   else
-    local head = string.pack("<I2I2I2", self._output_index, 1, 1)
+    local head = string.pack("<I2I2I2", output_index, 1, 1)
     self._output_queue[head] = buf
     self._output_dest[head] = dest
+    package_index_map[1] = true
   end
 
   self.conn:send_req()
+
+  return output_index
 end
 
 function apt_mt:_moretosend()
@@ -61,18 +69,31 @@ end
 function apt_mt:_onread(buf, ...)
   -- print("read", self.dest, #(buf))
   if #(buf) == HEAD_SIZE then
+    local output_index,count,package_index = string.unpack("<I2I2I2", buf)
     if self._output_wait_ack[buf] then
       self._output_wait_ack[buf] = nil
-      self._output_dest[buf] = nil
+      self._output_ack_dest[buf] = nil
       self._output_wait_package[buf] = nil
       self._output_wait_count = self._output_wait_count - 1
       -- print("_output_wait_count", self._output_wait_count)
     end
+    local package_index_map = self._output_wait_index_map[output_index]
+    if package_index_map then
+      package_index_map[package_index] = nil
+      if not next(package_index_map) then
+        self._output_wait_index_map[output_index] = nil
+
+        if self.onsent then
+          coroutine.wrap(self.onsent)(output_index)
+        end
+      end
+    end
+
     return
   else
     local head = string.sub(buf, 1, HEAD_SIZE)
     table.insert(self._output_ack_package, head)
-    self._output_dest[head] = {...}
+    self._output_ack_dest[head] = {...}
     self.conn:send_req()
     -- print("sending ack", #(head), #(self._output_ack_package))
 
@@ -100,7 +121,7 @@ function apt_mt:_onread(buf, ...)
     -- self._output_wait_timeout_count_map[output_index] = nil
 
     if self.onread then
-      coroutine.wrap(self.onread)(table.concat(incoming_items))
+      coroutine.wrap(self.onread)(table.concat(incoming_items), ...)
     end
 
     -- mark true, so we can drop dup packages.
@@ -126,8 +147,8 @@ function apt_mt:_onsendready()
   if #(self._output_ack_package) > 0 then
     local package = table.remove(self._output_ack_package)
     -- print("send ack")
-    self:_send(package, self._output_dest[package])
-    self._output_dest[package] = nil
+    self:_send(package, self._output_ack_dest[package])
+    self._output_ack_dest[package] = nil
     return true
   end
 
@@ -162,8 +183,27 @@ function apt_mt:_onsendready()
   return false
 end
 
+-- cleanup packages(ack not include) related with host,port
+function apt_mt:cleanup(host, port)
+  if (not host or not port) and self.dest then
+    host = self.dest:getHost()
+    port = self.dest:getPort()
+  end
+
+  if host and port then
+    for k,v in pairs(self._output_dest) do
+      if self._output_wait_ack[k] and v[1] == host and v[2] == port then
+        self._output_dest[v] = nil
+        self._output_wait_package[v] = nil
+        self._output_wait_ack[v] = nil
+        self._output_wait_count = self._output_wait_count - 1
+      end
+    end
+  end
+
+end
+
 function apt_mt:close()
-  self:_onread(nil)
   if self.conn then
     self.conn:close()
     self.conn = nil
@@ -183,9 +223,11 @@ local function connect(host, port, path)
     _output_dest = {},
     _output_wait_ack = {},
     _output_wait_package = {},
+    _output_wait_index_map = {},
     _output_wait_count = 0,
     -- _output_wait_timeout_count_map = {},
     _output_ack_package = {},
+    _output_ack_dest = {},
     _incoming_map = {},
   }
   setmetatable(t, apt_mt)
@@ -235,9 +277,11 @@ local function bind(host, port, path)
           _output_dest = {},
           _output_wait_ack = {},
           _output_wait_package = {},
+          _output_wait_index_map = {},
           _output_wait_count = 0,
           -- _output_wait_timeout_count_map = {},
           _output_ack_package = {},
+          _output_ack_dest = {},
           _incoming_map = {},
         }
         setmetatable(apt, apt_mt)

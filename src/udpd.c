@@ -32,13 +32,16 @@ LUA_API int lua_udpd_conn_gc(lua_State *L) {
   Conn *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
   if (conn->bind_host) {
     free(conn->bind_host);
+    conn->bind_host = NULL;
   }
   if (conn->host) {
     free(conn->host);
+    conn->host = NULL;
   }
 
   if (conn->onReadRef != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, conn->onReadRef);
+    conn->onReadRef = LUA_NOREF;
   }
 
   if (conn->onSendReadyRef != LUA_NOREF) {
@@ -388,6 +391,9 @@ LUA_API int luaopen_fan_udpd(lua_State *L) {
 
   lua_pushcfunction(L, &udpd_conn_send_request);
   lua_setfield(L, -2, "send_req");
+
+  lua_pushcfunction(L, &lua_udpd_conn_gc);
+  lua_setfield(L, -2, "close");
 
   lua_pushcfunction(L, &udpd_conn_tostring);
   lua_setfield(L, -2, "__tostring");

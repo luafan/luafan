@@ -30,7 +30,10 @@ local function gettime()
     return sec + usec/1000000.0
 end
 
+math.randomseed(gettime())
+
 return {
     random_string = random_string,
     gettime = gettime,
+    LETTERS_W = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
 }
