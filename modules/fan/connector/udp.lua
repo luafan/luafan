@@ -1,5 +1,9 @@
 local udpd = require "fan.udpd"
 local config = require "config"
+
+config.udp_send_total = 0
+config.udp_receive_total = 0
+
 -- impl waiting pool
 local MTU = 576 - 8 - 20
 local HEAD_SIZE = 2 + 2 + 2
@@ -146,6 +150,8 @@ function apt_mt:_send(buf, dest)
     self.conn:send(buf, self.dest)
   end
 
+  config.udp_send_total = config.udp_send_total + 1
+
   self.conn:send_req()
 end
 
@@ -262,6 +268,7 @@ local function connect(host, port, path)
     port = port,
     onread = function(buf, from)
       -- print("onread", #(buf))
+      config.udp_receive_total = config.udp_receive_total + 1
       t:_onread(buf, from:getHost(), from:getPort())
     end,
     onsendready = function()
@@ -291,6 +298,7 @@ local function bind(host, port, path)
       obj.serv:send_req()
     end,
     onread = function(buf, from)
+      config.udp_receive_total = config.udp_receive_total + 1
       local client_key = tostring(from)
       local apt = obj.clientmap[client_key]
       if not apt then
