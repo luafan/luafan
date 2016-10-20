@@ -383,6 +383,12 @@ LUA_API int udpd_dest_tostring(lua_State *L) {
   return 0;
 }
 
+LUA_API int udpd_conn_get_port(lua_State *L) {
+  Conn *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
+  lua_pushinteger(L, regress_get_socket_port(conn->socket_fd));
+  return 1;
+}
+
 LUA_API int luaopen_fan_udpd(lua_State *L) {
   luaL_newmetatable(L, LUA_UDPD_CONNECTION_TYPE);
 
@@ -397,6 +403,9 @@ LUA_API int luaopen_fan_udpd(lua_State *L) {
 
   lua_pushcfunction(L, &udpd_conn_tostring);
   lua_setfield(L, -2, "__tostring");
+
+  lua_pushcfunction(L, &udpd_conn_get_port);
+  lua_setfield(L, -2, "getPort");
 
   lua_pushstring(L, "__index");
   lua_pushvalue(L, -2);

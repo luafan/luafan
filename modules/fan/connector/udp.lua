@@ -1,11 +1,12 @@
 local udpd = require "fan.udpd"
+local config = require "config"
 -- impl waiting pool
 local MTU = 576 - 8 - 20
 local HEAD_SIZE = 2 + 2 + 2
 local BODY_SIZE = MTU - HEAD_SIZE
 
-local TIMEOUT = 2
-local WAITING_COUNT = 10 * 1024 -- about 5mb
+local TIMEOUT = config.udp_package_timeout or 2
+local WAITING_COUNT = 10 * 1024 * 1024 / MTU -- 10MB
 
 local function gettime()
   local sec,usec = fan.gettime()
@@ -66,17 +67,22 @@ function apt_mt:_moretosend()
   end
 end
 
+function apt_mt:_mark_send_completed(head)
+  if self._output_wait_ack[head] then
+    self._output_wait_ack[head] = nil
+    self._output_ack_dest[head] = nil
+    self._output_wait_package[head] = nil
+    self._output_wait_count = self._output_wait_count - 1
+    -- print("_output_wait_count", self._output_wait_count)
+  end
+end
+
 function apt_mt:_onread(buf, ...)
   -- print("read", self.dest, #(buf))
   if #(buf) == HEAD_SIZE then
     local output_index,count,package_index = string.unpack("<I2I2I2", buf)
-    if self._output_wait_ack[buf] then
-      self._output_wait_ack[buf] = nil
-      self._output_ack_dest[buf] = nil
-      self._output_wait_package[buf] = nil
-      self._output_wait_count = self._output_wait_count - 1
-      -- print("_output_wait_count", self._output_wait_count)
-    end
+    self:_mark_send_completed(buf)
+
     local package_index_map = self._output_wait_index_map[output_index]
     if package_index_map then
       package_index_map[package_index] = nil
@@ -154,8 +160,27 @@ function apt_mt:_onsendready()
 
   for k,v in pairs(self._output_wait_ack) do
     if gettime() - v >= TIMEOUT then
-      self:_send(self._output_wait_package[k], self._output_dest[k])
-      self._output_wait_ack[k] = gettime()
+      if self.ontimeout then
+        local dest = self._output_dest[k]
+        local host, port
+        if dest and #(dest) > 0 then
+          host,port = table.unpack(dest)
+        elseif self.dest then
+          host = self.dest:getHost()
+          port = self.dest:getPort()
+        end
+
+        local resend = self.ontimeout(self._output_wait_package[k], host, port)
+        if resend then
+          self:_send(self._output_wait_package[k], self._output_dest[k])
+          self._output_wait_ack[k] = gettime()
+        else
+          self:_mark_send_completed(k)
+        end
+      else
+        self:_send(self._output_wait_package[k], self._output_dest[k])
+        self._output_wait_ack[k] = gettime()
+      end
 
       -- local output_index = string.unpack("<I2", k)
       -- local timeout_count = self._output_wait_timeout_count_map[output_index] or 0
