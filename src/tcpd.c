@@ -787,6 +787,7 @@ LUA_API int tcpd_connect(lua_State *L) {
   lua_settop(L, 1);
 
   Conn *conn = lua_newuserdata(L, sizeof(Conn));
+  memset(conn, 0, sizeof(Conn));
   conn->buf = NULL;
 #if FAN_HAS_OPENSSL
   conn->sslctx = NULL;

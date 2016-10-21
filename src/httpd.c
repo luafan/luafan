@@ -288,14 +288,19 @@ LUA_API int lua_evhttp_server_gc(lua_State *L) {
   LuaServer *server = (LuaServer *)lua_touserdata(L, -1);
   if (server->onServiceRef != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, server->onServiceRef);
+    server->onServiceRef = LUA_NOREF;
   }
 
   if (event_mgr_base() && server->httpd) {
     if (server->boundsocket) {
       evhttp_del_accept_socket(server->httpd, server->boundsocket);
+      server->boundsocket = NULL;
     }
 
-    evhttp_free(server->httpd);
+    if (server->httpd) {
+      evhttp_free(server->httpd);
+      server->httpd = NULL;
+    }
   }
 
 #if FAN_HAS_OPENSSL
@@ -426,6 +431,7 @@ LUA_API int utd_bind(lua_State *L) {
   lua_settop(L, 1);
 
   LuaServer *server = (LuaServer *)lua_newuserdata(L, sizeof(LuaServer));
+  memset(server, 0, sizeof(LuaServer));
   luaL_getmetatable(L, LUA_EVHTTP_SERVER_TYPE);
   lua_setmetatable(L, -2);
 

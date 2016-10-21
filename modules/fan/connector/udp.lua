@@ -100,7 +100,7 @@ function apt_mt:_onread(buf, ...)
     end
 
     return
-  else
+  elseif #(buf) > HEAD_SIZE then
     local head = string.sub(buf, 1, HEAD_SIZE)
     table.insert(self._output_ack_package, head)
     self._output_ack_dest[head] = {...}
@@ -136,6 +136,8 @@ function apt_mt:_onread(buf, ...)
 
     -- mark true, so we can drop dup packages.
     self._incoming_map[output_index] = true
+  else
+    print("receive buf size too small", #(buf), fan.data2hex(buf))
   end
 end
 
@@ -230,6 +232,10 @@ function apt_mt:cleanup(host, port)
         self._output_wait_count = self._output_wait_count - 1
       end
     end
+
+    if self._parent then
+      self._parent.clientmap[string.format("%s:%d", host, port)] = nil
+    end
   end
 
 end
@@ -299,12 +305,17 @@ local function bind(host, port, path)
     end,
     onread = function(buf, from)
       config.udp_receive_total = config.udp_receive_total + 1
-      local client_key = tostring(from)
+      local host = from:getHost()
+      local port = from:getPort()
+      local client_key = string.format("%s:%d", host, port)
       local apt = obj.clientmap[client_key]
       if not apt then
         apt = {
+          host = host,
+          port = port,
           dest = from,
           conn = obj.serv,
+          _parent = obj,
           _output_index = 0,
           _output_queue = {},
           _output_dest = {},
