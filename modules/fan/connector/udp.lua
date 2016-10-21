@@ -37,21 +37,23 @@ function apt_mt:send(buf, ...)
     local package_index = 1
     local index_count = math.floor(#(buf) / BODY_SIZE)
     for i=0,index_count do
-      local package = string.sub(buf, i * BODY_SIZE + 1, i * BODY_SIZE + BODY_SIZE)
+      local body = string.sub(buf, i * BODY_SIZE + 1, i * BODY_SIZE + BODY_SIZE)
       local head = string.pack("<I2I2I2", output_index, index_count + 1, package_index)
+      -- print(string.format("pp: %d %d/%d", output_index, package_index, index_count + 1))
       package_index_map[package_index] = true
       package_index = package_index + 1
 
-      self._output_queue[head] = package
+      self._output_queue[head] = head .. body
       self._output_dest[head] = dest
     end
   else
     local head = string.pack("<I2I2I2", output_index, 1, 1)
-    self._output_queue[head] = buf
+    self._output_queue[head] = head .. buf
     self._output_dest[head] = dest
     package_index_map[1] = true
   end
 
+  -- print("send_req")
   self.conn:send_req()
 
   return output_index
@@ -81,7 +83,7 @@ function apt_mt:_mark_send_completed(head)
   end
 end
 
-function apt_mt:_onread(buf, ...)
+function apt_mt:_onread(buf, host, port)
   -- print("read", self.dest, #(buf))
   if #(buf) == HEAD_SIZE then
     local output_index,count,package_index = string.unpack("<I2I2I2", buf)
@@ -103,7 +105,8 @@ function apt_mt:_onread(buf, ...)
   elseif #(buf) > HEAD_SIZE then
     local head = string.sub(buf, 1, HEAD_SIZE)
     table.insert(self._output_ack_package, head)
-    self._output_ack_dest[head] = {...}
+    self._output_ack_dest[head] = {host, port}
+    -- print("send_req")
     self.conn:send_req()
     -- print("sending ack", #(head), #(self._output_ack_package))
 
@@ -111,18 +114,26 @@ function apt_mt:_onread(buf, ...)
     local output_index,count,package_index = string.unpack("<I2I2I2", head)
     -- print(string.format("idx: %d %d/%d", output_index, package_index, count))
 
-    local incoming_items = self._incoming_map[output_index]
-    if incoming_items == true then
-      return
-    elseif not incoming_items then
-      incoming_items = {}
-      self._incoming_map[output_index] = incoming_items
+    local key = string.format("%s:%d", host, port)
+    local incoming = self._incoming_map[key]
+
+    if not incoming then
+      incoming = {}
+      self._incoming_map[key] = incoming
     end
 
-    incoming_items[package_index] = body
+    local incoming_object = incoming[output_index]
+    if not incoming_object then
+      incoming_object = {items = {}, count = count}
+      incoming[output_index] = incoming_object
+    elseif incoming_object.done then
+      return
+    end
+
+    incoming_object.items[package_index] = body
 
     for i=1,count do
-      if not incoming_items[i] then
+      if not incoming_object.items[i] then
         return
       end
     end
@@ -131,18 +142,18 @@ function apt_mt:_onread(buf, ...)
     -- self._output_wait_timeout_count_map[output_index] = nil
 
     if self.onread then
-      coroutine.wrap(self.onread)(table.concat(incoming_items), ...)
+      coroutine.wrap(self.onread)(table.concat(incoming_object.items), host, port)
     end
 
     -- mark true, so we can drop dup packages.
-    self._incoming_map[output_index] = true
+    incoming_object.done = true
   else
     print("receive buf size too small", #(buf), fan.data2hex(buf))
   end
 end
 
 function apt_mt:_send(buf, dest)
-  -- print("send", self.dest, #(buf), dest)
+  -- print("send", #(buf))
   if type(dest) == "string" then
     print(debug.traceback())
   end
@@ -154,20 +165,15 @@ function apt_mt:_send(buf, dest)
 
   config.udp_send_total = config.udp_send_total + 1
 
+  -- print("send_req")
   self.conn:send_req()
 end
 
-function apt_mt:_onsendready()
-  if #(self._output_ack_package) > 0 then
-    local package = table.remove(self._output_ack_package)
-    -- print("send ack")
-    self:_send(package, self._output_ack_dest[package])
-    self._output_ack_dest[package] = nil
-    return true
-  end
-
+function apt_mt:_check_timeout()
+  local has_timeout = false
   for k,v in pairs(self._output_wait_ack) do
     if gettime() - v >= TIMEOUT then
+      has_timeout = true
       if self.ontimeout then
         local dest = self._output_dest[k]
         local host, port
@@ -180,21 +186,32 @@ function apt_mt:_onsendready()
 
         local resend = self.ontimeout(self._output_wait_package[k], host, port)
         if resend then
-          self:_send(self._output_wait_package[k], self._output_dest[k])
+          self._output_queue[k] = self._output_wait_package[k]
           self._output_wait_ack[k] = gettime()
         else
           self:_mark_send_completed(k)
         end
       else
-        self:_send(self._output_wait_package[k], self._output_dest[k])
+        self._output_queue[k] = self._output_wait_package[k]
         self._output_wait_ack[k] = gettime()
       end
-
-      -- local output_index = string.unpack("<I2", k)
-      -- local timeout_count = self._output_wait_timeout_count_map[output_index] or 0
-      -- self._output_wait_timeout_count_map[output_index] = timeout_count + 1
-      return true
     end
+  end
+
+  if has_timeout then
+    self.conn:send_req()
+  end
+
+  return has_timeout
+end
+
+function apt_mt:_onsendready()
+  if #(self._output_ack_package) > 0 then
+    local package = table.remove(self._output_ack_package)
+    -- print("send ack")
+    self:_send(package, self._output_ack_dest[package])
+    self._output_ack_dest[package] = nil
+    return true
   end
 
   if self._output_wait_count >= WAITING_COUNT then
@@ -202,9 +219,8 @@ function apt_mt:_onsendready()
   end
 
   for k,v in pairs(self._output_queue) do
-    local package = k .. v
-    self:_send(package, self._output_dest[k])
-    self._output_wait_package[k] = package
+    self:_send(v, self._output_dest[k])
+    self._output_wait_package[k] = v
     self._output_wait_ack[k] = gettime()
     self._output_wait_count = self._output_wait_count + 1
     -- print("_output_wait_count", self._output_wait_count)
@@ -241,6 +257,8 @@ function apt_mt:cleanup(host, port)
 end
 
 function apt_mt:close()
+  self.stop = true
+
   if self.conn then
     self.conn:close()
     self.conn = nil
@@ -279,11 +297,21 @@ local function connect(host, port, path)
     end,
     onsendready = function()
       if not t:_onsendready() then
-        fan.sleep(1)
-        t.conn:send_req()
+        -- fan.sleep(1)
+        -- print("send_req", t.conn, "conn.onsendready")
+        -- t.conn:send_req()
       end
     end
   }
+
+  t.stop = false
+
+  coroutine.wrap(function()
+    while not t.stop do
+      t:_check_timeout()
+      fan.sleep(0.5)
+    end
+  end)()
 
   return t
 end
@@ -299,9 +327,6 @@ local function bind(host, port, path)
           return
         end
       end
-
-      fan.sleep(1)
-      obj.serv:send_req()
     end,
     onread = function(buf, from)
       config.udp_receive_total = config.udp_receive_total + 1
@@ -336,10 +361,34 @@ local function bind(host, port, path)
         end
       end
 
-      apt:_onread(buf)
+      apt:_onread(buf, host, port)
     end
   }
 
+  obj.stop = false
+
+  coroutine.wrap(function()
+    while not obj.stop do
+      for clientkey,apt in pairs(obj.clientmap) do
+        if apt:_check_timeout() then
+          break
+        end
+      end
+
+      fan.sleep(0.5)
+    end
+  end)()
+
+  obj.close = function()
+    obj.stop = true
+
+    for clientkey,apt in pairs(obj.clientmap) do
+      apt:close()
+    end
+
+    obj.serv:close()
+    obj.serv = nil
+  end
   -- print("serv", obj.serv)
 
   return obj
