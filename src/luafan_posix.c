@@ -187,27 +187,37 @@ LUA_API int luafan_getinterfaces(lua_State *L) {
   lua_newtable(L);
   int count = 1;
   for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-    if (ifa->ifa_addr == NULL)
-      continue;
-
-    if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), host, NI_MAXHOST,
-                    NULL, 0, NI_NUMERICHOST) == 0) {
+    lua_newtable(L);
+    if (ifa->ifa_addr) {
       if (ifa->ifa_addr->sa_family == AF_INET ||
           ifa->ifa_addr->sa_family == AF_INET6) {
-            lua_newtable(L);
-
-            lua_pushstring(L, ifa->ifa_name);
-            lua_setfield(L, -2, "name");
-
-            lua_pushstring(L, host);
-            lua_setfield(L, -2, "host");
-
-            lua_pushstring(L, ifa->ifa_addr->sa_family == AF_INET ? "inet" : "inet6");
-            lua_setfield(L, -2, "type");
-
-            lua_rawseti(L, -2, count++);
+        lua_pushstring(L, ifa->ifa_name);
+        lua_setfield(L, -2, "name");
+        if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), host,
+                        NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0) {
+          lua_pushstring(L, host);
+          lua_setfield(L, -2, "host");
+        }
+        lua_pushstring(L,
+                       ifa->ifa_addr->sa_family == AF_INET ? "inet" : "inet6");
+        lua_setfield(L, -2, "type");
       }
     }
+    if (ifa->ifa_netmask) {
+      if (getnameinfo(ifa->ifa_netmask, sizeof(struct sockaddr_in), host,
+                      NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0) {
+        lua_pushstring(L, host);
+        lua_setfield(L, -2, "netmask");
+      }
+    }
+    if (ifa->ifa_dstaddr) {
+      if (getnameinfo(ifa->ifa_dstaddr, sizeof(struct sockaddr_in), host,
+                      NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0) {
+        lua_pushstring(L, host);
+        lua_setfield(L, -2, "dst");
+      }
+    }
+    lua_rawseti(L, -2, count++);
   }
 
   freeifaddrs(ifaddr);

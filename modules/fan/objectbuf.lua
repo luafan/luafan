@@ -15,6 +15,10 @@ local HAS_TABLE_MASK = 2^3
 
 local packer = {}
 
+packer["boolean"] = function(ctx, obj)
+  -- no need any packer job.
+end
+
 packer["object"] = function(ctx, obj)
   local p = packer[type(obj)]
   if p then
@@ -50,7 +54,6 @@ packer["number"] = function(ctx, num)
     table.insert(ctx.integer_u30s, num)
     ctx.number_index[num] = #(ctx.integer_u30s)
   end
-
 end
 
 packer["string"] = function(ctx, str)
@@ -75,9 +78,14 @@ local function decode(buf, sym)
   local input = stream.new(buf)
   local flag = input:GetU8() -- in order to support both lua5.1 and 5.3, we can't use bit op.
   local index_map = {}
-  local index = sym and sym.index or 0
+  local index = sym and sym.index or 2
   local sym_map_vk = sym and sym.map_vk or {}
   local last_top = index + 1
+
+  if not sym then
+    index_map[1] = false
+    index_map[2] = true
+  end
 
   local has_number = flag >= HAS_NUMBER_MASK
   if has_number then
@@ -152,7 +160,10 @@ local function symbol(cls)
   packer.object(ctx, cls)
 
   local index_map = {}
-  local index = 0
+  local index = 2
+
+  index_map[false] = 1
+  index_map[true] = 2
 
   table.sort(ctx.strings, function(a,b)
       return a < b
@@ -200,8 +211,11 @@ local function encode(obj, sym)
   local bodystream = stream.new()
   local index_map = {}
   local sym_map = sym and sym.map or {}
-  local index = sym and sym.index or 0
-  
+  local index = sym and sym.index or 2
+
+  index_map[false] = 1
+  index_map[true] = 2
+
   if #(ctx.numbers) > 0 then
     flag = flag + HAS_NUMBER_MASK
     local realcount = 0

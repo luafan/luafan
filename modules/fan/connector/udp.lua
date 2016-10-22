@@ -1,4 +1,5 @@
 local udpd = require "fan.udpd"
+local utils = require "fan.utils"
 local config = require "config"
 
 config.udp_send_total = 0
@@ -87,6 +88,7 @@ function apt_mt:_onread(buf, host, port)
   -- print("read", self.dest, #(buf))
   if #(buf) == HEAD_SIZE then
     local output_index,count,package_index = string.unpack("<I2I2I2", buf)
+    -- print(string.format("ack: %d %d/%d", output_index, package_index, count))
     self:_mark_send_completed(buf)
 
     local package_index_map = self._output_wait_index_map[output_index]
@@ -112,7 +114,7 @@ function apt_mt:_onread(buf, host, port)
 
     local body = string.sub(buf, HEAD_SIZE + 1)
     local output_index,count,package_index = string.unpack("<I2I2I2", head)
-    -- print(string.format("idx: %d %d/%d", output_index, package_index, count))
+    -- print(string.format("idx: %d %d/%d (%d)", output_index, package_index, count, #(body)))
 
     local key = string.format("%s:%d", host, port)
     local incoming = self._incoming_map[key]
@@ -124,7 +126,7 @@ function apt_mt:_onread(buf, host, port)
 
     local incoming_object = incoming[output_index]
     if not incoming_object then
-      incoming_object = {items = {}, count = count}
+      incoming_object = {items = {}, count = count, start = utils.gettime()}
       incoming[output_index] = incoming_object
     elseif incoming_object.done then
       return
@@ -147,6 +149,7 @@ function apt_mt:_onread(buf, host, port)
 
     -- mark true, so we can drop dup packages.
     incoming_object.done = true
+    incoming_object.donetime = utils.gettime()
   else
     print("receive buf size too small", #(buf), fan.data2hex(buf))
   end
@@ -154,9 +157,9 @@ end
 
 function apt_mt:_send(buf, dest)
   -- print("send", #(buf))
-  if type(dest) == "string" then
-    print(debug.traceback())
-  end
+  -- local output_index,count,package_index = string.unpack("<I2I2I2", buf)
+  -- print(string.format("send: %d %d/%d", output_index, package_index, count))
+
   if dest and #(dest) > 0 then
     self.conn:send(buf, table.unpack(dest))
   else
@@ -170,6 +173,18 @@ function apt_mt:_send(buf, dest)
 end
 
 function apt_mt:_check_timeout()
+  for key,incoming in pairs(self._incoming_map) do
+    for index,incoming_object in pairs(incoming) do
+      if incoming_object.done and utils.gettime() - incoming_object.donetime > 10 then
+        incoming[index] = nil
+      -- elseif utils.gettime() - incoming_object.start > 120 then
+      --   incoming[index] = nil
+      end
+    end
+    if not next(incoming) then
+      self._incoming_map[key] = nil
+    end
+  end
   local has_timeout = false
   for k,v in pairs(self._output_wait_ack) do
     if gettime() - v >= TIMEOUT then
@@ -249,8 +264,12 @@ function apt_mt:cleanup(host, port)
       end
     end
 
+    local key = string.format("%s:%d", host, port)
+
+    self._incoming_map[key] = nil
+
     if self._parent then
-      self._parent.clientmap[string.format("%s:%d", host, port)] = nil
+      self._parent.clientmap[key] = nil
     end
   end
 
