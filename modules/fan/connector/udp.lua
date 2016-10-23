@@ -28,7 +28,7 @@ function apt_mt:send(buf, ...)
   end
 
   if self._output_wait_count >= WAITING_COUNT then
-    table.insert(self._output_wait_thread, coroutine.running())
+    table.insert(self._output_wait_thread, (coroutine.running()))
     coroutine.yield()
   end
 
