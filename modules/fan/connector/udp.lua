@@ -4,6 +4,7 @@ local config = require "config"
 
 config.udp_send_total = 0
 config.udp_receive_total = 0
+config.udp_resend_total = 0
 
 -- impl waiting pool
 local MTU = 576 - 8 - 20
@@ -11,7 +12,7 @@ local HEAD_SIZE = 2 + 2 + 2
 local BODY_SIZE = MTU - HEAD_SIZE
 
 local TIMEOUT = config.udp_package_timeout or 2
-local WAITING_COUNT = 10 * 1024 * 1024 / MTU -- 10MB
+local WAITING_COUNT = 10
 
 local function gettime()
   local sec,usec = fan.gettime()
@@ -26,8 +27,16 @@ function apt_mt:send(buf, ...)
     return nil
   end
 
-  self._output_index = self._output_index + 1
-  local output_index = self._output_index
+  if self._output_wait_count >= WAITING_COUNT then
+    table.insert(self._output_wait_thread, coroutine.running())
+    coroutine.yield()
+  end
+
+  local output_index = self._output_index + 1
+  if output_index > 65535 then
+    output_index = 1
+  end
+  self._output_index = output_index
 
   local package_index_map = {}
   self._output_wait_index_map[output_index] = package_index_map
@@ -80,6 +89,10 @@ function apt_mt:_mark_send_completed(head)
     self._output_ack_dest[head] = nil
     self._output_wait_package[head] = nil
     self._output_wait_count = self._output_wait_count - 1
+
+    if #(self._output_wait_thread) > 0 then
+      coroutine.resume(table.remove(self._output_wait_thread, 1))
+    end
     -- print("_output_wait_count", self._output_wait_count)
   end
 end
@@ -92,6 +105,7 @@ function apt_mt:_onread(buf, host, port)
       print(string.format("%s:%d\tack: %d %d/%d", host, port, output_index, package_index, count))
     end
     self:_mark_send_completed(buf)
+    self.conn:send_req()
 
     local package_index_map = self._output_wait_index_map[output_index]
     if package_index_map then
@@ -209,12 +223,14 @@ function apt_mt:_check_timeout()
 
         local resend = self.ontimeout(self._output_wait_package[k], host, port)
         if resend then
+          config.udp_resend_total = config.udp_resend_total + 1
           self._output_queue[k] = self._output_wait_package[k]
           self._output_wait_ack[k] = gettime()
         else
           self:_mark_send_completed(k)
         end
       else
+        config.udp_resend_total = config.udp_resend_total + 1
         self._output_queue[k] = self._output_wait_package[k]
         self._output_wait_ack[k] = gettime()
       end
@@ -235,10 +251,6 @@ function apt_mt:_onsendready()
     self:_send(package, self._output_ack_dest[package])
     self._output_ack_dest[package] = nil
     return true
-  end
-
-  if self._output_wait_count >= WAITING_COUNT then
-    return false
   end
 
   for k,v in pairs(self._output_queue) do
@@ -305,6 +317,7 @@ local function connect(host, port, path)
     _output_dest = {},
     _output_wait_ack = {},
     _output_wait_package = {},
+    _output_wait_thread = {},
     _output_wait_index_map = {},
     _output_wait_count = 0,
     -- _output_wait_timeout_count_map = {},
@@ -373,6 +386,7 @@ local function connect(host, port, path)
             _output_dest = {},
             _output_wait_ack = {},
             _output_wait_package = {},
+            _output_wait_thread = {},
             _output_wait_index_map = {},
             _output_wait_count = 0,
             -- _output_wait_timeout_count_map = {},
