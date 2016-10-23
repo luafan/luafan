@@ -88,7 +88,9 @@ function apt_mt:_onread(buf, host, port)
   -- print("read", self.dest, #(buf))
   if #(buf) == HEAD_SIZE then
     local output_index,count,package_index = string.unpack("<I2I2I2", buf)
-    -- print(string.format("ack: %d %d/%d", output_index, package_index, count))
+    if config.debug then
+      print(string.format("%s:%d\tack: %d %d/%d", host, port, output_index, package_index, count))
+    end
     self:_mark_send_completed(buf)
 
     local package_index_map = self._output_wait_index_map[output_index]
@@ -110,11 +112,15 @@ function apt_mt:_onread(buf, host, port)
     self._output_ack_dest[head] = {host, port}
     -- print("send_req")
     self.conn:send_req()
+    -- if config.debug then
     -- print("sending ack", #(head), #(self._output_ack_package))
+    -- end
 
     local body = string.sub(buf, HEAD_SIZE + 1)
     local output_index,count,package_index = string.unpack("<I2I2I2", head)
-    -- print(string.format("idx: %d %d/%d (%d)", output_index, package_index, count, #(body)))
+    if config.debug then
+      print(string.format("%s:%d\trecv: %d %d/%d (%d)", host, port, output_index, package_index, count, #(body)))
+    end
 
     local key = string.format("%s:%d", host, port)
     local incoming = self._incoming_map[key]
@@ -143,13 +149,13 @@ function apt_mt:_onread(buf, host, port)
     -- print(self.dest, string.format("fail rate: %d/%d", self._output_wait_timeout_count_map[output_index] or 0, count))
     -- self._output_wait_timeout_count_map[output_index] = nil
 
-    if self.onread then
-      coroutine.wrap(self.onread)(table.concat(incoming_object.items), host, port)
-    end
-
     -- mark true, so we can drop dup packages.
     incoming_object.done = true
     incoming_object.donetime = utils.gettime()
+
+    if self.onread then
+      coroutine.wrap(self.onread)(table.concat(incoming_object.items), host, port)
+    end
   else
     print("receive buf size too small", #(buf), fan.data2hex(buf))
   end
@@ -157,8 +163,10 @@ end
 
 function apt_mt:_send(buf, dest)
   -- print("send", #(buf))
-  -- local output_index,count,package_index = string.unpack("<I2I2I2", buf)
-  -- print(string.format("send: %d %d/%d", output_index, package_index, count))
+  if config.debug then
+    local output_index,count,package_index = string.unpack("<I2I2I2", buf)
+    print(string.format("send: %d %d/%d", output_index, package_index, count))
+  end
 
   if dest and #(dest) > 0 then
     self.conn:send(buf, table.unpack(dest))
@@ -177,8 +185,8 @@ function apt_mt:_check_timeout()
     for index,incoming_object in pairs(incoming) do
       if incoming_object.done and utils.gettime() - incoming_object.donetime > 10 then
         incoming[index] = nil
-      -- elseif utils.gettime() - incoming_object.start > 120 then
-      --   incoming[index] = nil
+        -- elseif utils.gettime() - incoming_object.start > 120 then
+        -- incoming[index] = nil
       end
     end
     if not next(incoming) then
@@ -326,94 +334,94 @@ local function connect(host, port, path)
   t.stop = false
 
   coroutine.wrap(function()
-    while not t.stop do
-      t:_check_timeout()
-      fan.sleep(0.5)
-    end
-  end)()
-
-  return t
-end
-
-local function bind(host, port, path)
-  local obj = {clientmap = {}}
-
-  obj.serv = udpd.new{
-    bind_port = port,
-    onsendready = function()
-      for k,apt in pairs(obj.clientmap) do
-        if apt:_moretosend() and apt:_onsendready() then
-          return
-        end
+      while not t.stop do
+        t:_check_timeout()
+        fan.sleep(0.5)
       end
-    end,
-    onread = function(buf, from)
-      config.udp_receive_total = config.udp_receive_total + 1
-      local host = from:getHost()
-      local port = from:getPort()
-      local client_key = string.format("%s:%d", host, port)
-      local apt = obj.clientmap[client_key]
-      if not apt then
-        apt = {
-          host = host,
-          port = port,
-          dest = from,
-          conn = obj.serv,
-          _parent = obj,
-          _output_index = 0,
-          _output_queue = {},
-          _output_dest = {},
-          _output_wait_ack = {},
-          _output_wait_package = {},
-          _output_wait_index_map = {},
-          _output_wait_count = 0,
-          -- _output_wait_timeout_count_map = {},
-          _output_ack_package = {},
-          _output_ack_dest = {},
-          _incoming_map = {},
-        }
-        setmetatable(apt, apt_mt)
-        obj.clientmap[client_key] = apt
+      end)()
 
-        if obj.onaccept then
-          coroutine.wrap(obj.onaccept)(apt)
-        end
-      end
-
-      apt:_onread(buf, host, port)
-    end
-  }
-
-  obj.stop = false
-
-  coroutine.wrap(function()
-    while not obj.stop do
-      for clientkey,apt in pairs(obj.clientmap) do
-        if apt:_check_timeout() then
-          break
-        end
-      end
-
-      fan.sleep(0.5)
-    end
-  end)()
-
-  obj.close = function()
-    obj.stop = true
-
-    for clientkey,apt in pairs(obj.clientmap) do
-      apt:close()
-    end
-
-    obj.serv:close()
-    obj.serv = nil
+    return t
   end
-  -- print("serv", obj.serv)
 
-  return obj
-end
+  local function bind(host, port, path)
+    local obj = {clientmap = {}}
 
-return {
-  connect = connect,
-  bind = bind,
-}
+    obj.serv = udpd.new{
+      bind_port = port,
+      onsendready = function()
+        for k,apt in pairs(obj.clientmap) do
+          if apt:_moretosend() and apt:_onsendready() then
+            return
+          end
+        end
+      end,
+      onread = function(buf, from)
+        config.udp_receive_total = config.udp_receive_total + 1
+        local host = from:getHost()
+        local port = from:getPort()
+        local client_key = string.format("%s:%d", host, port)
+        local apt = obj.clientmap[client_key]
+        if not apt then
+          apt = {
+            host = host,
+            port = port,
+            dest = from,
+            conn = obj.serv,
+            _parent = obj,
+            _output_index = 0,
+            _output_queue = {},
+            _output_dest = {},
+            _output_wait_ack = {},
+            _output_wait_package = {},
+            _output_wait_index_map = {},
+            _output_wait_count = 0,
+            -- _output_wait_timeout_count_map = {},
+            _output_ack_package = {},
+            _output_ack_dest = {},
+            _incoming_map = {},
+          }
+          setmetatable(apt, apt_mt)
+          obj.clientmap[client_key] = apt
+
+          if obj.onaccept then
+            coroutine.wrap(obj.onaccept)(apt)
+          end
+        end
+
+        apt:_onread(buf, host, port)
+      end
+    }
+
+    obj.stop = false
+
+    coroutine.wrap(function()
+        while not obj.stop do
+          for clientkey,apt in pairs(obj.clientmap) do
+            if apt:_check_timeout() then
+              break
+            end
+          end
+
+          fan.sleep(0.5)
+        end
+        end)()
+
+      obj.close = function()
+        obj.stop = true
+
+        for clientkey,apt in pairs(obj.clientmap) do
+          apt:close()
+        end
+
+        obj.serv:close()
+        obj.serv = nil
+      end
+      -- print("serv", obj.serv)
+
+      return obj
+    end
+
+    return {
+      connect = connect,
+      bind = bind,
+    }
