@@ -27,11 +27,6 @@ function apt_mt:send(buf, ...)
     return nil
   end
 
-  if self._output_wait_count >= WAITING_COUNT then
-    table.insert(self._output_wait_thread, (coroutine.running()))
-    coroutine.yield()
-  end
-
   local output_index = self._output_index + 1
   if output_index > 65535 then
     output_index = 1
@@ -89,10 +84,6 @@ function apt_mt:_mark_send_completed(head)
     self._output_ack_dest[head] = nil
     self._output_wait_package[head] = nil
     self._output_wait_count = self._output_wait_count - 1
-
-    if #(self._output_wait_thread) > 0 then
-      coroutine.resume(table.remove(self._output_wait_thread, 1))
-    end
     -- print("_output_wait_count", self._output_wait_count)
   end
 end
@@ -208,7 +199,9 @@ function apt_mt:_check_timeout()
     end
   end
   local has_timeout = false
+  local ack_total = 0
   for k,v in pairs(self._output_wait_ack) do
+    ack_total = ack_total + 1
     if gettime() - v >= TIMEOUT then
       has_timeout = true
       if self.ontimeout then
@@ -237,6 +230,8 @@ function apt_mt:_check_timeout()
     end
   end
 
+  self.output_wait_ack_total = ack_total
+
   if has_timeout then
     self.conn:send_req()
   end
@@ -253,14 +248,23 @@ function apt_mt:_onsendready()
     return true
   end
 
+  if self._output_wait_count >= WAITING_COUNT then
+    return false
+  end
+
   for k,v in pairs(self._output_queue) do
-    self:_send(v, self._output_dest[k])
     self._output_wait_package[k] = v
-    self._output_wait_ack[k] = gettime()
-    self._output_wait_count = self._output_wait_count + 1
+
+    -- ignore resend time/count change.
+    if not self._output_wait_ack[k] then
+      self._output_wait_ack[k] = gettime()
+      self._output_wait_count = self._output_wait_count + 1
+    end
     -- print("_output_wait_count", self._output_wait_count)
 
     self._output_queue[k] = nil
+
+    self:_send(v, self._output_dest[k])
     return true
   end
 
@@ -277,9 +281,9 @@ function apt_mt:cleanup(host, port)
   if host and port then
     for k,v in pairs(self._output_dest) do
       if self._output_wait_ack[k] and v[1] == host and v[2] == port then
-        self._output_dest[v] = nil
-        self._output_wait_package[v] = nil
-        self._output_wait_ack[v] = nil
+        self._output_dest[k] = nil
+        self._output_wait_package[k] = nil
+        self._output_wait_ack[k] = nil
         self._output_wait_count = self._output_wait_count - 1
       end
     end
@@ -317,9 +321,9 @@ local function connect(host, port, path)
     _output_dest = {},
     _output_wait_ack = {},
     _output_wait_package = {},
-    _output_wait_thread = {},
     _output_wait_index_map = {},
     _output_wait_count = 0,
+    output_wait_ack_total = 0,
     -- _output_wait_timeout_count_map = {},
     _output_ack_package = {},
     _output_ack_dest = {},
@@ -386,9 +390,9 @@ local function connect(host, port, path)
             _output_dest = {},
             _output_wait_ack = {},
             _output_wait_package = {},
-            _output_wait_thread = {},
             _output_wait_index_map = {},
             _output_wait_count = 0,
+            output_wait_ack_total = 0,
             -- _output_wait_timeout_count_map = {},
             _output_ack_package = {},
             _output_ack_dest = {},
