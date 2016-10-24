@@ -40,7 +40,12 @@ function apt_mt:send(buf, ...)
 
   if #(buf) > BODY_SIZE then
     local package_index = 1
-    local index_count = math.floor(#(buf) / BODY_SIZE)
+    local index_count_f = #(buf) / BODY_SIZE
+    local index_count,fractional = math.modf(index_count_f)
+    if fractional == 0 then
+      index_count = index_count - 1
+    end
+
     for i=0,index_count do
       local body = string.sub(buf, i * BODY_SIZE + 1, i * BODY_SIZE + BODY_SIZE)
       local head = string.pack("<I2I2I2", output_index, index_count + 1, package_index)
