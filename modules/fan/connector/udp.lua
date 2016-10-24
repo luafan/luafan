@@ -170,7 +170,11 @@ function apt_mt:_send(buf, dest)
   -- print("send", #(buf))
   if config.debug then
     local output_index,count,package_index = string.unpack("<I2I2I2", buf)
-    print(string.format("send: %d %d/%d", output_index, package_index, count))
+    if dest and #(dest) > 0 then
+      print(string.format("send: %s:%d\t%d\t%d/%d", dest[1], dest[2], output_index, package_index, count))
+    else
+      print(string.format("send: %d\t%d/%d", output_index, package_index, count))
+    end
   end
 
   if dest and #(dest) > 0 then
@@ -246,6 +250,17 @@ function apt_mt:_onsendready()
     self:_send(package, self._output_ack_dest[package])
     self._output_ack_dest[package] = nil
     return true
+  end
+
+  -- WAITING_COUNT should not block resend package.
+  for k,v in pairs(self._output_queue) do
+    if self._output_wait_ack[k] then
+      self._output_wait_package[k] = v
+      self._output_queue[k] = nil
+
+      self:_send(v, self._output_dest[k])
+      return true
+    end
   end
 
   if self._output_wait_count >= WAITING_COUNT then
