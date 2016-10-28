@@ -12,7 +12,7 @@ local HEAD_SIZE = 2 + 2 + 2
 local BODY_SIZE = MTU - HEAD_SIZE
 
 local TIMEOUT = config.udp_package_timeout or 2
-local WAITING_COUNT = 10
+local WAITING_COUNT = config.udp_waiting_count or 10
 
 local function gettime()
   local sec,usec = fan.gettime()
@@ -21,6 +21,30 @@ end
 
 local apt_mt = {}
 apt_mt.__index = apt_mt
+
+function apt_mt:_output_chain_push(head, package)
+  if not self._output_chain._head then
+    self._output_chain._head = {head = head, package = package}
+    self._output_chain._tail = self._output_chain._head
+  else
+    self._output_chain._tail._next = {head = head, package = package}
+    self._output_chain._tail = self._output_chain._tail._next
+  end
+end
+
+function apt_mt:_output_chain_pop()
+  if self._output_chain._head then
+    local head = self._output_chain._head.head
+    local package = self._output_chain._head.package
+
+    self._output_chain._head = self._output_chain._head._next
+    if not self._output_chain._head then
+      self._output_chain._tail = nil
+    end
+
+    return head, package
+  end
+end
 
 function apt_mt:send(buf, ...)
   if not self.conn then
@@ -53,12 +77,12 @@ function apt_mt:send(buf, ...)
       package_index_map[package_index] = true
       package_index = package_index + 1
 
-      self._output_queue[head] = head .. body
+      self:_output_chain_push(head, head .. body)
       self._output_dest[head] = dest
     end
   else
     local head = string.pack("<I2I2I2", output_index, 1, 1)
-    self._output_queue[head] = head .. buf
+    self:_output_chain_push(head, head .. buf)
     self._output_dest[head] = dest
     package_index_map[1] = true
   end
@@ -74,7 +98,7 @@ function apt_mt:_moretosend()
     return true
   end
 
-  for k,v in pairs(self._output_queue) do
+  if self._output_chain._head then
     return true
   end
 
@@ -129,7 +153,7 @@ function apt_mt:_onread(buf, host, port)
     local body = string.sub(buf, HEAD_SIZE + 1)
     local output_index,count,package_index = string.unpack("<I2I2I2", head)
     if config.debug then
-      print(string.format("%s:%d\trecv: %d %d/%d (%d)", host, port, output_index, package_index, count, #(body)))
+      print(string.format("%s:%d\trecv: [%d] %d/%d (body=%d)", host, port, output_index, package_index, count, #(body)))
     end
 
     local key = string.format("%s:%d", host, port)
@@ -176,9 +200,9 @@ function apt_mt:_send(buf, dest)
   if config.debug then
     local output_index,count,package_index = string.unpack("<I2I2I2", buf)
     if dest and #(dest) > 0 then
-      print(string.format("send: %s:%d\t%d\t%d/%d", dest[1], dest[2], output_index, package_index, count))
+      print(string.format("send: %s:%d\t[%d]\t%d/%d", dest[1], dest[2], output_index, package_index, count))
     else
-      print(string.format("send: %d\t%d/%d", output_index, package_index, count))
+      print(string.format("send: [%d]\t%d/%d", output_index, package_index, count))
     end
   end
 
@@ -225,16 +249,18 @@ function apt_mt:_check_timeout()
 
         local resend = self.ontimeout(self._output_wait_package[k], host, port)
         if resend then
+          self._output_wait_count = self._output_wait_count - 1
           config.udp_resend_total = config.udp_resend_total + 1
-          self._output_queue[k] = self._output_wait_package[k]
-          self._output_wait_ack[k] = gettime()
+          self:_output_chain_push(k, self._output_wait_package[k])
+          self._output_wait_ack[k] = nil
         else
           self:_mark_send_completed(k)
         end
       else
+        self._output_wait_count = self._output_wait_count - 1
         config.udp_resend_total = config.udp_resend_total + 1
-        self._output_queue[k] = self._output_wait_package[k]
-        self._output_wait_ack[k] = gettime()
+        self:_output_chain_push(k, self._output_wait_package[k])
+        self._output_wait_ack[k] = nil
       end
     end
   end
@@ -257,34 +283,21 @@ function apt_mt:_onsendready()
     return true
   end
 
-  -- WAITING_COUNT should not block resend package.
-  for k,v in pairs(self._output_queue) do
-    if self._output_wait_ack[k] then
-      self._output_wait_package[k] = v
-      self._output_queue[k] = nil
-
-      self:_send(v, self._output_dest[k])
-      return true
-    end
-  end
-
   if self._output_wait_count >= WAITING_COUNT then
+    -- print("waiting ...")
     return false
   end
 
-  for k,v in pairs(self._output_queue) do
-    self._output_wait_package[k] = v
+  local head,package = self:_output_chain_pop()
+  if head and package then
+    self._output_wait_package[head] = package
 
-    -- ignore resend time/count change.
-    if not self._output_wait_ack[k] then
-      self._output_wait_ack[k] = gettime()
-      self._output_wait_count = self._output_wait_count + 1
-    end
+    self._output_wait_ack[head] = gettime()
+    self._output_wait_count = self._output_wait_count + 1
+
     -- print("_output_wait_count", self._output_wait_count)
 
-    self._output_queue[k] = nil
-
-    self:_send(v, self._output_dest[k])
+    self:_send(package, self._output_dest[head])
     return true
   end
 
@@ -337,7 +350,7 @@ end
 local function connect(host, port, path)
   local t = {
     _output_index = 0,
-    _output_queue = {},
+    _output_chain = {_head = nil, _tail = nil},
     _output_dest = {},
     _output_wait_ack = {},
     _output_wait_package = {},
@@ -406,7 +419,7 @@ local function connect(host, port, path)
             conn = obj.serv,
             _parent = obj,
             _output_index = 0,
-            _output_queue = {},
+            _output_chain = {_head = nil, _tail = nil},
             _output_dest = {},
             _output_wait_ack = {},
             _output_wait_package = {},

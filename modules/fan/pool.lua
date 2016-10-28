@@ -61,6 +61,9 @@ function pool_mt:push(ctx)
   if pool.yielding.head then
     local co = pool.yielding.head.value
     pool.yielding.head = pool.yielding.head.next
+    if not pool.yielding.head then
+      self.pool.yielding.tail = nil
+    end
     local st,msg = coroutine.resume(co, pool_item)
     if not st then
       print(msg)
