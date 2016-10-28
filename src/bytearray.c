@@ -126,10 +126,7 @@ bool bytearray_write_ready(BYTEARRAY *ba) {
     int i = 0;
     uint8_t *buf = ba->buffer;
 
-    // TODO: enhancement
-    for (; i < unreadleft; i++) {
-      buf[i] = buf[i + ba->offset];
-    }
+    memmove(buf, buf + ba->offset, unreadleft);
     ba->offset = unreadleft;
   } else {
     ba->offset = ba->total;
