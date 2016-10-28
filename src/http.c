@@ -1242,17 +1242,29 @@ LUA_API int http_capath(lua_State *L) {
   return 0;
 }
 
-LUA_API int http_escape(lua_State* L) {
+LUA_API int http_escape(lua_State *L) {
   size_t size = 0;
   const char *str = luaL_checklstring(L, 1, &size);
-  lua_pushstring(L, curl_escape(str, size));
+  char *escaped = curl_escape(str, size);
+  if (escaped) {
+    lua_pushstring(L, escaped);
+    free(escaped);
+  } else {
+    lua_pushnil(L);
+  }
   return 1;
 }
 
-LUA_API int http_unescape(lua_State* L) {
+LUA_API int http_unescape(lua_State *L) {
   size_t size = 0;
   const char *s = luaL_checklstring(L, 1, &size);
-  lua_pushstring(L, curl_unescape(s, size));
+  char *unescaped = curl_unescape(s, size);
+  if (unescaped) {
+    lua_pushstring(L, unescaped);
+    free(unescaped);
+  } else {
+    lua_pushnil(L);
+  }
   return 1;
 }
 
@@ -1287,7 +1299,7 @@ LUA_API int luaopen_fan_http(lua_State *L) {
   }
 
   lua_newtable(L);
-  luaL_register(L, "http",httplib);
+  luaL_register(L, "http", httplib);
 
   lua_pushstring(L, curl_version());
   lua_setfield(L, -2, "curl_version");

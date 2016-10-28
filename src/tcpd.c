@@ -506,6 +506,7 @@ LUA_API int tcpd_bind(lua_State *L) {
         evconnlistener_new_bind(event_mgr_base(), connlistener_cb, serv,
                                 LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, -1,
                                 answer->ai_addr, answer->ai_addrlen);
+    evutil_freeaddrinfo(answer);
   } else {
     struct sockaddr *addr = NULL;
     size_t addr_size = 0;

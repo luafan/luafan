@@ -143,6 +143,7 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L) {
     struct sockaddr *addr = answer->ai_addr;
     memcpy(&conn->addr, addr, sizeof(struct sockaddr));
     conn->addrlen = answer->ai_addrlen;
+    evutil_freeaddrinfo(answer);
   }
 
   int socket_fd = 0;
@@ -182,8 +183,10 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L) {
 
       // printf("binding fd=%d %s:%d\n", socket_fd, conn->bind_host, conn->bind_port);
 
-      if (bind(socket_fd, (const struct sockaddr *)&addr, answer->ai_addrlen) ==
-          -1) {
+      int ret = bind(socket_fd, (const struct sockaddr *)&addr, answer->ai_addrlen);
+      evutil_freeaddrinfo(answer);
+
+      if (ret == -1) {
         luaL_error(L, "udp bind: %s", strerror(errno));
         return 0;
       }
@@ -322,6 +325,7 @@ LUA_API int udpd_conn_send(lua_State *L) {
         }
 
         ret = sendto(conn->socket_fd, data, len, 0, answer->ai_addr, answer->ai_addrlen);
+        evutil_freeaddrinfo(answer);
       } else {
         Dest *dest = luaL_checkudata(L, 3, LUA_UDPD_DEST_TYPE);
         ret = sendto(conn->socket_fd, data, len, 0, (struct sockaddr *)&dest->si_client,
@@ -352,11 +356,11 @@ LUA_API int udpd_conn_send_request(lua_State *L) {
 
 LUA_API int udpd_dest_host(lua_State *L) {
   Dest *dest = luaL_checkudata(L, 1, LUA_UDPD_DEST_TYPE);
-  char buf[20];
+  char buf[20] = {0};
   const char *out =
       inet_ntop(AF_INET, (void *)&dest->si_client.sin_addr, buf, 20);
   if (out) {
-    lua_pushstring(L, out);
+    lua_pushstring(L, buf);
     return 1;
   }
 
