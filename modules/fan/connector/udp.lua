@@ -396,6 +396,41 @@ local function connect(host, port, path)
   local function bind(host, port, path)
     local obj = {clientmap = {}}
 
+    obj.getapt = function(host, port, from)
+      local client_key = string.format("%s:%d", host, port)
+      local apt = obj.clientmap[client_key]
+      if not apt then
+        apt = {
+          host = host,
+          port = port,
+          dest = from,
+          conn = obj.serv,
+          _parent = obj,
+          _output_index = 0,
+          _output_chain = {_head = nil, _tail = nil},
+          _output_dest = {},
+          _output_wait_ack = {},
+          _output_wait_package = {},
+          _output_wait_index_map = {},
+          _output_wait_count = 0,
+          output_wait_ack_total = 0,
+          -- _output_wait_timeout_count_map = {},
+          _output_ack_package = {},
+          _output_ack_dest = {},
+          _incoming_map = {},
+        }
+        setmetatable(apt, apt_mt)
+        obj.clientmap[client_key] = apt
+
+        if obj.onaccept then
+          coroutine.wrap(obj.onaccept)(apt)
+        end
+      elseif not apt.dest then
+        apt.dest = from
+      end
+
+      return apt
+    end
     obj.serv = udpd.new{
       bind_port = port,
       onsendready = function()
@@ -409,35 +444,8 @@ local function connect(host, port, path)
         config.udp_receive_total = config.udp_receive_total + 1
         local host = from:getHost()
         local port = from:getPort()
-        local client_key = string.format("%s:%d", host, port)
-        local apt = obj.clientmap[client_key]
-        if not apt then
-          apt = {
-            host = host,
-            port = port,
-            dest = from,
-            conn = obj.serv,
-            _parent = obj,
-            _output_index = 0,
-            _output_chain = {_head = nil, _tail = nil},
-            _output_dest = {},
-            _output_wait_ack = {},
-            _output_wait_package = {},
-            _output_wait_index_map = {},
-            _output_wait_count = 0,
-            output_wait_ack_total = 0,
-            -- _output_wait_timeout_count_map = {},
-            _output_ack_package = {},
-            _output_ack_dest = {},
-            _incoming_map = {},
-          }
-          setmetatable(apt, apt_mt)
-          obj.clientmap[client_key] = apt
 
-          if obj.onaccept then
-            coroutine.wrap(obj.onaccept)(apt)
-          end
-        end
+        local apt = obj.getapt(host, port, from)
 
         apt:_onread(buf, host, port)
       end

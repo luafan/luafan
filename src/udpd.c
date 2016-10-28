@@ -162,7 +162,7 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L) {
     return 0;
   }
 
-  if (conn->bind_port) {
+  if (conn->bind_port >= 0) {
     if (conn->bind_host) {
       char portbuf[6];
       evutil_snprintf(portbuf, sizeof(portbuf), "%d", conn->bind_port);
@@ -235,6 +235,7 @@ LUA_API int udpd_new(lua_State *L) {
   conn->socket_fd = 0;
   conn->write_ev = NULL;
   conn->read_ev = NULL;
+  conn->bind_port = -1;
 
   lua_getfield(L, 1, "onread");
   if (lua_isfunction(L, -1)) {
