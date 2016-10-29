@@ -112,6 +112,7 @@ function apt_mt:_mark_send_completed(head)
     self._output_wait_ack[head] = nil
     self._output_ack_dest[head] = nil
     self._output_wait_package[head] = nil
+    self._output_dest[head] = nil
     self._output_wait_count = self._output_wait_count - 1
     -- print("_output_wait_count", self._output_wait_count)
   end
@@ -190,6 +191,8 @@ function apt_mt:_onread(buf, host, port)
     if self.onread then
       coroutine.wrap(self.onread)(table.concat(incoming_object.items), host, port)
     end
+
+    incoming_object.items = nil
   else
     print("receive buf size too small", #(buf), fan.data2hex(buf))
   end
