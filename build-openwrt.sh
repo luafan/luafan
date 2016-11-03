@@ -46,6 +46,7 @@ $CC -O2 $CFLAGS $LDFLAGS -DFAN_HAS_OPENSSL=0 -DFAN_HAS_LUAJIT=0 -shared -o fan.s
     $SRC/fifo.c \
     $SRC/bytearray.c \
     $SRC/event_mgr.c \
+    $SRC/httpd.c \
     $SRC/luafan.c \
     $SRC/stream.c \
     $SRC/tcpd.c \
