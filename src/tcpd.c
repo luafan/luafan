@@ -389,6 +389,7 @@ static int ssl_servername_cb(SSL *s, int *ad, void *arg) {
 #endif
 
 LUA_API int tcpd_bind(lua_State *L) {
+  event_mgr_init();
   luaL_checktype(L, 1, LUA_TTABLE);
   lua_settop(L, 1);
 
@@ -784,6 +785,7 @@ static int cert_verify_callback(X509_STORE_CTX *x509_ctx, void *arg) {
 #endif
 
 LUA_API int tcpd_connect(lua_State *L) {
+  event_mgr_init();
   luaL_checktype(L, 1, LUA_TTABLE);
   lua_settop(L, 1);
 

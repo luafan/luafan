@@ -309,6 +309,9 @@ end
 
 -- cleanup packages(ack not include) related with host,port
 function apt_mt:cleanup(host, port)
+  host = host or self.host
+  port = port or self.port
+
   if (not host or not port) and self.dest then
     host = self.dest:getHost()
     port = self.dest:getPort()
