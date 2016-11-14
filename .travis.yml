@@ -1,17 +1,13 @@
 language: c
 
-sudo: false
+sudo: true
 
 env:
   global:
-    - LUAROCKS=2.3.0
+    - LUAROCKS=2.4.1
   matrix:
-    - LUA=lua5.1
-    - LUA=lua5.2
-    - LUA=lua5.3
     - LUA=luajit     # latest stable version (2.0.4)
-    - LUA=luajit2.0  # current head of 2.0 branch
-    - LUA=luajit2.1  # current head of 2.1 branch
+
 
 branches:
   only:
@@ -21,11 +17,13 @@ before_install:
   - source .travis/setenv_lua.sh
 
 install:
-  - luarocks make luafanmicro-0.4-1.rockspec
+  - sudo luarocks make luafanmicro-0.4-1.rockspec
 
 script:
+  - cd
 
 after_success:
+  - cd
 
 notifications:
   email:
