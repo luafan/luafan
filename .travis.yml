@@ -22,7 +22,7 @@ before_install:
   - cd libmysql && sudo make install && cd ../include && sudo make install
 
 install:
-  - sudo luarocks-5.1 make luafan-0.4-1.rockspec MARIADB_DIR=/usr/local/mysql
+  - luarocks make luafan-0.4-1.rockspec MARIADB_DIR=/usr/local/mysql
 
 script:
   - cd
