@@ -15,9 +15,14 @@ branches:
 
 before_install:
   - source .travis/setenv_lua.sh
+  - sudo apt-get update
+  - sudo apt-get install -y wget unzip make gcc libc-dev libcurl4-openssl-dev libevent-dev git libevent-2.0-5 libevent-core-2.0-5 libevent-extra-2.0-5 libevent-openssl-2.0-5 libcurl3 cmake g++ bison libncurses5-dev libssl-dev
+  - wget https://github.com/MariaDB/server/archive/mariadb-5.5.48.tar.gz
+  - tar xzf mariadb-5.5.48.tar.gz && cd server-mariadb-5.5.48 && cmake .
+  - cd libmysql && sudo make install && cd ../include && sudo make install
 
 install:
-  - sudo luarocks make luafanmicro-0.4-1.rockspec
+  - sudo luarocks make luafan-0.4-1.rockspec MARIADB_DIR=/usr/local/mysql
 
 script:
   - cd

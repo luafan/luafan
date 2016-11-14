@@ -120,9 +120,3 @@ elif [ "$LUA" == "lua5.2" ]; then
 elif [ "$LUA" == "lua5.3" ]; then
   rm -rf lua-5.3.3;
 fi
-
-apt-get update
-apt-get install -y wget unzip make gcc libc-dev libcurl4-openssl-dev libevent-dev git libevent-2.0-5 libevent-core-2.0-5 libevent-extra-2.0-5 libevent-openssl-2.0-5 libcurl3 cmake g++ bison libncurses5-dev libssl-dev
-wget https://github.com/MariaDB/server/archive/mariadb-5.5.48.tar.gz && tar xzf mariadb-5.5.48.tar.gz && cd server-mariadb-5.5.48 && cmake . && cd libmysql && make install && cd ../include && make install
-cd
-luarocks install luafan MARIADB_DIR=/usr/local/mysql
