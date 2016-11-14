@@ -77,8 +77,7 @@ LUA_API int _st_bind(lua_State *L, int cache_bind) {
       }
     } break;
     case LUA_TNIL: {
-      memset(&bind[i], 0, sizeof(bind[i]));
-      bind[i].is_null = 1;
+      bind[i].buffer_type = MYSQL_TYPE_NULL;
     } break;
     default:
       printf("unknown type %d, idx=%d\n", lua_type(L, idx), idx);
