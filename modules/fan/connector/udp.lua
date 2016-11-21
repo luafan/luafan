@@ -58,8 +58,6 @@ function apt_mt:send(buf, ...)
   self._output_index = output_index
 
   local package_index_map = {}
-  self._output_wait_index_map[output_index] = package_index_map
-
   local dest = {...}
 
   if #(buf) > BODY_SIZE then
@@ -74,17 +72,20 @@ function apt_mt:send(buf, ...)
       local body = string.sub(buf, i * BODY_SIZE + 1, i * BODY_SIZE + BODY_SIZE)
       local head = string.pack("<I2I2I2", output_index, index_count + 1, package_index)
       -- print(string.format("pp: %d %d/%d", output_index, package_index, index_count + 1))
-      package_index_map[package_index] = true
+      package_index_map[head] = true
       package_index = package_index + 1
 
       self:_output_chain_push(head, head .. body)
       self._output_dest[head] = dest
+      self._output_wait_index_map[head] = package_index_map
     end
   else
     local head = string.pack("<I2I2I2", output_index, 1, 1)
+    package_index_map[head] = true
+
     self:_output_chain_push(head, head .. buf)
     self._output_dest[head] = dest
-    package_index_map[1] = true
+    self._output_wait_index_map[head] = package_index_map
   end
 
   -- print("send_req")
@@ -128,11 +129,11 @@ function apt_mt:_onread(buf, host, port)
     self:_mark_send_completed(buf)
     self.conn:send_req()
 
-    local package_index_map = self._output_wait_index_map[output_index]
+    local package_index_map = self._output_wait_index_map[buf]
     if package_index_map then
-      package_index_map[package_index] = nil
+      package_index_map[buf] = nil
       if not next(package_index_map) then
-        self._output_wait_index_map[output_index] = nil
+        self._output_wait_index_map[buf] = nil
 
         if self.onsent then
           coroutine.wrap(self.onsent)(output_index)
@@ -257,6 +258,7 @@ function apt_mt:_check_timeout()
           self:_output_chain_push(k, self._output_wait_package[k])
           self._output_wait_ack[k] = nil
         else
+          self._output_wait_index_map[k] = nil
           self:_mark_send_completed(k)
         end
       else
