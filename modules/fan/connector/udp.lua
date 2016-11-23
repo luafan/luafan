@@ -9,6 +9,7 @@ local pairs = pairs
 local math = math
 local print = print
 local coroutine = coroutine
+local tostring = tostring
 
 config.udp_send_total = 0
 config.udp_receive_total = 0
@@ -65,8 +66,10 @@ function apt_mt:send(buf, ...)
   end
   self._output_index = output_index
 
-  local package_indexs_map = {}
-  local dest = {...}
+  local package_parts_map = {
+    dest = {...},
+    hash = {},
+  }
 
   if #(buf) > BODY_SIZE then
     local package_index = 1
@@ -80,20 +83,20 @@ function apt_mt:send(buf, ...)
       local body = string.sub(buf, i * BODY_SIZE + 1, i * BODY_SIZE + BODY_SIZE)
       local head = string.pack("<I2I2I2", output_index, index_count + 1, package_index)
       -- print(string.format("pp: %d %d/%d", output_index, package_index, index_count + 1))
-      package_indexs_map[head] = true
+      local package = head .. body
+      package_parts_map.hash[head] = package
       package_index = package_index + 1
 
-      self:_output_chain_push(head, head .. body)
-      self._output_dest[head] = dest
-      self._output_wait_index_map[head] = package_indexs_map
+      self:_output_chain_push(head, package)
+      self._output_wait_package_parts_map[head] = package_parts_map
     end
   else
     local head = string.pack("<I2I2I2", output_index, 1, 1)
-    package_indexs_map[head] = true
+    local package = head .. buf
+    package_parts_map.hash[head] = package
 
-    self:_output_chain_push(head, head .. buf)
-    self._output_dest[head] = dest
-    self._output_wait_index_map[head] = package_indexs_map
+    self:_output_chain_push(head, package)
+    self._output_wait_package_parts_map[head] = package_parts_map
   end
 
   -- print("send_req")
@@ -110,18 +113,12 @@ function apt_mt:_moretosend()
   if self._output_chain._head then
     return true
   end
-
-  for k,v in pairs(self._output_wait_ack) do
-    return true
-  end
 end
 
 function apt_mt:_mark_send_completed(head)
-  if self._output_wait_ack[head] then
+  if self._output_wait_package_parts_map[head] then
     self._output_wait_ack[head] = nil
-    self._output_ack_dest[head] = nil
-    self._output_wait_package[head] = nil
-    self._output_dest[head] = nil
+    self._output_wait_package_parts_map[head] = nil
     self._output_wait_count = self._output_wait_count - 1
     -- print("_output_wait_count", self._output_wait_count)
   end
@@ -134,21 +131,20 @@ function apt_mt:_onread(buf, host, port)
     if config.debug then
       print(string.format("%s:%d\tack: %d %d/%d", host, port, output_index, package_index, count))
     end
+
+    local map = self._output_wait_package_parts_map[buf]
     self:_mark_send_completed(buf)
-    self.conn:send_req()
 
-    local package_indexs_map = self._output_wait_index_map[buf]
-    if package_indexs_map then
-      package_indexs_map[buf] = nil
-      self._output_wait_index_map[buf] = nil
-
-      if not next(package_indexs_map) then
+    if map then
+      map.hash[buf] = nil
+      if not next(map.hash) then
         if self.onsent then
           coroutine.wrap(self.onsent)(output_index)
         end
       end
     end
 
+    self.conn:send_req()
     return
   elseif #(buf) > HEAD_SIZE then
     local head = string.sub(buf, 1, HEAD_SIZE)
@@ -198,7 +194,11 @@ function apt_mt:_onread(buf, host, port)
     incoming_object.donetime = utils.gettime()
 
     if self.onread then
-      coroutine.wrap(self.onread)(table.concat(incoming_object.items), host, port)
+      if count == 1 then
+        coroutine.wrap(self.onread)(incoming_object.items[1], host, port)
+      else
+        coroutine.wrap(self.onread)(table.concat(incoming_object.items), host, port)
+      end
     end
 
     incoming_object.items = nil
@@ -244,13 +244,14 @@ function apt_mt:_check_timeout()
     end
   end
   local has_timeout = false
-  local ack_total = 0
-  for k,v in pairs(self._output_wait_ack) do
-    ack_total = ack_total + 1
-    if gettime() - v >= TIMEOUT then
+  for k,map in pairs(self._output_wait_package_parts_map) do
+    local last_output_time = self._output_wait_ack[k]
+
+    if last_output_time and gettime() - last_output_time >= TIMEOUT then
       has_timeout = true
+      local resend = true
       if self.ontimeout then
-        local dest = self._output_dest[k]
+        local dest = map.dest
         local host, port
         if dest and #(dest) > 0 then
           host,port = table.unpack(dest)
@@ -259,30 +260,22 @@ function apt_mt:_check_timeout()
           port = self.dest:getPort()
         end
 
-        local resend = self.ontimeout(self._output_wait_package[k], host, port)
-        if resend then
-          self._output_wait_count = self._output_wait_count - 1
-          config.udp_resend_total = config.udp_resend_total + 1
-          self:_output_chain_push(k, self._output_wait_package[k])
-          self._output_wait_ack[k] = nil
-        else
-          local package_indexs_map = self._output_wait_index_map[k]
-          for k,v in pairs(package_indexs_map) do
-            self:_mark_send_completed(k)
-            self._output_wait_index_map[k] = nil
-            package_indexs_map[k] = nil
-          end
-        end
-      else
+        resend = self.ontimeout(map.hash[k], host, port)
+      end
+
+      if resend then
         self._output_wait_count = self._output_wait_count - 1
         config.udp_resend_total = config.udp_resend_total + 1
-        self:_output_chain_push(k, self._output_wait_package[k])
+        self:_output_chain_push(k, map.hash[k])
         self._output_wait_ack[k] = nil
+      else
+        for k,v in pairs(map) do
+          map.hash[k] = nil
+          self:_mark_send_completed(k)
+        end
       end
     end
   end
-
-  self.output_wait_ack_total = ack_total
 
   if has_timeout then
     self.conn:send_req()
@@ -307,14 +300,12 @@ function apt_mt:_onsendready()
 
   local head,package = self:_output_chain_pop()
   if head and package then
-    self._output_wait_package[head] = package
-
     self._output_wait_ack[head] = gettime()
     self._output_wait_count = self._output_wait_count + 1
 
     -- print("_output_wait_count", self._output_wait_count)
 
-    self:_send(package, self._output_dest[head])
+    self:_send(package, self._output_wait_package_parts_map[head].dest)
     return true
   end
 
@@ -332,12 +323,10 @@ function apt_mt:cleanup(host, port)
   end
 
   if host and port then
-    for k,v in pairs(self._output_dest) do
-      if self._output_wait_ack[k] and v[1] == host and v[2] == port then
-        self._output_dest[k] = nil
-        self._output_wait_package[k] = nil
-        self._output_wait_ack[k] = nil
-        self._output_wait_count = self._output_wait_count - 1
+    for k,map in pairs(self._output_wait_package_parts_map) do
+      local v = map.dest
+      if v[1] == host and v[2] == port then
+        self:_mark_send_completed(k)
       end
     end
 
@@ -371,12 +360,9 @@ local function connect(host, port, path)
   local t = {
     _output_index = 0,
     _output_chain = {_head = nil, _tail = nil},
-    _output_dest = {},
     _output_wait_ack = {},
-    _output_wait_package = {},
-    _output_wait_index_map = {},
+    _output_wait_package_parts_map = {},
     _output_wait_count = 0,
-    output_wait_ack_total = 0,
     -- _output_wait_timeout_count_map = {},
     _output_ack_package = {},
     _output_ack_dest = {},
@@ -428,12 +414,9 @@ local function connect(host, port, path)
           _parent = obj,
           _output_index = 0,
           _output_chain = {_head = nil, _tail = nil},
-          _output_dest = {},
           _output_wait_ack = {},
-          _output_wait_package = {},
-          _output_wait_index_map = {},
+          _output_wait_package_parts_map = {},
           _output_wait_count = 0,
-          output_wait_ack_total = 0,
           -- _output_wait_timeout_count_map = {},
           _output_ack_package = {},
           _output_ack_dest = {},
