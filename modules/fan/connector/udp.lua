@@ -2,6 +2,14 @@ local udpd = require "fan.udpd"
 local utils = require "fan.utils"
 local config = require "config"
 
+local string = string
+local next = next
+local table = table
+local pairs = pairs
+local math = math
+local print = print
+local coroutine = coroutine
+
 config.udp_send_total = 0
 config.udp_receive_total = 0
 config.udp_resend_total = 0
@@ -57,7 +65,7 @@ function apt_mt:send(buf, ...)
   end
   self._output_index = output_index
 
-  local package_index_map = {}
+  local package_indexs_map = {}
   local dest = {...}
 
   if #(buf) > BODY_SIZE then
@@ -72,20 +80,20 @@ function apt_mt:send(buf, ...)
       local body = string.sub(buf, i * BODY_SIZE + 1, i * BODY_SIZE + BODY_SIZE)
       local head = string.pack("<I2I2I2", output_index, index_count + 1, package_index)
       -- print(string.format("pp: %d %d/%d", output_index, package_index, index_count + 1))
-      package_index_map[head] = true
+      package_indexs_map[head] = true
       package_index = package_index + 1
 
       self:_output_chain_push(head, head .. body)
       self._output_dest[head] = dest
-      self._output_wait_index_map[head] = package_index_map
+      self._output_wait_index_map[head] = package_indexs_map
     end
   else
     local head = string.pack("<I2I2I2", output_index, 1, 1)
-    package_index_map[head] = true
+    package_indexs_map[head] = true
 
     self:_output_chain_push(head, head .. buf)
     self._output_dest[head] = dest
-    self._output_wait_index_map[head] = package_index_map
+    self._output_wait_index_map[head] = package_indexs_map
   end
 
   -- print("send_req")
@@ -129,12 +137,12 @@ function apt_mt:_onread(buf, host, port)
     self:_mark_send_completed(buf)
     self.conn:send_req()
 
-    local package_index_map = self._output_wait_index_map[buf]
-    if package_index_map then
-      package_index_map[buf] = nil
-      if not next(package_index_map) then
-        self._output_wait_index_map[buf] = nil
+    local package_indexs_map = self._output_wait_index_map[buf]
+    if package_indexs_map then
+      package_indexs_map[buf] = nil
+      self._output_wait_index_map[buf] = nil
 
+      if not next(package_indexs_map) then
         if self.onsent then
           coroutine.wrap(self.onsent)(output_index)
         end
@@ -258,8 +266,12 @@ function apt_mt:_check_timeout()
           self:_output_chain_push(k, self._output_wait_package[k])
           self._output_wait_ack[k] = nil
         else
-          self._output_wait_index_map[k] = nil
-          self:_mark_send_completed(k)
+          local package_indexs_map = self._output_wait_index_map[k]
+          for k,v in pairs(package_indexs_map) do
+            self:_mark_send_completed(k)
+            self._output_wait_index_map[k] = nil
+            package_indexs_map[k] = nil
+          end
         end
       else
         self._output_wait_count = self._output_wait_count - 1
