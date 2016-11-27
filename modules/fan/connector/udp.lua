@@ -269,7 +269,7 @@ function apt_mt:_check_timeout()
         self:_output_chain_push(k, map.hash[k])
         self._output_wait_ack[k] = nil
       else
-        for k,v in pairs(map) do
+        for k,v in pairs(map.hash) do
           map.hash[k] = nil
           self:_mark_send_completed(k)
         end
