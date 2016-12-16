@@ -50,10 +50,7 @@ LUA_API int luafan_getpgid(lua_State *L) {
   return luafan_push_result(L, result);
 }
 
-#ifdef __linux__
-#define __USE_GNU
-#include <sched.h>
-#endif
+#ifndef DISABLE_AFFINIY
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -85,7 +82,9 @@ int sched_getaffinity(pid_t pid, size_t cpu_size, cpu_set_t *cpu_set) {
 
   return 0;
 }
-
+#else
+#define __USE_GNU
+#include <sched.h>
 #endif
 
 static int get_cpu_count() { return sysconf(_SC_NPROCESSORS_CONF); }
@@ -145,6 +144,7 @@ LUA_API int luafan_getcpucount(lua_State *L) {
   lua_pushinteger(L, get_cpu_count());
   return 1;
 }
+#endif
 
 LUA_API int luafan_kill(lua_State *L) {
   if (kill(luaL_optinteger(L, 1, -1), luaL_optinteger(L, 2, SIGTERM))) {

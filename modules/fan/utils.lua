@@ -30,7 +30,7 @@ local function gettime()
     return sec + usec/1000000.0
 end
 
-math.randomseed(gettime())
+math.randomseed((fan.gettime()))
 
 return {
     random_string = random_string,

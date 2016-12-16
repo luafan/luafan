@@ -211,9 +211,11 @@ static const struct luaL_Reg fanlib[] = {
     {"open", luafan_open},
     {"close", luafan_close},
     {"setprogname", luafan_setprogname},
+#ifndef DISABLE_AFFINIY
     {"setaffinity", luafan_setaffinity},
     {"getaffinity", luafan_getaffinity},
     {"getcpucount", luafan_getcpucount},
+#endif
     {"getinterfaces", luafan_getinterfaces},
 
     {NULL, NULL},
