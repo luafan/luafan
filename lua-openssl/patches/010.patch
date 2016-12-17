@@ -1,0 +1,11 @@
+--- compat.orig/deps/lua-compat/c-api/compat-5.3.h	2016-12-17 23:22:00.277120239 +0800
++++ compat/deps/lua-compat/c-api/compat-5.3.h	2016-12-17 23:23:30.512660152 +0800
+@@ -244,7 +244,7 @@
+ #define lua_geti COMPAT53_CONCAT(COMPAT53_PREFIX, _geti)
+ COMPAT53_API int lua_geti (lua_State *L, int index, lua_Integer i);
+
+-#define lua_isinteger COMPAT53_CONCAT(COMPAT53_PREFIX, _isinteger)
++#define lua_isinteger COMPAT53_CONCAT(COMPAT53_PREFIX, _isinteger2)
+ COMPAT53_API int lua_isinteger (lua_State *L, int index);
+
+ #define lua_numbertointeger(n, p) \
