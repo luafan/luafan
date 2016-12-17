@@ -1,0 +1,21 @@
+--- quilt.orig/openwrt/Makefile	2016-12-17 13:27:31.021642589 +0800
++++ quilt/openwrt/Makefile	2016-12-17 13:30:37.268723353 +0800
+@@ -1,5 +1,5 @@
+ luafan:
+-	$(CC) -O2 -DFAN_HAS_OPENSSL=0 -DFAN_HAS_LUAJIT=0 -DDISABLE_AFFINIY -shared -o ../fan.so -fPIC \
++	$(CC) -O2 -DFAN_HAS_OPENSSL=1 -DFAN_HAS_LUAJIT=0 -DDISABLE_AFFINIY -shared -o ../fan.so -fPIC \
+     ../src/hostcheck.c \
+     ../src/fifo.c \
+     ../src/bytearray.c \
+@@ -9,9 +9,10 @@
+     ../src/stream.c \
+     ../src/tcpd.c \
+     ../src/udpd.c \
+     ../src/utlua.c \
++    ../src/openssl_hostname_validation.c \
+     \
+-    -levent
++    -levent -levent_openssl -lssl -lcrypto
+
+ clean:
+ 	rm *.o fan.so
