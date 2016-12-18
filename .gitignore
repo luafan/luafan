@@ -28,3 +28,4 @@ cmake/*
 *.exe
 *.out
 *.app
+upload.sh

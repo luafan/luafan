@@ -862,16 +862,17 @@ LUA_API int tcpd_connect(lua_State *L) {
   lua_pop(L, 1);
 
   if (ssl) {
+    lua_getfield(L, 1, "cainfo");
+    const char *cainfo = luaL_checkstring(L, -1);
+    lua_pop(L, 1);
+
     BYTEARRAY ba = {0};
     bytearray_alloc(&ba, BUFLEN);
     bytearray_writebuffer(&ba, "SSL_CTX:", strlen("SSL_CTX_"));
 
-    lua_getfield(L, 1, "cainfo");
-    const char *cainfo = luaL_checkstring(L, -1);
     if (cainfo) {
       bytearray_writebuffer(&ba, cainfo, strlen(cainfo));
     }
-    lua_pop(L, 1);
 
     lua_getfield(L, 1, "capath");
     const char *capath = luaL_optstring(L, -1, NULL);
