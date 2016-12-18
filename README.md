@@ -2,4 +2,4 @@
 [![CircleCI](https://circleci.com/gh/luafan/luafan.svg?style=svg)](https://circleci.com/gh/luafan/luafan)
 
 # luafan
-	* [Docs](docs/README.md)
+* [Document](http://luafan.com/)
