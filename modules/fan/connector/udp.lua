@@ -300,13 +300,15 @@ function apt_mt:_onsendready()
 
   local head,package = self:_output_chain_pop()
   if head and package then
-    self._output_wait_ack[head] = gettime()
-    self._output_wait_count = self._output_wait_count + 1
+    if self._output_wait_package_parts_map[head] then
+      self._output_wait_ack[head] = gettime()
+      self._output_wait_count = self._output_wait_count + 1
 
-    -- print("_output_wait_count", self._output_wait_count)
+      -- print("_output_wait_count", self._output_wait_count)
 
-    self:_send(package, self._output_wait_package_parts_map[head].dest)
-    return true
+      self:_send(package, self._output_wait_package_parts_map[head].dest)
+      return true
+    end
   end
 
   return false
