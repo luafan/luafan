@@ -3,7 +3,8 @@ local lfs = require "lfs"
 local config_dir = "config"
 local configd_dir = "config.d"
 
-local env = {os = os, tonumber = tonumber}
+local env = {os = os, tonumber = tonumber, weaktable = {}}
+setmetatable(env.weaktable, {__mode = "v"})
 
 local function load_config(dir)
     local attr = lfs.attributes(dir)
