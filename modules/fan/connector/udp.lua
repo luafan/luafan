@@ -61,7 +61,7 @@ function apt_mt:send(buf, ...)
   end
 
   local output_index = self._output_index + 1
-  if output_index > 65535 then
+  if output_index >= 32768 then
     output_index = 1
   end
   self._output_index = output_index
@@ -106,7 +106,7 @@ function apt_mt:send(buf, ...)
 end
 
 function apt_mt:_moretosend()
-  if #(self._output_ack_package) > 0 then
+  if next(self._output_ack_package) then
     return true
   end
 
@@ -124,90 +124,112 @@ function apt_mt:_mark_send_completed(head)
   end
 end
 
+function apt_mt:_onack(buf, host, port)
+  local output_index,count,package_index = string.unpack("<I2I2I2", buf)
+  if config.debug then
+    print(string.format("%s:%d\tack: %d %d/%d", host, port, output_index, package_index, count))
+  end
+
+  local map = self._output_wait_package_parts_map[buf]
+  self:_mark_send_completed(buf)
+
+  if map then
+    map.hash[buf] = nil
+    if not next(map.hash) then
+      if self.onsent then
+        coroutine.wrap(self.onsent)(output_index)
+      end
+    end
+  end
+end
+
 function apt_mt:_onread(buf, host, port)
   -- print("read", self.dest, #(buf))
   if #(buf) == HEAD_SIZE then
-    local output_index,count,package_index = string.unpack("<I2I2I2", buf)
-    if config.debug then
-      print(string.format("%s:%d\tack: %d %d/%d", host, port, output_index, package_index, count))
-    end
-
-    local map = self._output_wait_package_parts_map[buf]
-    self:_mark_send_completed(buf)
-
-    if map then
-      map.hash[buf] = nil
-      if not next(map.hash) then
-        if self.onsent then
-          coroutine.wrap(self.onsent)(output_index)
-        end
-      end
-    end
-
+    -- single ack.
+    self:_onack(buf, host, port)
     self.conn:send_req()
     return
   elseif #(buf) > HEAD_SIZE then
     local head = string.sub(buf, 1, HEAD_SIZE)
-    table.insert(self._output_ack_package, head)
-    self._output_ack_dest[head] = {host, port}
-    -- print("send_req")
-    self.conn:send_req()
-    -- if config.debug then
-    -- print("sending ack", #(head), #(self._output_ack_package))
-    -- end
-
     local body = string.sub(buf, HEAD_SIZE + 1)
     local output_index,count,package_index = string.unpack("<I2I2I2", head)
-    if config.debug then
-      print(string.format("%s:%d\trecv: [%d] %d/%d (body=%d)", host, port, output_index, package_index, count, #(body)))
-    end
 
-    local key = string.format("%s:%d", host, port)
-    local incoming = self._incoming_map[key]
+    if output_index == 0xffff and #(body)%6 == 0 then
+      -- multi-ack
+      local offset = 1
+      while offset < #(body) do
+        local line = string.sub(body, offset, offset + 5)
+        self:_onack(line, host, port)
+        offset = offset + 6
+      end
+    else
+      local t = self._output_ack_package[host]
+      if not t then
+        t = {}
+        self._output_ack_package[host] = t
+      end
 
-    if not incoming then
-      incoming = {}
-      self._incoming_map[key] = incoming
-    end
+      local list = t[port]
+      if not list then
+        list = {}
+        t[port] = list
+      end
 
-    local incoming_object = incoming[output_index]
-    if not incoming_object then
-      incoming_object = {items = {}, count = count, start = utils.gettime()}
-      incoming[output_index] = incoming_object
-    elseif incoming_object.done then
-      return
-    end
+      table.insert(list, head)
+      self.conn:send_req()
+      -- if config.debug then
+      -- print("sending ack", #(head), #(self._output_ack_package))
+      -- end
 
-    incoming_object.items[package_index] = body
+      if config.debug then
+        print(string.format("%s:%d\trecv: [%d] %d/%d (body=%d)", host, port, output_index, package_index, count, #(body)))
+      end
 
-    for i=1,count do
-      if not incoming_object.items[i] then
+      local key = string.format("%s:%d", host, port)
+      local incoming = self._incoming_map[key]
+
+      if not incoming then
+        incoming = {}
+        self._incoming_map[key] = incoming
+      end
+
+      local incoming_object = incoming[output_index]
+      if not incoming_object then
+        incoming_object = {items = {}, count = count, start = utils.gettime()}
+        incoming[output_index] = incoming_object
+      elseif incoming_object.done then
         return
       end
-    end
 
-    -- print(self.dest, string.format("fail rate: %d/%d", self._output_wait_timeout_count_map[output_index] or 0, count))
-    -- self._output_wait_timeout_count_map[output_index] = nil
+      incoming_object.items[package_index] = body
 
-    -- mark true, so we can drop dup packages.
-    incoming_object.done = true
-    incoming_object.donetime = utils.gettime()
-
-    if self.onread then
-      if count == 1 then
-        coroutine.wrap(self.onread)(incoming_object.items[1], host, port)
-      else
-        coroutine.wrap(self.onread)(table.concat(incoming_object.items), host, port)
+      for i=1,count do
+        if not incoming_object.items[i] then
+          return
+        end
       end
-    end
 
-    incoming_object.items = nil
+      -- mark true, so we can drop dup packages.
+      incoming_object.done = true
+      incoming_object.donetime = utils.gettime()
+
+      if self.onread then
+        if count == 1 then
+          coroutine.wrap(self.onread)(incoming_object.items[1], host, port)
+        else
+          coroutine.wrap(self.onread)(table.concat(incoming_object.items), host, port)
+        end
+      end
+
+      incoming_object.items = nil
+    end
   else
     print("receive buf size too small", #(buf), fan.data2hex(buf))
   end
 end
 
-function apt_mt:_send(buf, dest)
+function apt_mt:_send(buf, dest, port)
   -- print("send", #(buf))
   if config.debug then
     local output_index,count,package_index = string.unpack("<I2I2I2", buf)
@@ -218,7 +240,9 @@ function apt_mt:_send(buf, dest)
     end
   end
 
-  if dest and #(dest) > 0 then
+  if port and dest then
+    self.conn:send(buf, dest, port)
+  elseif dest and #(dest) > 0 then
     self.conn:send(buf, table.unpack(dest))
   else
     self.conn:send(buf, self.dest)
@@ -284,13 +308,50 @@ function apt_mt:_check_timeout()
   return has_timeout
 end
 
+local max_ack_count = BODY_SIZE / 6
+local multi_ack_head = string.pack("<I2I2I2", 0xffff, 1, 1)
+
 function apt_mt:_onsendready()
-  if #(self._output_ack_package) > 0 then
-    local package = table.remove(self._output_ack_package)
-    -- print("send ack")
-    self:_send(package, self._output_ack_dest[package])
-    self._output_ack_dest[package] = nil
-    return true
+  local has_ack = false
+  for host,t in pairs(self._output_ack_package) do
+    for port,list in pairs(t) do
+      if #list > max_ack_count then
+        local tmp = {}
+        local package = table.concat(list, "", 1, max_ack_count)
+        print("multi ack sub:", #package)
+        self:_send(multi_ack_head .. package, host, port)
+        has_ack = true
+
+        table.move(list, max_ack_count + 1, #(list), 1, tmp)
+        t[port] = tmp
+        list = tmp
+    elseif #list > 1 then
+        local package = table.concat(list)
+        self:_send(multi_ack_head .. package, host, port)
+        has_ack = true
+
+        t[port] = nil
+        list = nil
+      else
+        local package = table.remove(list)
+        has_ack = true
+        -- print("send ack")
+        self:_send(package, host, port)
+      end
+
+      if not list or #list == 0 then
+        t[port] = nil
+      end
+      break
+    end
+
+    if has_ack then
+      if not next(t) then
+        self._output_ack_package[host] = nil
+      end
+
+      return true
+    end
   end
 
   if self._output_wait_count >= WAITING_COUNT then
@@ -365,9 +426,7 @@ local function connect(host, port, path)
     _output_wait_ack = {},
     _output_wait_package_parts_map = {},
     _output_wait_count = 0,
-    -- _output_wait_timeout_count_map = {},
     _output_ack_package = {},
-    _output_ack_dest = {},
     _incoming_map = {},
   }
   setmetatable(t, apt_mt)
@@ -419,9 +478,7 @@ local function connect(host, port, path)
           _output_wait_ack = {},
           _output_wait_package_parts_map = {},
           _output_wait_count = 0,
-          -- _output_wait_timeout_count_map = {},
           _output_ack_package = {},
-          _output_ack_dest = {},
           _incoming_map = {},
         }
         setmetatable(apt, apt_mt)
