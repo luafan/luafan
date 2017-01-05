@@ -62,7 +62,7 @@ LUA_API int lua_udpd_conn_gc(lua_State *L) {
   return 0;
 }
 
-#define BUFLEN 1024
+#define BUFLEN 65536
 
 static void udpd_writecb(evutil_socket_t fd, short what, void *arg) {
   Conn *conn = (Conn *)arg;
