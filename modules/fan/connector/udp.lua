@@ -16,7 +16,7 @@ config.udp_receive_total = 0
 config.udp_resend_total = 0
 
 -- impl waiting pool
-local MTU = config.udp_mtu or (576 - 8 - 20)
+local MTU = (config.udp_mtu or 576) - 8 - 20
 local HEAD_SIZE = 2 + 2 + 2
 local BODY_SIZE = MTU - HEAD_SIZE
 
@@ -182,13 +182,10 @@ function apt_mt:_onread(buf)
 
       incoming_object.items[package_index] = body
 
-      -- for i=1,count do
-      --   if not incoming_object.items[i] then
-      --     return
-      --   end
-      -- end
-      if #(incoming_object.items) < count then
-        return
+      for i=1,count do
+        if not incoming_object.items[i] then
+          return
+        end
       end
 
       -- mark true, so we can drop dup packages.
