@@ -221,7 +221,7 @@ function apt_mt:_send(buf)
   if self.dest then
     self.conn:send(buf, self.dest)
   else
-    print("send direct", self.host, self.port)
+    -- print("send direct", self.host, self.port)
     self.conn:send(buf, self.host, self.port)
   end
 
@@ -343,7 +343,11 @@ function apt_mt:close()
 end
 
 local function connect(host, port, path)
+  port = tonumber(port)
+
   local t = {
+    host = host,
+    port = port,
     _output_index = 0,
     _output_chain = {_head = nil, _tail = nil},
     _output_wait_ack = {},
@@ -358,7 +362,7 @@ local function connect(host, port, path)
     host = host,
     port = port,
     onread = function(buf, from)
-      -- print("onread", #(buf))
+      -- print("onread", #(buf), from, host, port, type(from:getPort()), type(port))
       config.udp_receive_total = config.udp_receive_total + 1
       if from:getHost() == host and from:getPort() == port then
         t:_onread(buf)
