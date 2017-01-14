@@ -32,8 +32,30 @@ end
 
 math.randomseed((fan.gettime()))
 
-return {
+local m = {
     random_string = random_string,
     gettime = gettime,
     LETTERS_W = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
 }
+
+if jit then
+  local ffi = require("ffi")
+
+  ffi.cdef[[
+    typedef long time_t;
+    typedef struct timeval {
+      time_t tv_sec;
+      time_t tv_usec;
+    } timeval;
+
+    int gettimeofday(struct timeval* t, void* tzp);
+  ]]
+
+  function m.gettime()
+    local t = ffi.new("timeval")
+    ffi.C.gettimeofday(t, nil)
+    return tonumber(t.tv_sec) + tonumber(t.tv_usec)/1000000.0
+  end
+end
+
+return m

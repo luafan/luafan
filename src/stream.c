@@ -307,7 +307,7 @@ static const struct luaL_Reg streammtlib[] = {
     {NULL, NULL},
 };
 
-LUA_API int luaopen_fan_stream(lua_State *L) {
+LUA_API int luaopen_fan_stream_core(lua_State *L) {
   luaL_newmetatable(L, LUA_STREAM_TYPE);
   luaL_register(L, NULL, streammtlib);
 
