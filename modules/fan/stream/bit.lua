@@ -1,7 +1,3 @@
-if not jit then
-  return require "fan.stream.core"
-end
-
 local table = table
 local assert = assert
 local string = string
@@ -14,7 +10,7 @@ local stream_mt = {}
 stream_mt.__index = stream_mt
 
 function stream_mt:available()
-  return self.length - self.offset + 1
+  return #(self.data) - self.offset + 1
 end
 
 function stream_mt:GetU8()
@@ -91,33 +87,36 @@ function stream_mt:GetD64()
 end
 
 function stream_mt:GetString()
+  local offset = self.offset
   local len = self:GetU30()
-  local s = string.sub(self.data, self.offset, self.offset + len - 1)
-  self.offset = self.offset + len
-
-  return s
+  if len > self:available() then
+    local diff = self.offset - offset
+    self.offset = offset
+    return nil, len + diff
+  else
+    local s = string.sub(self.data, self.offset, self.offset + len - 1)
+    self.offset = self.offset + len
+    return s
+  end
 end
 
 function stream_mt:AddString(s)
   self:AddU30(#(s))
-  table.insert(self.data, s)
+  self.data = self.data .. s
 end
 
 function stream_mt:AddU8(u)
-  table.insert(self.data, string.format("%c", u))
-  self.length = self.length + 1
+  self.data = self.data .. string.format("%c", u)
 end
 
 function stream_mt:AddU16(u)
   local s = string.format("%c%c", band(u, 0xff), band(rshift(u, 16), 0xff))
-  table.insert(self.data, s)
-  self.length = self.length + 2
+  self.data = self.data .. s
 end
 
 function stream_mt:AddU24(u)
   local s = string.format("%c%c", band(u, 0xff), band(rshift(u, 16), 0xff), band(rshift(u, 24), 0xff))
-  table.insert(self.data, s)
-  self.length = self.length + 3
+  self.data = self.data .. s
 end
 
 function stream_mt:AddS24(u)
@@ -125,16 +124,16 @@ function stream_mt:AddS24(u)
 end
 
 function stream_mt:AddU30(u)
-	for i=1,5 do
-		local mask = u >= 2^7 and 0x80 or 0
+  for i=1,5 do
+    local mask = u >= 2^7 and 0x80 or 0
     self:AddU8(bor(mask, band(u, 0x7F)))
 
     u = rshift(u, 7)
 
-		if u == 0 then
-			break
-		end
-	end
+    if u == 0 then
+      break
+    end
+  end
 end
 
 function stream_mt:AddABCU32(u)
@@ -147,15 +146,17 @@ end
 
 function stream_mt:AddD64(d)
   local s = string.pack("<d", d)
-  table.insert(self.data, s)
-  self.length = self.length + 8
+  self.data = self.data .. s
 end
 
 function stream_mt:AddBytes(s)
-  table.insert(self.data, s)
+  self.data = self.data .. s
 end
 
 function stream_mt:GetBytes(len)
+  if not len then
+    len = self:available()
+  end
   local s = string.sub(self.data, self.offset, self.offset + len - 1)
   self.offset = self.offset + len
 
@@ -163,16 +164,31 @@ function stream_mt:GetBytes(len)
 end
 
 function stream_mt:package()
-  return table.concat(self.data)
+  return self.data
+end
+
+function stream_mt:prepare_get()
+  if self.rw == "w" then
+    self.length = #(self.data)
+    self.offset = 1
+    self.rw = "r"
+  end
+end
+
+function stream_mt:prepare_add()
+  if self.rw == "r" then
+    self.data = string.sub(self.data, self.offset)
+    self.rw = "w"
+  end
 end
 
 local function stream_mt_new(data)
   if data then
-    local obj = {data = data, offset = 1, length = #(data)}
+    local obj = {data = data, offset = 1, length = #(data), rw = "r"}
     setmetatable(obj, stream_mt)
     return obj
   else
-    local obj = {data = {}, length = 0}
+    local obj = {data = "", offset = 1, length = 0, rw = "w"}
     setmetatable(obj, stream_mt)
     return obj
   end

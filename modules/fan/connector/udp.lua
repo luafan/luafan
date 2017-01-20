@@ -17,7 +17,7 @@ config.udp_resend_total = 0
 
 -- impl waiting pool
 local MTU = (config.udp_mtu or 576) - 8 - 20
-local HEAD_SIZE = 2 + 2 + 2
+local HEAD_SIZE = 4 + 2 + 2
 local BODY_SIZE = MTU - HEAD_SIZE
 
 local TIMEOUT = config.udp_package_timeout or 2
@@ -61,7 +61,7 @@ function apt_mt:send(buf)
   end
 
   local output_index = self._output_index + 1
-  if output_index >= 0xfff0 then
+  if output_index >= 0xfffffff0 then
     output_index = 1
   end
   self._output_index = output_index
@@ -78,7 +78,7 @@ function apt_mt:send(buf)
 
     for i=0,index_count do
       local body = string.sub(buf, i * BODY_SIZE + 1, i * BODY_SIZE + BODY_SIZE)
-      local head = string.pack("<I2I2I2", output_index, index_count + 1, package_index)
+      local head = string.pack("<I4I2I2", output_index, index_count + 1, package_index)
       -- print(string.format("pp: %d %d/%d", output_index, package_index, index_count + 1))
       local package = head .. body
       package_parts_map[head] = package
@@ -88,7 +88,7 @@ function apt_mt:send(buf)
       self._output_wait_package_parts_map[head] = package_parts_map
     end
   else
-    local head = string.pack("<I2I2I2", output_index, 1, 1)
+    local head = string.pack("<I4I2I2", output_index, 1, 1)
     local package = head .. buf
     package_parts_map[head] = package
 
@@ -122,7 +122,7 @@ function apt_mt:_mark_send_completed(head)
 end
 
 function apt_mt:_onack(buf)
-  local output_index,count,package_index = string.unpack("<I2I2I2", buf)
+  local output_index,count,package_index = string.unpack("<I4I2I2", buf)
   if config.debug then
     print(string.format("%s:%d\tack: %d %d/%d", self.host, self.port, output_index, package_index, count))
   end
@@ -150,15 +150,15 @@ function apt_mt:_onread(buf)
   elseif #(buf) > HEAD_SIZE then
     local head = string.sub(buf, 1, HEAD_SIZE)
     local body = string.sub(buf, HEAD_SIZE + 1)
-    local output_index,count,package_index = string.unpack("<I2I2I2", head)
+    local output_index,count,package_index = string.unpack("<I4I2I2", head)
 
-    if output_index == 0xffff and #(body)%6 == 0 then
+    if output_index == 0xffffffff and #(body)%HEAD_SIZE == 0 then
       -- multi-ack
       local offset = 1
       while offset < #(body) do
-        local line = string.sub(body, offset, offset + 5)
+        local line = string.sub(body, offset, offset + HEAD_SIZE - 1)
         self:_onack(line)
-        offset = offset + 6
+        offset = offset + HEAD_SIZE
       end
     else
       table.insert(self._output_ack_package, head)
@@ -210,7 +210,7 @@ end
 function apt_mt:_send(buf)
   -- print("send", #(buf))
   if config.debug then
-    local output_index,count,package_index = string.unpack("<I2I2I2", buf)
+    local output_index,count,package_index = string.unpack("<I4I2I2", buf)
     if dest and #(dest) > 0 then
       print(string.format("send: %s:%d\t[%d]\t%d/%d", dest[1], dest[2], output_index, package_index, count))
     else
@@ -218,12 +218,7 @@ function apt_mt:_send(buf)
     end
   end
 
-  if self.dest then
-    self.conn:send(buf, self.dest)
-  else
-    -- print("send direct", self.host, self.port)
-    self.conn:send(buf, self.host, self.port)
-  end
+  self.conn:send(buf, self.dest)
 
   config.udp_send_total = config.udp_send_total + 1
 
@@ -250,7 +245,7 @@ function apt_mt:_check_timeout()
         resend = self.ontimeout(map[k])
       end
 
-      if resend then
+      if resend and self._output_wait_ack[k] then
         self._output_wait_count = self._output_wait_count - 1
         config.udp_resend_total = config.udp_resend_total + 1
         self:_output_chain_push(k, map[k])
@@ -271,8 +266,8 @@ function apt_mt:_check_timeout()
   return has_timeout
 end
 
-local max_ack_count = math.floor(BODY_SIZE / 6)
-local multi_ack_head = string.pack("<I2I2I2", 0xffff, 1, 1)
+local max_ack_count = math.floor(BODY_SIZE / HEAD_SIZE)
+local multi_ack_head = string.pack("<I4I2I2", 0xffffffff, 1, 1)
 
 function apt_mt:_onsendready()
   if #(self._output_ack_package) > max_ack_count then
@@ -348,6 +343,7 @@ local function connect(host, port, path)
   local t = {
     host = host,
     port = port,
+    dest = udpd.make_dest(host, port),
     _output_index = 0,
     _output_chain = {_head = nil, _tail = nil},
     _output_wait_ack = {},
@@ -403,7 +399,7 @@ local function connect(host, port, path)
         apt = {
           host = host,
           port = port,
-          dest = from,
+          dest = from or udpd.make_dest(host, port),
           conn = obj.serv,
           _parent = obj,
           _output_index = 0,

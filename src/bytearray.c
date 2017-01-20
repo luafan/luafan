@@ -199,7 +199,9 @@ bool bytearray_readbuffer(BYTEARRAY *ba, void *buff, uint32_t length) {
   if (ba->total - ba->offset < length) {
     return false;
   }
-  memcpy(buff, ba->buffer + ba->offset, length);
+  if (buff) {
+    memcpy(buff, ba->buffer + ba->offset, length);
+  }
   ba->offset += length;
 
   return true;

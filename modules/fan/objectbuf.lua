@@ -160,6 +160,7 @@ local function symbol(cls)
   packer.object(ctx, cls)
 
   local index_map = {}
+  local index_map_vk = {}
   local index = 2
 
   index_map[false] = 1
@@ -171,6 +172,7 @@ local function symbol(cls)
 
   for i,v in ipairs(ctx.strings) do
     index_map[v] = index + i
+    index_map_vk[index + i] = v
   end
 
   index = index + #(ctx.strings)
@@ -181,6 +183,7 @@ local function symbol(cls)
 
   for i,v in ipairs(ctx.numbers) do
     index_map[v] = index + i
+    index_map_vk[index + i] = v
   end
 
   index = index + #(ctx.numbers)
@@ -191,14 +194,10 @@ local function symbol(cls)
 
   for i,v in ipairs(ctx.integer_u30s) do
     index_map[v] = index + i
+    index_map_vk[index + i] = v
   end
 
   index = index + #(ctx.integer_u30s)
-
-  local index_map_vk = {}
-  for k,v in pairs(index_map) do
-    index_map_vk[v] = k
-  end
 
   return {map = index_map, map_vk = index_map_vk, index = index}
 end
