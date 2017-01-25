@@ -1,3 +1,4 @@
+local fan = require "fan"
 local udpd = require "fan.udpd"
 local utils = require "fan.utils"
 local config = require "config"
@@ -10,6 +11,8 @@ local math = math
 local print = print
 local coroutine = coroutine
 local tostring = tostring
+
+local gettime = utils.gettime
 
 config.udp_send_total = 0
 config.udp_receive_total = 0
@@ -173,7 +176,7 @@ function apt_mt:_onread(buf)
 
       local incoming_object = self._incoming_map[output_index]
       if not incoming_object then
-        incoming_object = {items = {}, count = count, start = utils.gettime()}
+        incoming_object = {items = {}, count = count, start = gettime()}
         self._incoming_map[output_index] = incoming_object
       elseif incoming_object.done then
         print("ignore done", output_index)
@@ -190,7 +193,7 @@ function apt_mt:_onread(buf)
 
       -- mark true, so we can drop dup packages.
       incoming_object.done = true
-      incoming_object.donetime = utils.gettime()
+      incoming_object.donetime = gettime()
 
       if self.onread then
         if count == 1 then
@@ -228,17 +231,17 @@ end
 
 function apt_mt:_check_timeout()
   for index,incoming_object in pairs(self._incoming_map) do
-    if incoming_object.done and utils.gettime() - incoming_object.donetime > 10 then
+    if incoming_object.done and gettime() - incoming_object.donetime > 10 then
       self._incoming_map[index] = nil
-      -- elseif utils.gettime() - incoming_object.start > 120 then
-      -- incoming[index] = nil
+    elseif gettime() - incoming_object.start > 600 then
+      self._incoming_map[index] = nil
     end
   end
   local has_timeout = false
   for k,map in pairs(self._output_wait_package_parts_map) do
     local last_output_time = self._output_wait_ack[k]
 
-    if last_output_time and utils.gettime() - last_output_time >= TIMEOUT then
+    if last_output_time and gettime() - last_output_time >= TIMEOUT then
       has_timeout = true
       local resend = true
       if self.ontimeout then
@@ -297,7 +300,7 @@ function apt_mt:_onsendready()
   local head,package = self:_output_chain_pop()
   if head and package then
     if self._output_wait_package_parts_map[head] then
-      self._output_wait_ack[head] = utils.gettime()
+      self._output_wait_ack[head] = gettime()
       self._output_wait_count = self._output_wait_count + 1
 
       -- print("_output_wait_count", self._output_wait_count)
@@ -378,7 +381,7 @@ local function connect(host, port, path)
   coroutine.wrap(function()
       while not t.stop do
         t:_check_timeout()
-        fan.sleep(config.udp_check_timeout_duration)
+        fan.sleep(CHECK_TIMEOUT_DURATION)
       end
       end)()
 
@@ -450,7 +453,7 @@ local function connect(host, port, path)
             end
           end
 
-          fan.sleep(config.udp_check_timeout_duration)
+          fan.sleep(CHECK_TIMEOUT_DURATION)
         end
         end)()
 

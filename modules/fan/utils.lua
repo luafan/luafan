@@ -2,6 +2,7 @@ local fan = require "fan"
 local type = type
 local table = table
 local math = math
+local tonumber = tonumber
 
 local function random_string(letters, count, join, joingroupcount)
     local tb = {}
