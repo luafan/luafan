@@ -23,10 +23,7 @@ local BODY_SIZE = MTU - HEAD_SIZE
 local TIMEOUT = config.udp_package_timeout or 2
 local WAITING_COUNT = config.udp_waiting_count or 10
 
-local function gettime()
-  local sec,usec = fan.gettime()
-  return sec + usec/1000000.0
-end
+local CHECK_TIMEOUT_DURATION = config.udp_check_timeout_duration or 0.5
 
 local apt_mt = {}
 apt_mt.__index = apt_mt
@@ -61,8 +58,11 @@ function apt_mt:send(buf)
   end
 
   local output_index = self._output_index + 1
-  if output_index >= 0xfffffff0 then
+  if output_index >= 0x0ffffff0 then -- preserve first 4 bit.
     output_index = 1
+    if config.debug then
+      print("reset output_index = 1")
+    end
   end
   self._output_index = output_index
 
@@ -152,7 +152,7 @@ function apt_mt:_onread(buf)
     local body = string.sub(buf, HEAD_SIZE + 1)
     local output_index,count,package_index = string.unpack("<I4I2I2", head)
 
-    if output_index == 0xffffffff and #(body)%HEAD_SIZE == 0 then
+    if output_index == 0x0fffffff and #(body)%HEAD_SIZE == 0 then
       -- multi-ack
       local offset = 1
       while offset < #(body) do
@@ -238,7 +238,7 @@ function apt_mt:_check_timeout()
   for k,map in pairs(self._output_wait_package_parts_map) do
     local last_output_time = self._output_wait_ack[k]
 
-    if last_output_time and gettime() - last_output_time >= TIMEOUT then
+    if last_output_time and utils.gettime() - last_output_time >= TIMEOUT then
       has_timeout = true
       local resend = true
       if self.ontimeout then
@@ -267,7 +267,7 @@ function apt_mt:_check_timeout()
 end
 
 local max_ack_count = math.floor(BODY_SIZE / HEAD_SIZE)
-local multi_ack_head = string.pack("<I4I2I2", 0xffffffff, 1, 1)
+local multi_ack_head = string.pack("<I4I2I2", 0x0fffffff, 1, 1)
 
 function apt_mt:_onsendready()
   if #(self._output_ack_package) > max_ack_count then
@@ -297,7 +297,7 @@ function apt_mt:_onsendready()
   local head,package = self:_output_chain_pop()
   if head and package then
     if self._output_wait_package_parts_map[head] then
-      self._output_wait_ack[head] = gettime()
+      self._output_wait_ack[head] = utils.gettime()
       self._output_wait_count = self._output_wait_count + 1
 
       -- print("_output_wait_count", self._output_wait_count)
@@ -378,7 +378,7 @@ local function connect(host, port, path)
   coroutine.wrap(function()
       while not t.stop do
         t:_check_timeout()
-        fan.sleep(0.5)
+        fan.sleep(config.udp_check_timeout_duration)
       end
       end)()
 
@@ -450,7 +450,7 @@ local function connect(host, port, path)
             end
           end
 
-          fan.sleep(0.5)
+          fan.sleep(config.udp_check_timeout_duration)
         end
         end)()
 

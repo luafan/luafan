@@ -27,7 +27,7 @@ void ffi_stream_get_string(BYTEARRAY *ba, uint8_t **buff, size_t *buflen);
 void ffi_stream_get_bytes(BYTEARRAY *ba, uint8_t **buff, size_t *buflen);
 
 void ffi_stream_add_u8(BYTEARRAY *ba, uint8_t value);
-void ffi_stream_add_u16(BYTEARRAY *ba, uint8_t value);
+void ffi_stream_add_u16(BYTEARRAY *ba, uint16_t value);
 void ffi_stream_add_u30(BYTEARRAY *ba, uint32_t u);
 void ffi_stream_add_u24(BYTEARRAY *ba, uint32_t u);
 void ffi_stream_add_d64(BYTEARRAY *ba, double value);

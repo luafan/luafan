@@ -113,7 +113,7 @@ void ffi_stream_add_u8(BYTEARRAY *ba, uint8_t value) {
 }
 
 
-void ffi_stream_add_u16(BYTEARRAY *ba, uint8_t value) {
+void ffi_stream_add_u16(BYTEARRAY *ba, uint16_t value) {
   bytearray_write16(ba, value);
 }
 

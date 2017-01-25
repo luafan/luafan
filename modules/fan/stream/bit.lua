@@ -44,10 +44,16 @@ function stream_mt:GetU16()
   return a + lshift(b, 8)
 end
 
+function stream_mt:GetU24()
+  local a,b,c = string.byte(self.data, self.offset, self.offset + 2)
+  self.offset = self.offset + 3
+  return a + lshift(b, 8) + lshift(c, 16)
+end
+
 function stream_mt:GetU32()
-  local a,b,c,d = string.byte(self.data, self.offset, self.offset + 1)
+  local a,b,c,d = string.byte(self.data, self.offset, self.offset + 3)
   self.offset = self.offset + 4
-  return a + lshift(b, 8) + lshift(c, 16) + lshift(d, 24)
+  return a + lshift(b, 8) + lshift(c, 16) + d * 2^24
 end
 
 function stream_mt:GetU30()
@@ -110,12 +116,17 @@ function stream_mt:AddU8(u)
 end
 
 function stream_mt:AddU16(u)
-  local s = string.format("%c%c", band(u, 0xff), band(rshift(u, 16), 0xff))
+  local s = string.format("%c%c", band(u, 0xff), band(rshift(u, 8), 0xff))
   self.data = self.data .. s
 end
 
 function stream_mt:AddU24(u)
-  local s = string.format("%c%c", band(u, 0xff), band(rshift(u, 16), 0xff), band(rshift(u, 24), 0xff))
+  local s = string.format("%c%c%c", band(u, 0xff), band(rshift(u, 8), 0xff), band(rshift(u, 16), 0xff))
+  self.data = self.data .. s
+end
+
+function stream_mt:AddU32(u)
+  local s = string.format("%c%c%c%c", band(u, 0xff), band(rshift(u, 8), 0xff), band(rshift(u, 16), 0xff), band(rshift(u, 24), 0xff))
   self.data = self.data .. s
 end
 
