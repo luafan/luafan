@@ -40,6 +40,11 @@ void ffi_stream_prepare_add(BYTEARRAY *ba);
 void ffi_stream_empty(BYTEARRAY *ba);
 ]]
 
+--[[
+# macosx
+gcc -fPIC -dynamiclib -shared stream_ffi.c bytearray.c -o libstream_ffi.dylib
+]]
+
 local stream_ffi = ffi.load("stream_ffi")
 local bytearray_t = ffi.typeof("BYTEARRAY")
 
