@@ -29,3 +29,4 @@ cmake/*
 *.out
 *.app
 upload.sh
+*.rock
