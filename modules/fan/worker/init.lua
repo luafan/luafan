@@ -1,7 +1,9 @@
 local fan = require "fan"
 local pool = require "fan.pool"
-local objectbuf = require "cjson" --require "fan.objectbuf"
+local config = require "config"
+local objectbuf = config.worker_using_cjson and require "cjson" or require "fan.objectbuf"
 local connector = require "fan.connector"
+local stream = require "fan.stream"
 require "compat53"
 
 local function maxn(t)
