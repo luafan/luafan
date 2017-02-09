@@ -152,6 +152,9 @@ static void packer_table(lua_State *L, CTX *ctx, int obj_index) {
 
     // pop CTX_INDEX_TABLES & CTX_INDEX_TABLE_IDXS
     lua_pop(L, 2);
+  } else {
+    lua_pop(L, 2);
+    return;
   }
 
   lua_pop(L, 2);
@@ -278,7 +281,8 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
     bytearray_alloc(&d, 0);
 
     lua_rawgeti(L, ctx.index, CTX_INDEX_NUMBERS);
-    for (int i = 1; i <= ctx.number_count; i++) {
+    int i = 1;
+    for (; i <= ctx.number_count; i++) {
       lua_rawgeti(L, -1, i);
 
       lua_pushvalue(L, -1);
@@ -312,7 +316,8 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
     bytearray_alloc(&d, 0);
 
     lua_rawgeti(L, ctx.index, CTX_INDEX_U30S);
-    for (int i = 1; i <= ctx.u30_count; i++) {
+    int i = 1;
+    for (; i <= ctx.u30_count; i++) {
       lua_rawgeti(L, -1, i);
 
       lua_pushvalue(L, -1);
@@ -346,7 +351,8 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
     bytearray_alloc(&d, 0);
 
     lua_rawgeti(L, ctx.index, CTX_INDEX_STRINGS);
-    for (int i = 1; i <= ctx.string_count; i++) {
+    int i = 1;
+    for (; i <= ctx.string_count; i++) {
       lua_rawgeti(L, -1, i);
 
       lua_pushvalue(L, -1);
@@ -378,13 +384,14 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
     ffi_stream_add_u30(&bodystream, ctx.table_count);
 
     lua_rawgeti(L, ctx.index, CTX_INDEX_TABLES);
-    for (int i = 1; i <= ctx.table_count; i++) {
+    int i = 1;
+    for (; i <= ctx.table_count; i++) {
       lua_rawgeti(L, -1, i);
       lua_pushinteger(L, index + i);
       lua_rawset(L, index_map_idx);
     }
 
-    for (int i = 1; i <= ctx.table_count; i++) {
+    for (i = 1; i <= ctx.table_count; i++) {
       lua_rawgeti(L, -1, i);
       int tb_idx = lua_gettop(L);
 
@@ -480,7 +487,8 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
   if (flag & HAS_NUMBER_MASK) {
     last_top = index + 1;
     uint32_t count = ffi_stream_get_u30(&input);
-    for (uint32_t i = 1; i <= count; i++) {
+    uint32_t i = 1;
+    for (; i <= count; i++) {
       lua_pushnumber(L, ffi_stream_get_d64(&input));
       lua_rawseti(L, index_map_idx, ++index);
     }
@@ -489,7 +497,8 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
   if (flag & HAS_U30_MASK) {
     last_top = index + 1;
     uint32_t count = ffi_stream_get_u30(&input);
-    for (uint32_t i = 1; i <= count; i++) {
+    uint32_t i = 1;
+    for (; i <= count; i++) {
       lua_pushinteger(L, ffi_stream_get_u30(&input));
       lua_rawseti(L, index_map_idx, ++index);
     }
@@ -498,7 +507,8 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
   if (flag & HAS_STRING_MASK) {
     last_top = index + 1;
     uint32_t count = ffi_stream_get_u30(&input);
-    for (uint32_t i = 1; i <= count; i++) {
+    uint32_t i = 1;
+    for (; i <= count; i++) {
       uint8_t *buff = NULL;
       size_t buflen = 0;
       ffi_stream_get_string(&input, &buff, &buflen);
@@ -511,12 +521,14 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
     last_top = index + 1;
 
     uint32_t count = ffi_stream_get_u30(&input);
-    for (uint32_t i = 1; i <= count; i++) {
+    uint32_t i = 1;
+    for (; i <= count; i++) {
       lua_newtable(L);
       lua_rawseti(L, index_map_idx, index + i);
     }
 
-    for (uint32_t i = 1; i <= count; i++) {
+    i = 1;
+    for (; i <= count; i++) {
       uint8_t *buff = NULL;
       size_t buflen = 0;
       ffi_stream_get_string(&input, &buff, &buflen);
