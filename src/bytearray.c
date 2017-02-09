@@ -85,6 +85,7 @@ bool bytearray_wrap_buffer(BYTEARRAY *ba, uint8_t *buff, uint32_t length) {
   ba->total = length;
   ba->offset = 0;
   ba->buflen = length;
+  ba->reading = true;
   ba->wrapbuffer = true;
 
   return true;
@@ -104,7 +105,6 @@ size_t bytearray_read_available(BYTEARRAY *ba) {
   if (ba == NULL || ba->buffer == NULL || !ba->reading) {
     return 0;
   }
-
   return ba->total - ba->offset;
 }
 
