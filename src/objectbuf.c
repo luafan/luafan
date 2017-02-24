@@ -512,6 +512,11 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
       uint8_t *buff = NULL;
       size_t buflen = 0;
       ffi_stream_get_string(&input, &buff, &buflen);
+      if (!buff) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "decode failed.");
+        return 2;
+      }
       lua_pushlstring(L, (const char *)buff, buflen);
       lua_rawseti(L, index_map_idx, ++index);
     }
@@ -532,6 +537,11 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
       uint8_t *buff = NULL;
       size_t buflen = 0;
       ffi_stream_get_string(&input, &buff, &buflen);
+      if (!buff) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "decode failed.");
+        return 2;
+      }
       BYTEARRAY d = {0};
       bytearray_wrap_buffer(&d, buff, buflen);
 
@@ -544,12 +554,20 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
         if (lua_isnil(L, -1)) {
           lua_pop(L, 1);
           lua_rawgeti(L, index_map_idx, ki);
+
+          if (lua_isnil(L, -1)) {
+            luaL_error(L, "ki=%d not found.", ki);
+          }
         }
 
         lua_rawgeti(L, sym_map_vk_idx, vi);
         if (lua_isnil(L, -1)) {
           lua_pop(L, 1);
           lua_rawgeti(L, index_map_idx, vi);
+
+          if (lua_isnil(L, -1)) {
+            luaL_error(L, "vi=%d not found.", vi);
+          }
         }
 
         lua_rawset(L, -3);

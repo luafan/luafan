@@ -1,4 +1,5 @@
 local core = require "fan.objectbuf.core"
+local fan = require "fan"
 
 local CTX_INDEX_TABLES = 1
 local CTX_INDEX_NUMBERS = 2
@@ -10,9 +11,23 @@ local SYM_INDEX_MAP = 1
 local SYM_INDEX_MAP_VK = 2
 local SYM_INDEX_INDEX = 3
 
+local function encode(buf, ...)
+  return core.encode(buf, ...)
+end
+
+local function decode(buf, ...)
+  local obj, msg = core.decode(buf, ...)
+  
+  if not obj then
+    print(msg, fan.data2hex(buf))
+  end
+
+  return obj
+end
+
 return {
-  encode = core.encode,
-  decode = core.decode,
+  encode = encode,
+  decode = decode,
   symbol = function(obj)
     local ctx = core.symbol(obj)
 

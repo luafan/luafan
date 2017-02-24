@@ -123,7 +123,6 @@ bool bytearray_write_ready(BYTEARRAY *ba) {
   }
   if (ba->offset > 0) {
     size_t unreadleft = ba->total - ba->offset;
-    int i = 0;
     uint8_t *buf = ba->buffer;
 
     memmove(buf, buf + ba->offset, unreadleft);
