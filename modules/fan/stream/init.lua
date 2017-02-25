@@ -2,7 +2,13 @@
 speed result:
 bit > ffi > core
 ]]
-if not jit then
+local config = require "config"
+local support_zero_string = string.len(string.format("%c", 0)) == 1
+
+if not jit or not support_zero_string then
+  if config.debug then
+    print("use stream_core")
+  end
   return require "fan.stream.core"
 else
   local config = require "config"
