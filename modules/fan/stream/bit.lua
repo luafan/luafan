@@ -63,6 +63,9 @@ function stream_mt:GetU30()
 
   for i=1,5 do
     local b = self:GetU8()
+    if not b then
+      return nil
+    end
     value = value + band(b, 127) * 2^shift
     shift = shift + 7
 
@@ -95,10 +98,10 @@ end
 function stream_mt:GetString()
   local offset = self.offset
   local len = self:GetU30()
-  if len > self:available() then
+  if not len or len > self:available() then
     local diff = self.offset - offset
     self.offset = offset
-    return nil, len + diff
+    return nil, len and len + diff or self:available() + 1
   else
     local s = string.sub(self.data, self.offset, self.offset + len - 1)
     self.offset = self.offset + len

@@ -68,7 +68,14 @@ LUA_API int luafan_stream_get_u32(lua_State *L) {
 
 LUA_API int luafan_stream_get_u30(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  lua_pushinteger(L, ffi_stream_get_u30(ba));
+  uint32_t value = 0;
+  if(!ffi_stream_get_u30(ba, &value)){
+    lua_pushnil(L);
+    lua_pushliteral(L, "decode failed.");
+    return 2;
+  }
+
+  lua_pushinteger(L, value);
   return 1;
 }
 

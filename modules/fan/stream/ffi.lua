@@ -19,7 +19,7 @@ size_t ffi_stream_available(BYTEARRAY *ba);
 uint8_t ffi_stream_get_u8(BYTEARRAY *ba);
 uint16_t ffi_stream_get_u16(BYTEARRAY *ba);
 uint32_t ffi_stream_get_u32(BYTEARRAY *ba);
-uint32_t ffi_stream_get_u30(BYTEARRAY *ba);
+bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *out);
 int32_t ffi_stream_get_s24(BYTEARRAY *ba);
 uint32_t ffi_stream_get_u24(BYTEARRAY *ba);
 double ffi_stream_get_d64(BYTEARRAY *ba);
@@ -54,6 +54,8 @@ stream_mt.__gc = stream_ffi.ffi_stream_gc
 
 local buff = ffi.new("uint8_t* [1]")
 local buflen = ffi.new("size_t [1]")
+
+local uint32 = ffi.new("uint32_t [1]")
 
 function stream_mt.new(data)
   ba = ffi.new(bytearray_t)
@@ -103,15 +105,18 @@ function stream_mt:GetU32()
 end
 
 function stream_mt:GetU30()
-  return tonumber(stream_ffi.ffi_stream_get_u30(self))
+  if not stream_ffi.ffi_stream_get_u30(self, uint32) then
+    return nil
+  end
+  return uint32[0]
 end
 
 function stream_mt:GetABCS32()
-  return tonumber(stream_ffi.ffi_stream_get_u30(self))
+  return self:GetU30()
 end
 
 function stream_mt:GetABCU32()
-  return tonumber(stream_ffi.ffi_stream_get_u30(self))
+  return self:GetU30()
 end
 
 function stream_mt:GetD64()

@@ -45,7 +45,7 @@ void ffi_stream_add_u30(BYTEARRAY *ba, uint32_t u);
 void ffi_stream_add_d64(BYTEARRAY *ba, double value);
 void ffi_stream_add_string(BYTEARRAY *ba, const char *data, size_t len);
 
-uint32_t ffi_stream_get_u30(BYTEARRAY *ba);
+bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *out);
 double ffi_stream_get_d64(BYTEARRAY *ba);
 void ffi_stream_get_string(BYTEARRAY *ba, uint8_t **buff, size_t *buflen);
 
@@ -505,7 +505,12 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
 
   if (flag & HAS_NUMBER_MASK) {
     last_top = index + 1;
-    uint32_t count = ffi_stream_get_u30(&input);
+    uint32_t count = 0;
+    if(!ffi_stream_get_u30(&input, &count)){
+      lua_pushnil(L);
+      lua_pushliteral(L, "decode failed.");
+      return 2;
+    }
     uint32_t i = 1;
     for (; i <= count; i++) {
       lua_pushnumber(L, ffi_stream_get_d64(&input));
@@ -515,17 +520,33 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
 
   if (flag & HAS_U30_MASK) {
     last_top = index + 1;
-    uint32_t count = ffi_stream_get_u30(&input);
+    uint32_t count = 0;
+    if(!ffi_stream_get_u30(&input, &count)){
+      lua_pushnil(L);
+      lua_pushliteral(L, "decode failed.");
+      return 2;
+    }
     uint32_t i = 1;
     for (; i <= count; i++) {
-      lua_pushinteger(L, ffi_stream_get_u30(&input));
+      uint32_t count = 0;
+      if(!ffi_stream_get_u30(&input, &count)){
+        lua_pushnil(L);
+        lua_pushliteral(L, "decode failed.");
+        return 2;
+      }
+      lua_pushinteger(L, count);
       lua_rawseti(L, index_map_idx, ++index);
     }
   }
 
   if (flag & HAS_STRING_MASK) {
     last_top = index + 1;
-    uint32_t count = ffi_stream_get_u30(&input);
+    uint32_t count = 0;
+    if(!ffi_stream_get_u30(&input, &count)){
+      lua_pushnil(L);
+      lua_pushliteral(L, "decode failed.");
+      return 2;
+    }
     uint32_t i = 1;
     for (; i <= count; i++) {
       uint8_t *buff = NULL;
@@ -543,8 +564,12 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
 
   if (flag & HAS_TABLE_MASK) {
     last_top = index + 1;
-
-    uint32_t count = ffi_stream_get_u30(&input);
+    uint32_t count = 0;
+    if(!ffi_stream_get_u30(&input, &count)){
+      lua_pushnil(L);
+      lua_pushliteral(L, "decode failed.");
+      return 2;
+    }
     uint32_t i = 1;
     for (; i <= count; i++) {
       lua_newtable(L);
@@ -566,8 +591,18 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
 
       lua_rawgeti(L, index_map_idx, index + i);
       while (bytearray_read_available(&d) > 0) {
-        uint32_t ki = ffi_stream_get_u30(&d);
-        uint32_t vi = ffi_stream_get_u30(&d);
+        uint32_t ki = 0;
+        if(!ffi_stream_get_u30(&d, &ki)){
+          lua_pushnil(L);
+          lua_pushliteral(L, "decode failed.");
+          return 2;
+        }
+        uint32_t vi = 0;
+        if(!ffi_stream_get_u30(&d, &vi)){
+          lua_pushnil(L);
+          lua_pushliteral(L, "decode failed.");
+          return 2;
+        }
 
         lua_rawgeti(L, sym_map_vk_idx, ki);
         if (lua_isnil(L, -1)) {

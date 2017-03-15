@@ -37,13 +37,15 @@ uint32_t ffi_stream_get_u32(BYTEARRAY *ba) {
   return value;
 }
 
-uint32_t ffi_stream_get_u30(BYTEARRAY *ba) {
+bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *out) {
   uint8_t b;
   uint32_t value = 0;
   uint8_t shift = 0;
 
   while (true) {
-    bytearray_read8(ba, &b);
+    if (!bytearray_read8(ba, &b)) {
+      return false;
+    }
     value |= ((b & 127) << shift);
     shift += 7;
 
@@ -52,7 +54,8 @@ uint32_t ffi_stream_get_u30(BYTEARRAY *ba) {
     }
   }
 
-  return value;
+  *out = value;
+  return true;
 }
 
 int32_t ffi_stream_get_s24(BYTEARRAY *ba) {
@@ -81,7 +84,14 @@ double ffi_stream_get_d64(BYTEARRAY *ba) {
 
 void ffi_stream_get_string(BYTEARRAY *ba, uint8_t **buff, size_t *buflen) {
   size_t offset = ba->offset;
-  uint32_t len = ffi_stream_get_u30(ba);
+  uint32_t len = 0;
+  if(!ffi_stream_get_u30(ba, &len)){
+    ba->offset = offset;
+
+    *buff = NULL;
+    *buflen = bytearray_read_available(ba) + 1;
+    return;
+  }
   size_t available = bytearray_read_available(ba);
 
   if (len > available) {
