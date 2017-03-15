@@ -12,6 +12,8 @@
 * [fan.http](api/http.md) http request module.
 * [fan.mariadb](api/mariadb.md) mariadb client module.
 * [fan.stream](api/stream.md) stream helper.
+* [fan.objectbuf](api/objectbuf.md) serialize helper.
+* [fan.connector](api/connector.md) fifo/tcp/udp connector helper.
 
 Introduce
 =========

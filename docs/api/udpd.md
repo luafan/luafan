@@ -8,7 +8,7 @@ keys in the `arg`:
 
 * `onread: function?`
 
-	callback on receive data. arg1 => data:string, arg2 => [UDP_FromInfo](#udp_from_info)
+	callback on receive data. arg1 => data:string, arg2 => [UDP_AddrInfo](#udp_addr_info)
 
 * `onsendready: function?`
 
@@ -32,13 +32,19 @@ keys in the `arg`:
 
 ---------
 conn apis:
-### `send(buf)`
-send out data buf.
+### `send(buf, addr?)`
+send out data buf, if addr:[UDP_AddrInfo](#udp_addr_info) specified, use it as the destination address, otherwise, use the host:port when create this udp object.
 
 ### `send_req()`
 request to send data, when output buffer is available, onsendready will be called.
 
-UDP_FROM_INFO
+### `getPort()`
+get the udp local binding port.
+
+### `close()`
+cleanup udp reference.
+
+UDP_ADDR_INFO
 =============
 
 ### `getHost():string`

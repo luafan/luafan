@@ -9,6 +9,8 @@
 #define HAS_STRING_MASK   1 << 5
 #define HAS_FUNCTION_MASK 1 << 4
 #define HAS_TABLE_MASK    1 << 3
+/* if none of the above mask was set, that means it's boolean value. */
+#define TRUE_FALSE_MASK 1 << 0
 
 #define MAX_U30     4294967296 // 2^32
 
@@ -57,7 +59,7 @@ static void packer_number(lua_State *L, CTX *ctx, int obj_index) {
   lua_rawget(L, -2);
 
   if (lua_isnil(L, -1)) {
-    if (floor(value) != value || value > MAX_U30 || value < 0) {
+    if (floor(value) != value || value >= MAX_U30 || value < 0) {
       lua_rawgeti(L, ctx->index, CTX_INDEX_NUMBERS);
       lua_pushvalue(L, obj_index);
       lua_rawseti(L, -2, ++ctx->number_count);
@@ -237,6 +239,12 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
   case 1:
     obj_index = 1;
     break;
+  }
+
+  if (lua_type(L, 1) == LUA_TBOOLEAN) {
+    int value = lua_toboolean(L, 1);
+    lua_pushfstring(L, "%c", value ? 1 : 0);
+    return 1;
   }
 
   CTX ctx = {0};
@@ -458,6 +466,17 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
 
   uint8_t flag = 0;
   bytearray_read8(&input, &flag);
+
+  switch (flag) {
+  case 0:
+    lua_pushboolean(L, false);
+    return 1;
+  case 1:
+    lua_pushboolean(L, true);
+    return 1;
+  default:
+    break;
+  }
 
   lua_newtable(L);
   int index_map_idx = lua_gettop(L);

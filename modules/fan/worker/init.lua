@@ -26,12 +26,25 @@ function loadbalance_mt.new(max_job_count)
   return obj
 end
 
+function loadbalance_mt:_assign(slave)
+  if self.yielding.head then
+    local co = self.yielding.head.value
+    self.yielding.head = self.yielding.head.next
+    local st,msg = coroutine.resume(co, slave)
+    if not st then
+      print(msg)
+    end
+  end
+end
+
 function loadbalance_mt:add(slave)
   table.insert(self.slaves, slave)
+
+  self:_assign(slave)
 end
 
 local function compare_slave_jobcount(a, b)
-  return a.jobcount < b.jobcount
+  return a.max_job_count - a.jobcount > b.max_job_count - b.jobcount
 end
 
 function loadbalance_mt:findbest()
@@ -55,14 +68,7 @@ end
 function loadbalance_mt:telldone(slave)
   slave.jobcount = slave.jobcount - 1
 
-  if self.yielding.head then
-    local co = self.yielding.head.value
-    self.yielding.head = self.yielding.head.next
-    local st,msg = coroutine.resume(co, slave)
-    if not st then
-      print(msg)
-    end
-  end
+  self:_assign(slave)
 end
 
 local master_mt = {}
@@ -92,12 +98,14 @@ master_mt.__index = function(obj, k)
 end
 
 local function new(funcmap, slavecount, max_job_count, url)
+  local samehost = false
   if not url then
     local fifoname = connector.tmpfifoname()
     url = "fifo:" .. fifoname
+    samehost = true
   end
 
-  local master = false
+  local master = slavecount == 0
   local slave_pids = {}
   local slave_index
   local master_pid = fan.getpid()
@@ -124,6 +132,9 @@ local function new(funcmap, slavecount, max_job_count, url)
   end
 
   if master then
+    if not samehost and slavecount > 0 then
+      return
+    end
     if cpu_count > 1 then
       fan.setaffinity(2 ^ (cpu_count - 1))
     end
@@ -152,29 +163,7 @@ local function new(funcmap, slavecount, max_job_count, url)
       apt.task_index = 1
       apt.jobcount = 0
       apt.status = "running"
-
-      apt.onread = function(input)
-        -- print("onread master", input:available())
-        while input:available() > 0 do
-          local str = input:GetString()
-          if not str then
-            break
-          end
-          -- print("onread master", #(str))
-          local args = objectbuf.decode(str)
-
-          if apt.task_map[args[1]] then
-            local running = apt.task_map[args[1]]
-            apt.task_map[args[1]] = nil
-            local st,msg = coroutine.resume(running, table.unpack(args, 2, maxn(args)))
-            if not st then
-              print(msg)
-            end
-          end
-
-          obj.loadbalance:telldone(apt)
-        end
-      end
+      apt.max_job_count = max_job_count
 
       table.insert(obj.slaves, apt)
       obj.loadbalance:add(apt)
@@ -186,6 +175,43 @@ local function new(funcmap, slavecount, max_job_count, url)
           coroutine.resume(running, obj)
         end
       end
+
+      local last_expect = 1
+
+      while true do
+        local input = apt:receive(last_expect)
+        if not input then
+          break
+        end
+
+        local str,expect = input:GetString()
+        if str then
+          last_expect = 1
+          local args = objectbuf.decode(str)
+
+          if apt.task_map[args[1]] then
+            local running = apt.task_map[args[1]]
+            apt.task_map[args[1]] = nil
+            local st,msg = coroutine.resume(running, true, table.unpack(args, 2, maxn(args)))
+            if not st then
+              print(msg)
+            end
+          end
+
+          obj.loadbalance:telldone(apt)
+        else
+          -- print(pid, "not enough, expect", expect)
+          last_expect = expect
+        end
+      end
+
+      for task_key,co in pairs(apt.task_map) do
+        if coroutine.status(co) == "suspended" then
+          apt.status = "dead"
+          assert(coroutine.resume(co, false, "slave dead."))
+        end
+      end
+
     end
 
     return obj

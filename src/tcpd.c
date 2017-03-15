@@ -36,6 +36,7 @@ typedef struct {
   int onConnectedRef;
 
   char *host;
+  char *ssl_host;
   int port;
 
   int ipv6;
@@ -669,7 +670,7 @@ static void luatcpd_reconnect(Conn *conn) {
     SSL *ssl = SSL_new(conn->sslctx->ssl_ctx);
     SSL_set_ex_data(ssl, conn_index, conn);
 
-    SSL_set_tlsext_host_name(ssl, conn->host);
+    SSL_set_tlsext_host_name(ssl, conn->ssl_host ?: conn->host);
     conn->buf = bufferevent_openssl_socket_new(
         event_mgr_base(), -1, ssl, BUFFEREVENT_SSL_CONNECTING,
         BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
@@ -853,6 +854,15 @@ LUA_API int tcpd_connect(lua_State *L) {
   conn->ssl_verifypeer = (int)luaL_optinteger(L, -1, 1);
   lua_pop(L, 1);
 
+  lua_getfield(L, 1, "ssl_host");
+  const char *ssl_host = lua_tostring(L, -1);
+  if (ssl_host) {
+    conn->ssl_host = strdup(ssl_host);
+  } else {
+    conn->ssl_host = NULL;
+  }
+  lua_pop(L, 1);
+
   lua_getfield(L, 1, "ssl");
   int ssl = lua_toboolean(L, -1);
   lua_pop(L, 1);
@@ -1033,6 +1043,10 @@ LUA_API int tcpd_conn_close(lua_State *L) {
   if (conn->host) {
     free(conn->host);
     conn->host = NULL;
+  }
+  if (conn->ssl_host) {
+    free(conn->ssl_host);
+    conn->ssl_host = NULL;
   }
 #if FAN_HAS_OPENSSL
   if (conn->sslctx) {

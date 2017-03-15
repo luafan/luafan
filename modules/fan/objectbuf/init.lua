@@ -17,8 +17,8 @@ end
 
 local function decode(buf, ...)
   local obj, msg = core.decode(buf, ...)
-  
-  if not obj then
+
+  if obj == nil then
     print(msg, fan.data2hex(buf))
   end
 

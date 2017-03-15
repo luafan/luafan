@@ -179,7 +179,9 @@ function apt_mt:_onread(buf)
         incoming_object = {items = {}, count = count, start = gettime()}
         self._incoming_map[output_index] = incoming_object
       elseif incoming_object.done then
-        print("ignore done", output_index)
+        if config.debug then
+          print("ignore done", output_index)
+        end
         return
       end
 

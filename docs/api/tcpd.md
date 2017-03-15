@@ -35,6 +35,10 @@ keys in the `arg`:
 
 	whether ssl connection, default false.
 
+* `ssl_host: string?`
+
+	tls extension host name for ssl handshake, use `host` if this field is not set.
+
 * `cainfo: string?`
 
 	file path to cacert.pem
