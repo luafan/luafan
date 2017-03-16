@@ -17,7 +17,7 @@ Samples
 
 * master/slave process on same host with fifo tunnel.
 
-```
+```lua
 local fan = require "fan"
 local utils = require "fan.utils"
 local worker = require "fan.worker"

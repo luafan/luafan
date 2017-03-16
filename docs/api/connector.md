@@ -29,7 +29,7 @@ CLI_APIs
 * `cli:send(buf)` (fifo/tcp)
 
 yield until buf sent, if `#buf` is too big, it will be divided to parts (fifo `MAX_LINE_SIZE = 8192`).
- 
+
 * `stream = cli:receive(expect_length?)` (fifo/tcp)
 
 yield to wait for expect data ready for read, return the read stream ([fan.stream](stream.md)) on read ready, the default expect_length is 1.
@@ -118,7 +118,7 @@ end)
 
 * listen on tcp port, and service echo request.
 
-```
+```lua
 local fan = require "fan"
 local connector = require "fan.connector"
 local utils = require "fan.utils"

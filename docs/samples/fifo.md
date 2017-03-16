@@ -3,7 +3,7 @@ FIFO Sample
 
 * run lua script
 
-```
+```lua
 local fan = require "fan"
 local fifo = require "fan.fifo"
 

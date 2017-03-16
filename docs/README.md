@@ -14,6 +14,7 @@
 * [fan.stream](api/stream.md) stream helper.
 * [fan.objectbuf](api/objectbuf.md) serialize helper.
 * [fan.connector](api/connector.md) fifo/tcp/udp connector helper.
+* [fan.worker](api/worker.md) multi-process worker helper.
 
 Introduce
 =========
