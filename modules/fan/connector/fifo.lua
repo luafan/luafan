@@ -27,10 +27,13 @@ function apt_mt:send(buf)
     table.insert(self._output_queue, buf)
   end
 
-  self.send_running = coroutine.running()
-  self._fifo_write:send_req()
-
-  return coroutine.yield()
+  if self.simulate_send_block then
+    self.send_running = coroutine.running()
+    self._fifo_write:send_req()
+    return coroutine.yield()
+  else
+    self._fifo_write:send_req()
+  end
 end
 
 function apt_mt:_onsendready()
@@ -143,7 +146,14 @@ local function connect(host, port, path)
     return nil, err
   end
 
-  local obj = {_fifo_read = nil, _fifo_write = nil, _readstream = stream.new(), _output_queue = {}, _sender_queue = {}}
+  local obj = {
+    _fifo_read = nil,
+    _fifo_write = nil,
+    _readstream = stream.new(),
+    _output_queue = {},
+    _sender_queue = {},
+    simulate_send_block = true,
+  }
   setmetatable(obj, apt_mt)
 
   obj._fifo_read_name = os.tmpname()
@@ -208,7 +218,15 @@ local function bind(host, port, path)
       obj._readstream:prepare_get()
 
       while obj._readstream:available() > 0 do
-        local apt = {_fifo_read = nil, _fifo_write = nil, _readstream = stream.new(), _output_queue = {}, _sender_queue = {}, receiving = nil}
+        local apt = {
+          _fifo_read = nil,
+          _fifo_write = nil,
+          _readstream = stream.new(),
+          _output_queue = {},
+          _sender_queue = {},
+          receiving = nil,
+          simulate_send_block = true,
+        }
         setmetatable(apt, apt_mt)
 
         apt._fifo_write_name = obj._readstream:GetString()

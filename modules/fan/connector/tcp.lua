@@ -14,10 +14,13 @@ function apt_mt:send(buf)
     coroutine.yield()
   end
 
-  self.send_running = coroutine.running()
-  self.conn:send(buf)
-
-  coroutine.yield()
+  if self.simulate_send_block then
+    self.send_running = coroutine.running()
+    self.conn:send(buf)
+    coroutine.yield()
+  else
+    self.conn:send(buf)
+  end
 
   return #(buf)
 end
@@ -82,7 +85,7 @@ function apt_mt:close()
 end
 
 local function connect(host, port, path)
-  local t = {_readstream = stream.new(), _sender_queue = {}}
+  local t = {_readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
   t.conn = tcpd.connect{
     host = host,
     port = port,
@@ -112,7 +115,7 @@ local function bind(host, port, path)
     host = host,
     port = port,
     onaccept = function(apt)
-      local t = {conn = apt, _readstream = stream.new(), _sender_queue = {}}
+      local t = {conn = apt, _readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
       setmetatable(t, apt_mt)
 
       apt:bind{
