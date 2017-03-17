@@ -883,7 +883,7 @@ static int http_getpost(lua_State *L, int method) {
       if (lua_isstring(L, -1)) {
         curl_easy_setopt(conn->easy, CURLOPT_CAINFO, lua_tostring(L, -1));
       } else {
-        curl_easy_setopt(conn->easy, CURLOPT_CAINFO, "cert.pem");
+        // curl_easy_setopt(conn->easy, CURLOPT_CAINFO, "cert.pem");
       }
       lua_pop(L, 1);
     }
