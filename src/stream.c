@@ -139,9 +139,13 @@ LUA_API int luafan_stream_get_string(lua_State *L) {
 }
 
 LUA_API int luafan_stream_get_bytes(lua_State *L) {
+  size_t buflen = luaL_optinteger(L, 2, -1);
+  if (buflen == 0) {
+    return 0;
+  }
+
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
   uint8_t *buff = NULL;
-  size_t buflen = luaL_optinteger(L, 2, 0);
   ffi_stream_get_bytes(ba, &buff, &buflen);
   lua_pushlstring(L, (char *)buff, buflen);
   return 1;
