@@ -35,8 +35,13 @@ LUA_API int luafan_stream_available(lua_State *L) {
 
 LUA_API int luafan_stream_get_u8(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  lua_pushinteger(L, ffi_stream_get_u8(ba));
-  return 1;
+  uint8_t result = 0;
+  if (ffi_stream_get_u8(ba, &result)) {
+    lua_pushinteger(L, result);
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
 LUA_API int luafan_stream_add_u8(lua_State *L) {
@@ -48,8 +53,13 @@ LUA_API int luafan_stream_add_u8(lua_State *L) {
 
 LUA_API int luafan_stream_get_u16(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  lua_pushinteger(L, ffi_stream_get_u16(ba));
-  return 1;
+  uint16_t result = 0;
+  if (ffi_stream_get_u16(ba, &result)) {
+    lua_pushinteger(L, result);
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
 LUA_API int luafan_stream_add_u16(lua_State *L) {
@@ -61,22 +71,25 @@ LUA_API int luafan_stream_add_u16(lua_State *L) {
 
 LUA_API int luafan_stream_get_u32(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  lua_pushinteger(L, ffi_stream_get_u32(ba));
-  return 1;
+  uint32_t result = 0;
+  if (ffi_stream_get_u32(ba, &result)) {
+    lua_pushinteger(L, result);
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
 
 LUA_API int luafan_stream_get_u30(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
   uint32_t value = 0;
-  if(!ffi_stream_get_u30(ba, &value)){
-    lua_pushnil(L);
-    lua_pushliteral(L, "decode failed.");
-    return 2;
+  if(ffi_stream_get_u30(ba, &value)){
+    lua_pushinteger(L, value);
+    return 1;
+  } else {
+    return 0;
   }
-
-  lua_pushinteger(L, value);
-  return 1;
 }
 
 LUA_API int luafan_stream_add_u30(lua_State *L) {
@@ -89,15 +102,24 @@ LUA_API int luafan_stream_add_u30(lua_State *L) {
 
 LUA_API int luafan_stream_get_s24(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  lua_pushinteger(L, ffi_stream_get_s24(ba));
-
-  return 1;
+  int32_t result = 0;
+  if (ffi_stream_get_s24(ba, &result)) {
+    lua_pushinteger(L, result);
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
 LUA_API int luafan_stream_get_u24(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  lua_pushinteger(L, ffi_stream_get_u24(ba));
-  return 1;
+  uint32_t result = 0;
+  if (ffi_stream_get_u24(ba, &result)) {
+    lua_pushinteger(L, result);
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
 LUA_API int luafan_stream_add_u24(lua_State *L) {
@@ -110,8 +132,13 @@ LUA_API int luafan_stream_add_u24(lua_State *L) {
 
 LUA_API int luafan_stream_get_d64(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  lua_pushnumber(L, ffi_stream_get_d64(ba));
-  return 1;
+  double result = 0;
+  if (ffi_stream_get_d64(ba, &result)) {
+    lua_pushnumber(L, result);
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
 LUA_API int luafan_stream_add_d64(lua_State *L) {
@@ -147,8 +174,12 @@ LUA_API int luafan_stream_get_bytes(lua_State *L) {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
   uint8_t *buff = NULL;
   ffi_stream_get_bytes(ba, &buff, &buflen);
-  lua_pushlstring(L, (char *)buff, buflen);
-  return 1;
+  if (buff && buflen > 0) {
+    lua_pushlstring(L, (char *)buff, buflen);
+    return 1;
+  } else {
+    return 0;
+  }
 }
 
 LUA_API int luafan_stream_add_string(lua_State *L) {

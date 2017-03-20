@@ -45,8 +45,8 @@ void ffi_stream_add_u30(BYTEARRAY *ba, uint32_t u);
 void ffi_stream_add_d64(BYTEARRAY *ba, double value);
 void ffi_stream_add_string(BYTEARRAY *ba, const char *data, size_t len);
 
-bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *out);
-double ffi_stream_get_d64(BYTEARRAY *ba);
+bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *result);
+double ffi_stream_get_d64(BYTEARRAY *ba, double *result);
 void ffi_stream_get_string(BYTEARRAY *ba, uint8_t **buff, size_t *buflen);
 
 static void packer(lua_State *L, CTX *ctx, int obj_index);
@@ -513,7 +513,13 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
     }
     uint32_t i = 1;
     for (; i <= count; i++) {
-      lua_pushnumber(L, ffi_stream_get_d64(&input));
+      double result = 0;
+      if(!ffi_stream_get_d64(&input, &result)){
+        lua_pushnil(L);
+        lua_pushliteral(L, "decode failed.");
+        return 2;
+      }
+      lua_pushnumber(L, result);
       lua_rawseti(L, index_map_idx, ++index);
     }
   }

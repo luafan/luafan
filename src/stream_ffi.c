@@ -19,25 +19,19 @@ size_t ffi_stream_available(BYTEARRAY *ba) {
 }
 
 // ========== GET ==========
-uint8_t ffi_stream_get_u8(BYTEARRAY *ba) {
-  uint8_t value;
-  bytearray_read8(ba, &value);
-  return value;
+bool ffi_stream_get_u8(BYTEARRAY *ba, uint8_t *result) {
+  return bytearray_read8(ba, result);
 }
 
-uint16_t ffi_stream_get_u16(BYTEARRAY *ba) {
-  uint16_t value;
-  bytearray_read16(ba, &value);
-  return value;
+bool ffi_stream_get_u16(BYTEARRAY *ba, uint16_t *result) {
+  return bytearray_read16(ba, result);
 }
 
-uint32_t ffi_stream_get_u32(BYTEARRAY *ba) {
-  uint32_t value;
-  bytearray_read32(ba, &value);
-  return value;
+bool ffi_stream_get_u32(BYTEARRAY *ba, uint32_t *result) {
+  return bytearray_read32(ba, result);
 }
 
-bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *out) {
+bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *result) {
   uint8_t b;
   uint32_t value = 0;
   uint8_t shift = 0;
@@ -54,32 +48,37 @@ bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *out) {
     }
   }
 
-  *out = value;
+  *result = value;
   return true;
 }
 
-int32_t ffi_stream_get_s24(BYTEARRAY *ba) {
+bool ffi_stream_get_s24(BYTEARRAY *ba, int32_t *result) {
   uint8_t value[3];
-  bytearray_readbuffer(ba, value, 3);
+  if(!bytearray_readbuffer(ba, value, 3)) {
+    return false;
+  }
 
   if (value[2] & 0x80) {
-    return -1 - ((value[2] << 16 | value[1] << 8 | value[0]) ^ 0xffffff);
+    *result = -1 - ((value[2] << 16 | value[1] << 8 | value[0]) ^ 0xffffff);
   } else {
-    return value[2] << 16 | value[1] << 8 | value[0];
+    *result = value[2] << 16 | value[1] << 8 | value[0];
   }
+
+  return true;
 }
 
-uint32_t ffi_stream_get_u24(BYTEARRAY *ba) {
+bool ffi_stream_get_u24(BYTEARRAY *ba, uint32_t *result) {
   uint8_t value[3];
-  bytearray_readbuffer(ba, value, 3);
+  if(!bytearray_readbuffer(ba, value, 3)) {
+    return false;
+  }
 
-  return value[2] << 16 | value[1] << 8 | value[0];
+  *result = value[2] << 16 | value[1] << 8 | value[0];
+  return true;
 }
 
-double ffi_stream_get_d64(BYTEARRAY *ba) {
-  double value;
-  bytearray_read64d(ba, &value);
-  return value;
+bool ffi_stream_get_d64(BYTEARRAY *ba, double *result) {
+  return bytearray_read64d(ba, result);
 }
 
 void ffi_stream_get_string(BYTEARRAY *ba, uint8_t **buff, size_t *buflen) {

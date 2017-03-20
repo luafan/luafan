@@ -16,13 +16,13 @@ void ffi_stream_new(BYTEARRAY *ba, const char *data, size_t len);
 void ffi_stream_gc(BYTEARRAY *ba);
 size_t ffi_stream_available(BYTEARRAY *ba);
 
-uint8_t ffi_stream_get_u8(BYTEARRAY *ba);
-uint16_t ffi_stream_get_u16(BYTEARRAY *ba);
-uint32_t ffi_stream_get_u32(BYTEARRAY *ba);
-bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *out);
-int32_t ffi_stream_get_s24(BYTEARRAY *ba);
-uint32_t ffi_stream_get_u24(BYTEARRAY *ba);
-double ffi_stream_get_d64(BYTEARRAY *ba);
+bool ffi_stream_get_u8(BYTEARRAY *ba, uint8_t *result);
+bool ffi_stream_get_u16(BYTEARRAY *ba, uint16_t *result);
+bool ffi_stream_get_u32(BYTEARRAY *ba, uint32_t *result);
+bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *result);
+bool ffi_stream_get_s24(BYTEARRAY *ba, int32_t *result);
+bool ffi_stream_get_u24(BYTEARRAY *ba, uint32_t *result);
+bool ffi_stream_get_d64(BYTEARRAY *ba, double *result);
 void ffi_stream_get_string(BYTEARRAY *ba, uint8_t **buff, size_t *buflen);
 void ffi_stream_get_bytes(BYTEARRAY *ba, uint8_t **buff, size_t *buflen);
 
@@ -52,11 +52,6 @@ local stream_mt = {}
 stream_mt.__index = stream_mt
 stream_mt.__gc = stream_ffi.ffi_stream_gc
 
-local buff = ffi.new("uint8_t* [1]")
-local buflen = ffi.new("size_t [1]")
-
-local uint32 = ffi.new("uint32_t [1]")
-
 function stream_mt.new(data)
   ba = ffi.new(bytearray_t)
   stream_ffi.ffi_stream_new(ba, data, data and #data or 0)
@@ -68,8 +63,14 @@ function stream_mt:available()
 end
 
 function stream_mt:package()
+  local buff = ffi.new("uint8_t* [1]")
+  local buflen = ffi.new("size_t [1]")
   stream_ffi.ffi_stream_package(self, buff, buflen)
-  return ffi.string(buff[0], buflen[0])
+  if buff[0] ~= ffi.NULL and buflen[0] > 0 then
+    return ffi.string(buff[0], buflen[0])
+  else
+    return ""
+  end
 end
 
 function stream_mt:prepare_get()
@@ -85,30 +86,45 @@ function stream_mt:empty()
 end
 
 function stream_mt:GetU8()
-  return tonumber(stream_ffi.ffi_stream_get_u8(self))
+  local uint8 = ffi.new("uint8_t [1]")
+  if stream_ffi.ffi_stream_get_u8(self, uint8) then
+    return uint8[0]
+  end
 end
 
 function stream_mt:GetS24()
-  return tonumber(stream_ffi.ffi_stream_get_s24(self))
+  local int32 = ffi.new("int32_t [1]")
+  if stream_ffi.ffi_stream_get_s24(self, int32) then
+    return int32[0]
+  end
 end
 
 function stream_mt:GetU24()
-  return tonumber(stream_ffi.ffi_stream_get_u24(self))
+  local uint32 = ffi.new("uint32_t [1]")
+  if stream_ffi.ffi_stream_get_u24(self, uint32) then
+    return uint32[0]
+  end
 end
 
 function stream_mt:GetU16()
-  return tonumber(stream_ffi.ffi_stream_get_u16(self))
+  local uint16 = ffi.new("uint16_t [1]")
+  if stream_ffi.ffi_stream_get_u16(self, uint16) then
+    return uint16[0]
+  end
 end
 
 function stream_mt:GetU32()
-  return tonumber(stream_ffi.ffi_stream_get_u32(self))
+  local uint32 = ffi.new("uint32_t [1]")
+  if stream_ffi.ffi_stream_get_u32(self, uint32) then
+    return uint32[0]
+  end
 end
 
 function stream_mt:GetU30()
-  if not stream_ffi.ffi_stream_get_u30(self, uint32) then
-    return nil
+  local uint32 = ffi.new("uint32_t [1]")
+  if stream_ffi.ffi_stream_get_u30(self, uint32) then
+    return uint32[0]
   end
-  return uint32[0]
 end
 
 function stream_mt:GetABCS32()
@@ -120,19 +136,30 @@ function stream_mt:GetABCU32()
 end
 
 function stream_mt:GetD64()
-  return tonumber(stream_ffi.ffi_stream_get_d64(self))
+  local d64 = ffi.new("double [1]")
+  if stream_ffi.ffi_stream_get_d64(self, d64) then
+    return d64[0]
+  end
 end
 
 function stream_mt:GetBytes()
+  local buff = ffi.new("uint8_t* [1]")
+  local buflen = ffi.new("size_t [1]")
   stream_ffi.ffi_stream_get_bytes(self, buff, buflen)
-
-  return ffi.string(buff[0], buflen[0])
+  if buff[0] ~= ffi.NULL and buflen[0] > 0 then
+    return ffi.string(buff[0], buflen[0])
+  end
 end
 
 function stream_mt:GetString()
+  local buff = ffi.new("uint8_t* [1]")
+  local buflen = ffi.new("size_t [1]")
   stream_ffi.ffi_stream_get_string(self, buff, buflen)
-
-  return ffi.string(buff[0], buflen[0])
+  if buff[0] ~= ffi.NULL then
+    return ffi.string(buff[0], buflen[0])
+  else
+    return nil, buflen[0]
+  end
 end
 
 function stream_mt:AddU8(u)

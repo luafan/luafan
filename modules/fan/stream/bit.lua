@@ -168,9 +168,15 @@ function stream_mt:AddBytes(s)
 end
 
 function stream_mt:GetBytes(len)
-  if not len then
-    len = self:available()
+  local available = self:available()
+  if not len or len > available then
+    len = available
   end
+
+  if len <= 0 then
+    return nil
+  end
+
   local s = string.sub(self.data, self.offset, self.offset + len - 1)
   self.offset = self.offset + len
 
