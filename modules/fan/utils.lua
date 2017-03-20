@@ -52,8 +52,8 @@ if jit then
     int gettimeofday(struct timeval* t, void* tzp);
   ]]
 
+  local t = ffi.new("timeval")
   function m.gettime()
-    local t = ffi.new("timeval")
     ffi.C.gettimeofday(t, nil)
     return tonumber(t.tv_sec) + tonumber(t.tv_usec)/1000000.0
   end

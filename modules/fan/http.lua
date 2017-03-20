@@ -1,4 +1,9 @@
 local tcpd = require "fan.tcpd"
+local string = string
+local table = table
+local type = type
+local coroutine = coroutine
+local tonumber = tonumber
 
 local function request(method, args)
   if type(args) == "string" then
