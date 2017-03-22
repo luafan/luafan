@@ -147,6 +147,7 @@ local function connect(host, port, path)
   end
 
   local obj = {
+    _conn = conn,
     _fifo_read = nil,
     _fifo_write = nil,
     _readstream = stream.new(),
@@ -261,10 +262,9 @@ local function bind(host, port, path)
               apt.onread(apt._readstream)
             end
           end,
-          -- ondisconnected = function(msg)
-          -- apt.disconnected = true
-          -- print("ondisconnected", msg)
-          -- end
+          ondisconnected = function(msg)
+          apt:_ondisconnected(msg)
+          end
         }
 
         local output = stream.new()

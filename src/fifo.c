@@ -37,13 +37,11 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
   FIFO *fifo = (FIFO *)arg;
 
   char buf[READ_BUFF_LEN];
-  int len;
-
-  len = read(fd, buf, READ_BUFF_LEN);
+  int len = read(fd, buf, READ_BUFF_LEN);
 
   if (len <= 0) {
-    if (errno == EAGAIN || errno == EINTR) {
-      // printf("fifo_read_cb EAGAIN\n");
+    if (len < 0 && (errno == EAGAIN || errno == EINTR)) {
+      printf("fifo_read_cb: %s\n", strerror(errno));
       return;
     }
     if (fifo->onDisconnectedRef != LUA_NOREF) {
@@ -52,16 +50,18 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
 
-      if (len == 0) {
-        lua_pushliteral(co, "pipe closed.");
-      } else {
-        lua_pushstring(co, strerror(errno));
-      }
+      lua_pushstring(co, len < 0 && errno ? strerror(errno) : "pipe closed.");
 
       utlua_resume(co, fifo->L, 1);
       POP_REF(fifo->L);
+    } else {
+      printf("fifo_read_cb:%s: %s\n", fifo->name, len < 0 && errno ? strerror(errno) : "pipe closed.");
     }
 
+    // if (fifo->read_ev) {
+    //   event_del(fifo->read_ev);
+    //   fifo->read_ev = NULL;
+    // }
     return;
   }
 
@@ -225,8 +225,8 @@ LUA_API int luafan_fifo_send(lua_State *L) {
   if (data && data_len > 0) {
     int len = write(fifo->socket, data, data_len);
     if (len <= 0) {
-      if (errno == EAGAIN || errno == EINTR) {
-        // printf("luafan_fifo_send EAGAIN\n");
+      if (len < 0 && (errno == EAGAIN || errno == EINTR)) {
+        printf("luafan_fifo_send: %s\n", strerror(errno));
         lua_pushinteger(L, 0);
         return 1;
       }
@@ -237,20 +237,18 @@ LUA_API int luafan_fifo_send(lua_State *L) {
 
         lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
 
-        if (len == 0) {
-          lua_pushliteral(co, "pipe closed.");
-        } else {
-          lua_pushstring(co, strerror(errno));
-        }
+        lua_pushstring(co, len < 0 && errno ? strerror(errno) : "pipe closed.");
 
         utlua_resume(co, fifo->L, 1);
         POP_REF(fifo->L);
+      } else {
+        printf("luafan_fifo_send:%s: %s\n", fifo->name, len < 0 && errno ? strerror(errno) : "pipe closed.");
       }
 
-      // if (fifo->write_ev) {
-      //   event_del(fifo->write_ev);
-      //   fifo->write_ev = NULL;
-      // }
+      if (fifo->write_ev) {
+        event_del(fifo->write_ev);
+        fifo->write_ev = NULL;
+      }
     }
 
     lua_pushinteger(L, len);

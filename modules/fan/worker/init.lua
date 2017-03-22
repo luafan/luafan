@@ -67,7 +67,6 @@ end
 
 function loadbalance_mt:telldone(slave)
   slave.jobcount = slave.jobcount - 1
-
   self:_assign(slave)
 end
 
@@ -75,7 +74,6 @@ local master_mt = {}
 master_mt.__index = function(obj, k)
   if obj.func_names[k] then
     return function(obj, ...)
-      -- local slave = obj.slave_pool:pop()
       local slave = obj.loadbalance:findbest()
 
       local task_key = string.format("%d", slave.task_index)
@@ -91,8 +89,15 @@ master_mt.__index = function(obj, k)
         return
       end
 
-      slave.task_map[task_key] = coroutine.running()
-      return coroutine.yield()
+      -- slave resume maybe faster than master's salve:send resume
+      if slave.task_map[task_key] then
+        local args = slave.task_map[task_key]
+        slave.task_map[task_key] = nil
+        return table.unpack(args)
+      else
+        slave.task_map[task_key] = coroutine.running()
+        return coroutine.yield()
+      end
     end
   end
 end
@@ -133,6 +138,7 @@ local function new(funcmap, slavecount, max_job_count, url)
 
   if master then
     if not samehost and slavecount > 0 then
+      error("master/slave within one script not allowed.")
       return
     end
     if cpu_count > 1 then
@@ -196,6 +202,8 @@ local function new(funcmap, slavecount, max_job_count, url)
             if not st then
               print(msg)
             end
+          else
+            apt.task_map[args[1]] = {true, table.unpack(args, 2, maxn(args))}
           end
 
           obj.loadbalance:telldone(apt)

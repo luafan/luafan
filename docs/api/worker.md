@@ -4,10 +4,10 @@ APIs
 * `worker.new(funcmap, slavecount, max_job_count, url)`
 	* `funcmap` defines tasks to be run on slave process.
 
-	
+
 	* `slavecount` defines number of slave process to start, each slave process will bind to one cpu core with affinity(if support).
 
-	
+
 	* `max_job_count` defines number of task per slave can run.
 
 	* `url` defines how does slave connect to master, can be fifo url or tcp url, if not set, default fifo tunnel is created.
@@ -154,5 +154,5 @@ fan.loop(function()
     end
   end)
 
-print("quit master"
+print("quit master")
 ```
