@@ -543,34 +543,3 @@ return {
   BUILTIN_VALUE_NOW = BUILTIN_VALUE_NOW,
   FIELD_ID_KEY = FIELD_ID_KEY
 }
-
--- local mariadb = require "mariadb"
--- local conn = assert(mariadb.connect("test", "root", "pink2015", "192.168.99.100", 3306))
-
--- local ctx = new(conn, {
--- ["hi"] = {
--- ["aa"] = "varchar(2)",
--- ["bb"] = "varchar(3)",
--- ["cc"] = "int(4)",
--- }
--- })
-
--- ctx.hi("new", {
--- ["aa"] = "tt",
--- ["bb"] = "eee",
--- ["cc"] = 66
--- })
-
--- local list = ctx.hi("list")
--- for i,v in ipairs(list) do
--- print(v.aa, v.bb, v.cc)
--- v.cc = math.random(100)
--- v:update()
--- end
-
--- local list = ctx:select("select * from hi")
--- for i,v in ipairs(list) do
--- print(json.encode(v))
--- end
-
--- os.exit()
