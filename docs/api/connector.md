@@ -180,3 +180,137 @@ fan.loop(function()
      end
 end)
 ```
+
+* connector.udp io benchmark
+
+```lua
+local fan = require "fan"
+local config = require "config"
+
+-- override config settings.
+config.udp_mtu = 8192
+config.udp_waiting_count = 10
+config.udp_package_timeout = 3
+
+local utils = require "fan.utils"
+local connector = require "fan.connector"
+
+if fan.fork() > 0 then
+  local longstr = string.rep("abc", 102400)
+  print(#(longstr))
+
+  fan.loop(function()
+      fan.sleep(1)
+      cli = connector.connect("udp://127.0.0.1:10000")
+
+      local count = 0
+      local last_count = 0
+      local last_time = utils.gettime()
+
+      coroutine.wrap(function()
+          while true do
+            fan.sleep(2)
+            print(string.format("count=%d speed=%1.03f", count, (count - last_count) / (utils.gettime() - last_time)))
+            last_time = utils.gettime()
+            last_count = count
+          end
+      end)()
+
+      cli.onread = function(body)
+        count = count + 1
+        -- print("cli onread", #(body))
+        assert(body == longstr)
+        -- local start = utils.gettime()
+        cli:send(longstr)
+        -- print(utils.gettime() - start)
+      end
+
+      cli:send(longstr)
+    end)
+else
+  local co = coroutine.create(function()
+      serv = connector.bind("udp://127.0.0.1:10000")
+      serv.onaccept = function(apt)
+        print("onaccept")
+        apt.onread = function(body)
+          -- print("apt onread", #(body))
+          apt:send(body)
+        end
+      end
+    end)
+  assert(coroutine.resume(co))
+
+  fan.loop()
+
+end
+```
+
+* connector.tcp io benchmark
+
+```lua
+local fan = require "fan"
+local stream = require "fan.stream"
+local connector = require "fan.connector"
+
+local data = string.rep([[coroutine.create]], 10000)
+
+local co = coroutine.create(function()
+    serv = connector.bind("tcp://127.0.0.1:10000")
+    serv.onaccept = function(apt)
+      print("onaccept")
+      local last_expect = 1
+
+      while true do
+        local input = apt:receive(last_expect)
+        if not input then
+          break
+        end
+        -- print("serv read", input:available())
+
+        local str,expect = input:GetString()
+        if str then
+          last_expect = 1
+
+          assert(str == data)
+
+          local d = stream.new()
+          d:AddString(str)
+          apt:send(d:package())
+        else
+          last_expect = expect
+        end
+      end
+    end
+  end)
+coroutine.resume(co)
+
+fan.loop(function()
+    cli = connector.connect("tcp://127.0.0.1:10000")
+    local d = stream.new()
+    d:AddString(data)
+    cli:send(d:package())
+
+    local last_expect = 1
+
+    while true do
+      local input = cli:receive(last_expect)
+      if not input then
+        break
+      end
+      -- print("cli read", input:available())
+
+      local str,expect = input:GetString()
+      if str then
+        last_expect = 1
+
+        assert(str == data)
+
+        local d = stream.new()
+        d:AddString(str)
+        cli:send(d:package())
+      else
+        last_expect = expect
+      end
+    end
+  end)
+```

@@ -19,7 +19,7 @@ stream api in c/lua to cross luajit and lua5.2+
 * `GetU24()` read byte(3) as unsigned integer.
 * `GetU16()` read byte(2) as unsigned integer.
 * `GetU32()` read byte(4) as unsigned integer.
-* `GetU30()` read byte(1-5) as unsigned integer, use 7-bit of each byte to storage integer, if the high bit is 1, that means next byte is part of this integer.
+* `GetU30()` read byte(1-5) as unsigned integer, use 7-bit of each byte to storage integer, if the high bit is 1, that means next byte is part of this integer, return nil if buflen is not enough.
 * `GetD64()` read byte(8) as double
 * `GetBytes(length:number)` read byte(length) as string.
 * `GetString()` read string, if buffer length does enough, return nil,expect_length.
