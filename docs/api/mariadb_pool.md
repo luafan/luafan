@@ -5,7 +5,7 @@ mariadb.pool
 
 create a new connection context pool. all arguments will be passed to `orm.new(conn, ...)`.
 
-all the mariadb parameters are coming from `require "config"`.
+all the mariadb parameters are coming from [config](config.md).
 
 ### APIs
 * `safe(func, ...)` schedule a context from pool, pass to `func(context, ...)`, return context to pool at the end of `func`, the return value is from `func`.

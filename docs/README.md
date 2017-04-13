@@ -25,7 +25,10 @@ luafan is a non-blocking module collection to lua.
 
 ## POOL
 * [mariadb.pool](api/mariadb_pool.md) mariadb simple connection pool.
-* 
+
+## Config
+* [config](config.md) common config.
+
 Introduce
 =========
 

@@ -14,7 +14,7 @@ local config = require "config"
 local pool_mt = {}
 pool_mt.__index = pool_mt
 
-local pool = {idle = {}, yielding = {head = nil, tail = nil}, count = config.maria_pool_count}
+local pool = {idle = {}, yielding = {head = nil, tail = nil}, count = config.maria_pool_size}
 
 local function maxn(t)
     local n = 0

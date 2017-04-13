@@ -11,7 +11,7 @@ local config = require "config"
 local pool_mt = {}
 pool_mt.__index = pool_mt
 
-local pool = {idle = {}, yielding = {head = nil, tail = nil}, count = config.worker_pool_count or 10}
+local pool = {idle = {}, yielding = {head = nil, tail = nil}, count = config.pool_size or 10}
 
 local function maxn(t)
   local n = 0
