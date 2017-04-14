@@ -66,18 +66,18 @@ MemTotal:        3922816 kB
 
 * listen on fifo file, and service echo request.
 
-  * benchmark result: 46k/s avg.
+  * benchmark result: 59k/s avg.
 
 ```
-count=89535 speed=44770.430
-count=183186 speed=46825.617
-count=277757 speed=47285.906
-count=371796 speed=47019.904
-count=466038 speed=47121.213
-count=560475 speed=47219.085
-count=653294 speed=46409.915
-count=736497 speed=41601.832
-count=829966 speed=46734.896
+count=118723 speed=59361.918
+count=237557 speed=59417.623
+count=356271 speed=59357.149
+count=475312 speed=59521.302
+count=593905 speed=59297.002
+count=711984 speed=59040.119
+count=830336 speed=59176.649
+count=949218 speed=59441.624
+count=1067916 speed=59349.566
 ```
 
   * code
@@ -90,7 +90,7 @@ local utils = require "fan.utils"
 local fifoname = connector.tmpfifoname()
 local url = "fifo:" .. fifoname
 
-local data = string.rep("abc", 1024)
+local data = string.rep("abc", 1) -- change 1024 to 1 to test ping/pong performance.
 
 local co = coroutine.create(function()
     serv = connector.bind(url)

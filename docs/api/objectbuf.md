@@ -48,19 +48,59 @@ decode lua object from string.
 Benchmark
 =========
 
+## benchmark server
+
+```
+Linux XXXXXX 4.4.0-70-generic #91-Ubuntu SMP Wed Mar 22 12:47:43 UTC 2017 x86_64 x86_64 x86_64 GNU/Linux
+
+Intel(R) Core(TM) i7-2640M CPU @ 2.80GHz
+
+MemTotal:        3922816 kB
+```
+
 * result
 
 | LUA Version | Name                | Time Cost (sec) |
 | ----------- | ------------------- |:---------------:|
-| luajit      | objectbuf           | 2.4335000514984 |
-| luajit      | objectbuf + sym     | 0.5157539844512 |
-| luajit      | cjson               | 8.1667900085449 |
+| luajit      | objectbuf           | 1.7200319766998 |
+| luajit      | objectbuf + sym     | 0.5656890869140 |
+| luajit      | cjson               | 7.1654288768768 |
+
+```
+objectbuf.encode	1.2554931640625
+objectbuf.decode	0.46449613571167
+objectbuf
+	1.7200319766998
+objectbuf.encode_sym	0.49760103225708
+objectbuf.decode_sym	0.068063020706177
+objectbuf.sym
+	0.56568908691406
+cjson.encode	3.6382949352264
+cjson.decode	3.5271048545837
+cjson
+	7.1654288768768
+```
 
 | LUA Version | Name                | Time Cost (sec) |
 | ----------- | ------------------- |:---------------:|
-| lua5.3      | objectbuf           | 4.0057001113892 |
-| lua5.3      | objectbuf + sym     | 0.9010729789733 |
-| lua5.3      | cjson               | 9.2845618724823 |
+| lua5.3      | objectbuf           | 2.3849251270294 |
+| lua5.3      | objectbuf + sym     | 0.7837250232696 |
+| lua5.3      | cjson               | 7.8768520355225 |
+
+```
+objectbuf.encode	1.9406111240387
+objectbuf.decode	0.44426012039185
+objectbuf
+	2.3849251270294
+objectbuf.encode_sym	0.69732403755188
+objectbuf.decode_sym	0.086374998092651
+objectbuf.sym
+	0.78372502326965
+cjson.encode	4.0115370750427
+cjson.decode	3.8652799129486
+cjson
+	7.8768520355225
+```
 
 * code
 
@@ -98,7 +138,7 @@ for i=1,100 do
     table.insert(a.b, string.rep("abc", math.random(1000)))
 end
 
-local sym = objectbuf.symbol({ b = {a = ""}, averyvery = ""})
+local sym = objectbuf.symbol(a)
 
 local loopcount = 10000
 

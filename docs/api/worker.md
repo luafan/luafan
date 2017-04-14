@@ -15,7 +15,42 @@ APIs
 Samples
 =======
 
+## benchmark server
+
+```
+Linux XXXXXX 4.4.0-70-generic #91-Ubuntu SMP Wed Mar 22 12:47:43 UTC 2017 x86_64 x86_64 x86_64 GNU/Linux
+
+Intel(R) Core(TM) i7-2640M CPU @ 2.80GHz
+
+MemTotal:        3922816 kB
+```
+
 * master/slave process on same host with fifo tunnel.
+
+  * benchmark result: 45k/s
+
+```
+count=87218 speed=43606.889
+1	14496	running	3
+2	14597	running	3
+3	14528	running	3
+count=178864 speed=45821.995
+1	29774	running	3
+2	29873	running	3
+3	29797	running	3
+count=270848 speed=45992.740
+1	45102	running	3
+2	45208	running	3
+3	45126	running	3
+count=362540 speed=45845.197
+1	60377	running	3
+2	60492	running	3
+3	60413	running	3
+count=453580 speed=45519.501
+1	75672	running	3
+2	75845	running	3
+3	75285	running	3
+```
 
 ```lua
 local fan = require "fan"
@@ -74,7 +109,6 @@ fan.loop(function()
   end)
 
 print("quit master")
-
 ```
 
 * master & slave on different host.
