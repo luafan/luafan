@@ -1,13 +1,13 @@
 Quick Guide
 ===========
 
-1. complie latest libevent or install libevent-dev in your machine, e.g. for ubuntu, `sudo apt-get install libevent-dev`
+* complie latest libevent or install libevent-dev in your machine, e.g. for ubuntu, `sudo apt-get install libevent-dev`
 
-2. `luarocks install luafanmicro`
+* `luarocks install luafanmicro`
 
-3. save sample lua as "hello.lua", then run with `luajit hello.lua` or  `lua5.3 hello.lua` (module from luarocks only support luajit or lua5.2+)
+* save sample lua as "hello.lua", then run with `luajit hello.lua` or  `lua5.3 hello.lua` (module from luarocks only support luajit or lua5.2+)
 
-```
+```lua
 local fan = require "fan"
 
 local function main(time)

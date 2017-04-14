@@ -1,7 +1,7 @@
 ## Quick Setup
 * ubuntu 14.04 + luajit + luafanlite
 
-```
+```sh
 cd
 sudo apt-get update
 sudo apt-get install -y wget lua5.1-dev lua5.1 luajit make gcc libc-dev libcurl4-openssl-dev libevent-dev git
@@ -22,7 +22,7 @@ sudo luarocks install luafanlite
 
 * ubuntu 14.04 + luajit + luafan with mariadb
 
-```
+```sh
 cd
 apt-get update
 apt-get install -y wget lua5.1-dev lua5.1 luajit make gcc libc-dev libcurl4-openssl-dev libevent-dev git libevent-2.0-5 libevent-core-2.0-5 libevent-extra-2.0-5 libevent-openssl-2.0-5 libcurl3 cmake g++ bison libncurses5-dev libssl-dev

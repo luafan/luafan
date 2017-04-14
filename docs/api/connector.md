@@ -54,7 +54,33 @@ SERV
 Samples
 =======
 
+## benchmark server
+
+```
+Linux XXXXXX 4.4.0-70-generic #91-Ubuntu SMP Wed Mar 22 12:47:43 UTC 2017 x86_64 x86_64 x86_64 GNU/Linux
+
+Intel(R) Core(TM) i7-2640M CPU @ 2.80GHz
+
+MemTotal:        3922816 kB
+```
+
 * listen on fifo file, and service echo request.
+
+  * benchmark result: 46k/s avg.
+
+```
+count=89535 speed=44770.430
+count=183186 speed=46825.617
+count=277757 speed=47285.906
+count=371796 speed=47019.904
+count=466038 speed=47121.213
+count=560475 speed=47219.085
+count=653294 speed=46409.915
+count=736497 speed=41601.832
+count=829966 speed=46734.896
+```
+
+  * code
 
 ```lua
 local fan = require "fan"
@@ -118,6 +144,23 @@ end)
 
 * listen on tcp port, and service echo request.
 
+  * benchmark result, 41k/s avg.
+
+```
+count=75811 speed=37907.827
+count=163627 speed=43908.398
+count=253310 speed=44841.976
+count=339962 speed=43325.525
+count=419818 speed=39929.276
+count=509269 speed=44725.767
+count=593292 speed=42011.710
+count=678407 speed=42557.688
+count=761588 speed=41590.897
+count=850561 speed=44486.792
+```
+
+  * code
+
 ```lua
 local fan = require "fan"
 local connector = require "fan.connector"
@@ -166,6 +209,8 @@ fan.loop(function()
         end
     end)()
 
+    local data = os.date()
+
     while true do
         local input = cli:receive()
         if not input then
@@ -176,12 +221,28 @@ fan.loop(function()
         input:GetBytes()
         count = count + 1
 
-        cli:send(os.date())
+        cli:send(data)
      end
 end)
 ```
 
 * connector.udp io benchmark
+
+  * iftop result: 190 MB/s
+
+```
+                373Mb         745Mb          1.09Gb        1.46Gb
+  └─────────────┴─────────────┴──────────────┴─────────────┴──────────────
+  localhost              => localhost              1.54Gb  1.53Gb  1.51Gb
+                         <=                           0b      0b      0b
+
+  ────────────────────────────────────────────────────────────────────────
+  TX:             cum:   26.4GB   peak:   rates:   1.54Gb  1.53Gb  1.51Gb
+  RX:                       0B               0b       0b      0b      0b
+  TOTAL:                 26.4GB           1.54Gb   1.54Gb  1.53Gb  1.51Gb
+```
+
+  * code
 
 ```lua
 local fan = require "fan"
@@ -207,19 +268,19 @@ if fan.fork() > 0 then
       local last_count = 0
       local last_time = utils.gettime()
 
-      coroutine.wrap(function()
-          while true do
-            fan.sleep(2)
-            print(string.format("count=%d speed=%1.03f", count, (count - last_count) / (utils.gettime() - last_time)))
-            last_time = utils.gettime()
-            last_count = count
-          end
-      end)()
+      -- coroutine.wrap(function()
+      --     while true do
+      --       fan.sleep(2)
+      --       print(string.format("count=%d speed=%1.03f", count, (count - last_count) / (utils.gettime() - last_time)))
+      --       last_time = utils.gettime()
+      --       last_count = count
+      --     end
+      -- end)()
 
       cli.onread = function(body)
         count = count + 1
         -- print("cli onread", #(body))
-        assert(body == longstr)
+        -- assert(body == longstr)
         -- local start = utils.gettime()
         cli:send(longstr)
         -- print(utils.gettime() - start)
@@ -247,12 +308,28 @@ end
 
 * connector.tcp io benchmark
 
+* iftop result: 338 MB/s
+
+```
+              369Mb         738Mb          1.08Gb        1.44Gb   1.80Gb
+└─────────────┴─────────────┴──────────────┴─────────────┴──────────────
+localhost              => localhost              2.71Gb  2.63Gb  2.64Gb
+                       <=                           0b      0b      0b
+
+────────────────────────────────────────────────────────────────────────
+TX:             cum:   25.4GB   peak:   rates:   2.71Gb  2.63Gb  2.64Gb
+RX:                       0B               0b       0b      0b      0b
+TOTAL:                 25.4GB           2.71Gb   2.71Gb  2.63Gb  2.64Gb
+```
+
+* code
+
 ```lua
 local fan = require "fan"
 local stream = require "fan.stream"
 local connector = require "fan.connector"
 
-local data = string.rep([[coroutine.create]], 10000)
+local data = string.rep([[coroutine.create]], 1000)
 
 local co = coroutine.create(function()
     serv = connector.bind("tcp://127.0.0.1:10000")

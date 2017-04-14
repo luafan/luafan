@@ -38,8 +38,8 @@ Introduce
 
 There are 3 spec in luarocks, luafan/luafanlite/luafanmicro
 
-* `luafan` contains `fifo` `tcpd` `udpd` `httpd` `stream` `http` `mariadb` depends `libevent curl openssl mariadb`
+* `luafan` contains `fifo` `tcpd` `udpd` `httpd` `stream` `objectbuf` `http` `mariadb` depends `libevent curl openssl mariadb`
 
-* `luafanlite` contains `fifo` `tcpd` `udpd` `httpd` `stream` `http` depends `libevent curl openssl`
+* `luafanlite` contains `fifo` `tcpd` `udpd` `httpd` `stream` `objectbuf` `http` depends `libevent curl openssl`
 
-* `luafanmicro` contains `fifo` `tcpd` `udpd` `httpd` `stream` depends `libevent`
+* `luafanmicro` contains `fifo` `tcpd` `udpd` `httpd` `stream` `objectbuf` depends `libevent`
