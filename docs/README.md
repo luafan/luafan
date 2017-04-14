@@ -1,3 +1,7 @@
+[![Build Status](https://travis-ci.org/luafan/luafan.svg?branch=master)](https://travis-ci.org/luafan/luafan)
+[![CircleCI](https://circleci.com/gh/luafan/luafan.svg?style=svg)](https://circleci.com/gh/luafan/luafan)
+[GitHub](https://github.com/luafan/luafan)
+
 # LUAFAN
 
 luafan is a non-blocking module collection to lua.
