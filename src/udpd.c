@@ -293,31 +293,67 @@ LUA_API int udpd_new(lua_State *L) {
   return 1;
 }
 
+struct make_dest_callback_data {
+    const char *host;
+
+    lua_State *L;
+    bool yielded;
+};
+
+void udpd_conn_make_dest_callback(int errcode, struct evutil_addrinfo *addr, void *ptr) {
+  struct make_dest_callback_data *data = ptr;
+  lua_State *L = data->L;
+
+  if (errcode) {
+    lua_pushnil(L);
+    lua_pushfstring(L, "%s -> %s", data->host, evutil_gai_strerror(errcode));
+
+    if (data->yielded) {
+      utlua_resume(L, NULL, 2);
+    }
+  } else {
+    Dest *dest = lua_newuserdata(L, sizeof(Dest));
+    luaL_getmetatable(L, LUA_UDPD_DEST_TYPE);
+    lua_setmetatable(L, -2);
+
+    memcpy(&dest->si_client, addr->ai_addr, addr->ai_addrlen);
+    dest->client_len = addr->ai_addrlen;
+
+    if (data->yielded) {
+      utlua_resume(L, NULL, 1);
+    }
+  }
+
+}
+
 LUA_API int udpd_conn_make_dest(lua_State *L) {
   const char *host = luaL_checkstring(L, 1);
   char portbuf[6];
   evutil_snprintf(portbuf, sizeof(portbuf), "%d", (int)luaL_checkinteger(L, 2));
 
-  Dest *dest = lua_newuserdata(L, sizeof(Dest));
-  luaL_getmetatable(L, LUA_UDPD_DEST_TYPE);
-  lua_setmetatable(L, -2);
+  lua_settop(L, 2);
+
+  struct make_dest_callback_data *data = malloc(sizeof(struct make_dest_callback_data));
+
+  data->L = L;
+  data->host = host;
+  data->yielded = false;
 
   struct evutil_addrinfo hints = {0};
-  struct evutil_addrinfo *answer = NULL;
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_DGRAM;
   hints.ai_protocol = IPPROTO_UDP;
   hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
-  int err = evutil_getaddrinfo(host, portbuf, &hints, &answer);
-  if (err < 0) {
-    luaL_error(L, "invaild address %s:%s", host, portbuf);
+
+  struct evdns_getaddrinfo_request *req = evdns_getaddrinfo(
+                          event_mgr_dnsbase(), host, portbuf,
+                          &hints, udpd_conn_make_dest_callback, data);
+  if (req == NULL) {
+    return lua_gettop(L) - 2;
+  } else {
+    data->yielded = true;
+    return lua_yield(L, 0);
   }
-
-  memcpy(&dest->si_client, answer->ai_addr, answer->ai_addrlen);
-  dest->client_len = answer->ai_addrlen;
-  evutil_freeaddrinfo(answer);
-
-  return 1;
 }
 
 static const luaL_Reg udpdlib[] = {

@@ -4,7 +4,9 @@
 
 # LUAFAN
 
-luafan is a non-blocking module collection to lua.
+luafan is a non-blocking/single-process module collection to lua, full supported lua coroutine.
+luafan simulated blocking code style over non-blocking implementation.
+It's easy to write several api invocations one by one without any callback.
 
 * [Quick Guide](guide.md)
 * [Setup](setup.md)

@@ -40,7 +40,7 @@ close this connection.
 
 * `cli:send(buf)` (udp with embedded private protocol)
 
-send buf on background, using embedded private protocol to control squence, buf size limit around 65536 * (MTU payload len), support 33.75MB (65536 * (576 - 8 - 20 - 8)) over internet at last.
+send buf on background, using embedded private protocol to control squence, buf size limit around 65536 * (MTU payload len), support 33.75MB (65536 * (576 - 8 - 20 - 8)) over internet at least.
 
 * `cli.onread = function(buf) end` (udp with embedded private protocol)
 
