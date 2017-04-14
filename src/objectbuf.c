@@ -46,7 +46,7 @@ void ffi_stream_add_d64(BYTEARRAY *ba, double value);
 void ffi_stream_add_string(BYTEARRAY *ba, const char *data, size_t len);
 
 bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *result);
-double ffi_stream_get_d64(BYTEARRAY *ba, double *result);
+bool ffi_stream_get_d64(BYTEARRAY *ba, double *result);
 void ffi_stream_get_string(BYTEARRAY *ba, uint8_t **buff, size_t *buflen);
 
 static void packer(lua_State *L, CTX *ctx, int obj_index);
@@ -227,23 +227,19 @@ static void ctx_init(CTX *ctx, lua_State *L) {
 }
 
 LUA_API int luafan_objectbuf_encode(lua_State *L) {
-  int obj_index = 0;
+  int obj_index = 1;
   int sym_idx = 0;
-  switch (lua_gettop(L)) {
-  case 0:
+  if (lua_isnoneornil(L, 1)) {
     luaL_error(L, "no argument.");
     return 0;
-  default:
-  case 2:
+  }
+  if (lua_istable(L, 2)) {
     sym_idx = 2;
-  case 1:
-    obj_index = 1;
-    break;
   }
 
-  if (lua_type(L, 1) == LUA_TBOOLEAN) {
+  if (lua_isboolean(L, 1)) {
     int value = lua_toboolean(L, 1);
-    lua_pushfstring(L, "%c", value ? 1 : 0);
+    lua_pushstring(L, value ? "\x01": "\x00");
     return 1;
   }
 
@@ -460,7 +456,7 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
   bytearray_wrap_buffer(&input, (uint8_t *)buf, len); // will not change buf.
 
   int sym_idx = 0;
-  if (lua_gettop(L) > 1) {
+  if (lua_istable(L, 2)) {
     sym_idx = 2;
   }
 
@@ -508,7 +504,7 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
     uint32_t count = 0;
     if(!ffi_stream_get_u30(&input, &count)){
       lua_pushnil(L);
-      lua_pushliteral(L, "decode failed.");
+      lua_pushliteral(L, "decode failed, can't get `number` count.");
       return 2;
     }
     uint32_t i = 1;
@@ -516,7 +512,7 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
       double result = 0;
       if(!ffi_stream_get_d64(&input, &result)){
         lua_pushnil(L);
-        lua_pushliteral(L, "decode failed.");
+        lua_pushfstring(L, "decode failed, can't decode `number`, %d/%d", i, count);
         return 2;
       }
       lua_pushnumber(L, result);
