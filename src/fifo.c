@@ -132,14 +132,7 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
 
   if (strstr(rwmode, "r")) {
     rwmodei = O_RDONLY;
-
-    lua_getfield(L, 1, "onread");
-    if (lua_isfunction(L, -1)) {
-      fifo->onReadRef = luaL_ref(L, LUA_REGISTRYINDEX);
-    } else {
-      lua_pop(L, 1);
-      fifo->onReadRef = LUA_NOREF;
-    }
+    SET_FUNC_REF_FROM_TABLE(L, fifo->onReadRef, 1, "onread")
   } else {
     fifo->onReadRef = LUA_NOREF;
   }
@@ -151,21 +144,8 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
       rwmodei = O_WRONLY;
     }
 
-    lua_getfield(L, 1, "onsendready");
-    if (lua_isfunction(L, -1)) {
-      fifo->onSendReadyRef = luaL_ref(L, LUA_REGISTRYINDEX);
-    } else {
-      lua_pop(L, 1);
-      fifo->onSendReadyRef = LUA_NOREF;
-    }
-
-    lua_getfield(L, 1, "ondisconnected");
-    if (lua_isfunction(L, -1)) {
-      fifo->onDisconnectedRef = luaL_ref(L, LUA_REGISTRYINDEX);
-    } else {
-      fifo->onDisconnectedRef = LUA_NOREF;
-      lua_pop(L, 1);
-    }
+    SET_FUNC_REF_FROM_TABLE(L, fifo->onSendReadyRef, 1, "onsendready")
+    SET_FUNC_REF_FROM_TABLE(L, fifo->onDisconnectedRef, 1, "ondisconnected")
   } else {
     fifo->onSendReadyRef = LUA_NOREF;
     fifo->onDisconnectedRef = LUA_NOREF;
@@ -261,15 +241,10 @@ LUA_API int luafan_fifo_send(lua_State *L) {
 
 LUA_API int luafan_fifo_close(lua_State *L) {
   FIFO *fifo = luaL_checkudata(L, 1, LUA_FIFO_CONNECTION_TYPE);
-  if (fifo->onReadRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, fifo->onReadRef);
-    fifo->onReadRef = LUA_NOREF;
-  }
 
-  if (fifo->onSendReadyRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, fifo->onSendReadyRef);
-    fifo->onSendReadyRef = LUA_NOREF;
-  }
+  CLEAR_REF(L, fifo->onReadRef)
+  CLEAR_REF(L, fifo->onSendReadyRef)
+  CLEAR_REF(L, fifo->onDisconnectedRef)
 
   if (event_mgr_base() && fifo->read_ev) {
     event_del(fifo->read_ev);

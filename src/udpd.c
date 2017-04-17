@@ -39,15 +39,8 @@ LUA_API int lua_udpd_conn_gc(lua_State *L) {
     conn->host = NULL;
   }
 
-  if (conn->onReadRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onReadRef);
-    conn->onReadRef = LUA_NOREF;
-  }
-
-  if (conn->onSendReadyRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-    conn->onSendReadyRef = LUA_NOREF;
-  }
+  CLEAR_REF(L, conn->onReadRef)
+  CLEAR_REF(L, conn->onSendReadyRef)
 
   if (event_mgr_base() && conn->read_ev) {
     event_del(conn->read_ev);
@@ -162,46 +155,43 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L) {
     return 0;
   }
 
-  if (conn->bind_port >= 0) {
-    if (conn->bind_host) {
-      char portbuf[6];
-      evutil_snprintf(portbuf, sizeof(portbuf), "%d", conn->bind_port);
+  if (conn->bind_host) {
+    char portbuf[6];
+    evutil_snprintf(portbuf, sizeof(portbuf), "%d", conn->bind_port);
 
-      struct evutil_addrinfo hints = {0};
-      struct evutil_addrinfo *answer = NULL;
-      hints.ai_family = AF_INET;
-      hints.ai_socktype = SOCK_DGRAM;
-      hints.ai_protocol = IPPROTO_UDP;
-      hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
-      int err = evutil_getaddrinfo(conn->bind_host, portbuf, &hints, &answer);
-      if (err < 0) {
-        luaL_error(L, "invaild address %s:%d", conn->bind_host,
-                   conn->bind_port);
-      }
+    struct evutil_addrinfo hints = {0};
+    struct evutil_addrinfo *answer = NULL;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
+    int err = evutil_getaddrinfo(conn->bind_host, portbuf, &hints, &answer);
+    if (err < 0) {
+      luaL_error(L, "invaild address %s:%d", conn->bind_host, conn->bind_port);
+    }
 
-      struct sockaddr *addr = answer->ai_addr;
+    struct sockaddr *addr = answer->ai_addr;
 
-      // printf("binding fd=%d %s:%d\n", socket_fd, conn->bind_host,
-      // conn->bind_port);
+    // printf("binding fd=%d %s:%d\n", socket_fd, conn->bind_host,
+    // conn->bind_port);
 
-      int ret =
-          bind(socket_fd, (const struct sockaddr *)&addr, answer->ai_addrlen);
-      evutil_freeaddrinfo(answer);
+    int ret =
+        bind(socket_fd, (const struct sockaddr *)&addr, answer->ai_addrlen);
+    evutil_freeaddrinfo(answer);
 
-      if (ret == -1) {
-        luaL_error(L, "udp bind: %s", strerror(errno));
-        return 0;
-      }
-    } else {
-      struct sockaddr_in addr;
-      memset((char *)&addr, 0, sizeof(addr));
-      addr.sin_family = AF_INET;
-      addr.sin_port = htons(conn->bind_port);
-      addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (ret == -1) {
+      luaL_error(L, "udp bind: %s", strerror(errno));
+      return 0;
+    }
+  } else {
+    struct sockaddr_in addr;
+    memset((char *)&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(conn->bind_port);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-      if (bind(socket_fd, (const struct sockaddr *)&addr, sizeof(addr)) == -1) {
-        return 0;
-      }
+    if (bind(socket_fd, (const struct sockaddr *)&addr, sizeof(addr)) == -1) {
+      return 0;
     }
   }
 
@@ -237,51 +227,15 @@ LUA_API int udpd_new(lua_State *L) {
   conn->socket_fd = 0;
   conn->write_ev = NULL;
   conn->read_ev = NULL;
-  conn->bind_port = -1;
 
-  lua_getfield(L, 1, "onread");
-  if (lua_isfunction(L, -1)) {
-    conn->onReadRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    conn->onReadRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
+  SET_FUNC_REF_FROM_TABLE(L, conn->onReadRef, 1, "onread")
+  SET_FUNC_REF_FROM_TABLE(L, conn->onSendReadyRef, 1, "onsendready")
 
-  lua_getfield(L, 1, "onsendready");
-  if (lua_isfunction(L, -1)) {
-    conn->onSendReadyRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    conn->onSendReadyRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
+  DUP_STR_FROM_TABLE(L, conn->host, 1, "host")
+  SET_INT_FROM_TABLE(L, conn->port, 1, "port")
 
-  lua_getfield(L, 1, "host");
-  const char *host = lua_tostring(L, -1);
-  if (host) {
-    conn->host = strdup(host);
-  } else {
-    conn->host = NULL;
-  }
-  lua_pop(L, 1);
-
-  lua_getfield(L, 1, "port");
-  int port = (int)lua_tointeger(L, -1);
-  conn->port = port;
-  lua_pop(L, 1);
-
-  lua_getfield(L, 1, "bind_host");
-  const char *bind_host = luaL_optstring(L, -1, NULL);
-  if (bind_host) {
-    conn->bind_host = strdup(bind_host);
-  } else {
-    conn->bind_host = NULL;
-  }
-  lua_pop(L, 1);
-
-  lua_getfield(L, 1, "bind_port");
-  int bind_port = (int)luaL_optinteger(L, -1, 0);
-  conn->bind_port = bind_port;
-  lua_pop(L, 1);
+  DUP_STR_FROM_TABLE(L, conn->bind_host, 1, "bind_host")
+  SET_INT_FROM_TABLE(L, conn->bind_port, 1, "bind_port")
 
   luaL_getmetatable(L, LUA_UDPD_CONNECTION_TYPE);
   lua_setmetatable(L, -2);
@@ -294,13 +248,14 @@ LUA_API int udpd_new(lua_State *L) {
 }
 
 struct make_dest_callback_data {
-    const char *host;
+  const char *host;
 
-    lua_State *L;
-    bool yielded;
+  lua_State *L;
+  bool yielded;
 };
 
-void udpd_conn_make_dest_callback(int errcode, struct evutil_addrinfo *addr, void *ptr) {
+void udpd_conn_make_dest_callback(int errcode, struct evutil_addrinfo *addr,
+                                  void *ptr) {
   struct make_dest_callback_data *data = ptr;
   lua_State *L = data->L;
 
@@ -323,7 +278,6 @@ void udpd_conn_make_dest_callback(int errcode, struct evutil_addrinfo *addr, voi
       utlua_resume(L, NULL, 1);
     }
   }
-
 }
 
 LUA_API int udpd_conn_make_dest(lua_State *L) {
@@ -333,7 +287,8 @@ LUA_API int udpd_conn_make_dest(lua_State *L) {
 
   lua_settop(L, 2);
 
-  struct make_dest_callback_data *data = malloc(sizeof(struct make_dest_callback_data));
+  struct make_dest_callback_data *data =
+      malloc(sizeof(struct make_dest_callback_data));
 
   data->L = L;
   data->host = host;
@@ -345,9 +300,9 @@ LUA_API int udpd_conn_make_dest(lua_State *L) {
   hints.ai_protocol = IPPROTO_UDP;
   hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
 
-  struct evdns_getaddrinfo_request *req = evdns_getaddrinfo(
-                          event_mgr_dnsbase(), host, portbuf,
-                          &hints, udpd_conn_make_dest_callback, data);
+  struct evdns_getaddrinfo_request *req =
+      evdns_getaddrinfo(event_mgr_dnsbase(), host, portbuf, &hints,
+                        udpd_conn_make_dest_callback, data);
   if (req == NULL) {
     return lua_gettop(L) - 2;
   } else {

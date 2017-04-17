@@ -503,12 +503,7 @@ LUA_API int utd_bind(lua_State *L) {
   server->httpd = httpd;
   server->boundsocket = boundsocket;
 
-  lua_getfield(L, 1, "onService");
-  if (lua_isfunction(L, -1)) {
-    server->onServiceRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    lua_pop(L, 1);
-  }
+  SET_FUNC_REF_FROM_TABLE(L, server->onServiceRef, 1, "onService")
 
   evhttp_set_timeout(httpd, 120);
   evhttp_set_cb(httpd, "/smoketest", smoke_request_cb, NULL);

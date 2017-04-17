@@ -87,42 +87,22 @@ typedef struct {
   int onDisconnectedRef;
 } ACCEPT;
 
-static void tcpd_accept_unref(ACCEPT *accept) {
-  if (accept->onSendReadyRef != LUA_NOREF) {
-    luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onSendReadyRef);
-    accept->onSendReadyRef = LUA_NOREF;
-  }
-
-  if (accept->onReadRef != LUA_NOREF) {
-    luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onReadRef);
-    accept->onReadRef = LUA_NOREF;
-  }
-
-  if (accept->onDisconnectedRef != LUA_NOREF) {
-    luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onDisconnectedRef);
-    accept->onDisconnectedRef = LUA_NOREF;
-  }
-
-  if (accept->selfRef != LUA_NOREF) {
-    luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->selfRef);
-    accept->selfRef = LUA_NOREF;
-  }
-}
+#define TCPD_ACCEPT_UNREF(accept) \
+CLEAR_REF(accept->L, accept->onSendReadyRef) \
+CLEAR_REF(accept->L, accept->onReadRef)  \
+CLEAR_REF(accept->L, accept->onDisconnectedRef)  \
+CLEAR_REF(accept->L, accept->selfRef)
 
 LUA_API int lua_tcpd_server_close(lua_State *L) {
   SERVER *serv = luaL_checkudata(L, 1, LUA_TCPD_SERVER_TYPE);
-  if (serv->onAcceptRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, serv->onAcceptRef);
-    serv->onAcceptRef = LUA_NOREF;
-  }
-  if (serv->onSSLHostNameRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, serv->onSSLHostNameRef);
-    serv->onSSLHostNameRef = LUA_NOREF;
-  }
+  CLEAR_REF(L, serv->onAcceptRef)
+  CLEAR_REF(L, serv->onSSLHostNameRef)
+
   if (serv->host) {
     free(serv->host);
     serv->host = NULL;
   }
+
   if (event_mgr_base() && serv->listener) {
     evconnlistener_free(serv->listener);
     serv->listener = NULL;
@@ -195,14 +175,13 @@ static void tcpd_accept_eventcb(struct bufferevent *bev, short events,
         lua_pushnil(co);
       }
 
-      luaL_unref(accept->L, LUA_REGISTRYINDEX, accept->onDisconnectedRef);
-      accept->onDisconnectedRef = LUA_NOREF;
+      CLEAR_REF(accept->L, accept->onDisconnectedRef)
 
       utlua_resume(co, accept->L, 1);
       POP_REF(accept->L);
     }
 
-    tcpd_accept_unref(accept);
+    TCPD_ACCEPT_UNREF(accept)
   } else {
   }
 }
@@ -330,29 +309,9 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
   lua_pushvalue(L, 1);
   accept->selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
 
-  lua_getfield(L, 2, "onread");
-  if (lua_isfunction(L, -1)) {
-    accept->onReadRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    accept->onReadRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
-
-  lua_getfield(L, 2, "onsendready");
-  if (lua_isfunction(L, -1)) {
-    accept->onSendReadyRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    accept->onSendReadyRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
-
-  lua_getfield(L, 2, "ondisconnected");
-  if (lua_isfunction(L, -1)) {
-    accept->onDisconnectedRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    accept->onDisconnectedRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
+  SET_FUNC_REF_FROM_TABLE(L, accept->onReadRef, 2, "onread")
+  SET_FUNC_REF_FROM_TABLE(L, accept->onSendReadyRef, 2, "onsendready")
+  SET_FUNC_REF_FROM_TABLE(L, accept->onDisconnectedRef, 2, "ondisconnected")
 
   lua_pushstring(L, accept->ip);
   lua_pushinteger(L, accept->port);
@@ -397,35 +356,11 @@ LUA_API int tcpd_bind(lua_State *L) {
   SERVER *serv = lua_newuserdata(L, sizeof(SERVER));
   memset(serv, 0, sizeof(SERVER));
 
-  lua_getfield(L, 1, "onaccept");
-  if (lua_isfunction(L, -1)) {
-    serv->onAcceptRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    serv->onAcceptRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
+  SET_FUNC_REF_FROM_TABLE(L, serv->onAcceptRef, 1, "onaccept")
+  SET_FUNC_REF_FROM_TABLE(L, serv->onSSLHostNameRef, 1, "onsslhostname")
 
-  lua_getfield(L, 1, "onsslhostname");
-  if (lua_isfunction(L, -1)) {
-    serv->onSSLHostNameRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    serv->onSSLHostNameRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
-
-  lua_getfield(L, 1, "host");
-  const char *host = lua_tostring(L, -1);
-  if (host) {
-    serv->host = strdup(host);
-  } else {
-    serv->host = NULL;
-  }
-  lua_pop(L, 1);
-
-  lua_getfield(L, 1, "port");
-  int port = (int)lua_tointeger(L, -1);
-  serv->port = port;
-  lua_pop(L, 1);
+  DUP_STR_FROM_TABLE(L, serv->host, 1, "host")
+  SET_INT_FROM_TABLE(L, serv->port, 1, "port")
 
 #if FAN_HAS_OPENSSL
 
@@ -464,21 +399,8 @@ LUA_API int tcpd_bind(lua_State *L) {
   }
 #endif
 
-  lua_getfield(L, 1, "send_buffer_size");
-  if (!lua_isnil(L, -1)) {
-    serv->send_buffer_size = (int)lua_tointeger(L, -1);
-  } else {
-    serv->send_buffer_size = 0;
-  }
-  lua_pop(L, 1);
-
-  lua_getfield(L, 1, "receive_buffer_size");
-  if (!lua_isnil(L, -1)) {
-    serv->receive_buffer_size = (int)lua_tointeger(L, -1);
-  } else {
-    serv->receive_buffer_size = 0;
-  }
-  lua_pop(L, 1);
+  SET_INT_FROM_TABLE(L, serv->send_buffer_size, 1, "send_buffer_size")
+  SET_INT_FROM_TABLE(L, serv->receive_buffer_size, 1, "receive_buffer_size")
 
   luaL_getmetatable(L, LUA_TCPD_SERVER_TYPE);
   lua_setmetatable(L, -2);
@@ -489,9 +411,9 @@ LUA_API int tcpd_bind(lua_State *L) {
   int ipv6 = lua_toboolean(L, -1);
   lua_pop(L, 1);
 
-  if (host) {
+  if (serv->host) {
     char portbuf[6];
-    evutil_snprintf(portbuf, sizeof(portbuf), "%d", port);
+    evutil_snprintf(portbuf, sizeof(portbuf), "%d", serv->port);
 
     struct evutil_addrinfo hints = {0};
     struct evutil_addrinfo *answer = NULL;
@@ -499,9 +421,9 @@ LUA_API int tcpd_bind(lua_State *L) {
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
-    int err = evutil_getaddrinfo(host, portbuf, &hints, &answer);
+    int err = evutil_getaddrinfo(serv->host, portbuf, &hints, &answer);
     if (err < 0 || !answer) {
-      luaL_error(L, "invaild bind address %s:%d", host, port);
+      luaL_error(L, "invaild bind address %s:%d", serv->host, serv->port);
     }
 
     serv->listener =
@@ -524,14 +446,14 @@ LUA_API int tcpd_bind(lua_State *L) {
 
       sin.sin_family = AF_INET;
       sin.sin_addr.s_addr = htonl(0);
-      sin.sin_port = htons(port);
+      sin.sin_port = htons(serv->port);
     } else {
       addr = (struct sockaddr *)&sin6;
       addr_size = sizeof(sin6);
 
       sin6.sin6_family = AF_INET6;
       // sin6.sin6_addr.s6_addr
-      sin6.sin6_port = htons(port);
+      sin6.sin6_port = htons(serv->port);
     }
 
     serv->listener = evconnlistener_new_bind(
@@ -662,6 +584,7 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
 static void luatcpd_reconnect(Conn *conn) {
   if (conn->buf) {
     bufferevent_free(conn->buf);
+    conn->buf = NULL;
   }
 #if FAN_HAS_OPENSSL
   conn->ssl_error = 0;
@@ -800,50 +723,13 @@ LUA_API int tcpd_connect(lua_State *L) {
   conn->send_buffer_size = 0;
   conn->receive_buffer_size = 0;
 
-  lua_getfield(L, 1, "onread");
-  if (lua_isfunction(L, -1)) {
-    conn->onReadRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    conn->onReadRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
+  SET_FUNC_REF_FROM_TABLE(L, conn->onReadRef, 1, "onread")
+  SET_FUNC_REF_FROM_TABLE(L, conn->onSendReadyRef, 1, "onsendready")
+  SET_FUNC_REF_FROM_TABLE(L, conn->onDisconnectedRef, 1, "ondisconnected")
+  SET_FUNC_REF_FROM_TABLE(L, conn->onConnectedRef, 1, "onconnected")
 
-  lua_getfield(L, 1, "onsendready");
-  if (lua_isfunction(L, -1)) {
-    conn->onSendReadyRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    conn->onSendReadyRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
-
-  lua_getfield(L, 1, "ondisconnected");
-  if (lua_isfunction(L, -1)) {
-    conn->onDisconnectedRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    conn->onDisconnectedRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
-  lua_getfield(L, 1, "onconnected");
-  if (lua_isfunction(L, -1)) {
-    conn->onConnectedRef = luaL_ref(L, LUA_REGISTRYINDEX);
-  } else {
-    conn->onConnectedRef = LUA_NOREF;
-    lua_pop(L, 1);
-  }
-
-  lua_getfield(L, 1, "host");
-  const char *host = lua_tostring(L, -1);
-  if (host) {
-    conn->host = strdup(host);
-  } else {
-    conn->host = NULL;
-  }
-  lua_pop(L, 1);
-
-  lua_getfield(L, 1, "port");
-  int port = (int)lua_tointeger(L, -1);
-  conn->port = port;
-  lua_pop(L, 1);
+  DUP_STR_FROM_TABLE(L, conn->host, 1, "host")
+  SET_INT_FROM_TABLE(L, conn->port, 1, "port")
 
 #if FAN_HAS_OPENSSL
   lua_getfield(L, 1, "ssl_verifyhost");
@@ -854,14 +740,7 @@ LUA_API int tcpd_connect(lua_State *L) {
   conn->ssl_verifypeer = (int)luaL_optinteger(L, -1, 1);
   lua_pop(L, 1);
 
-  lua_getfield(L, 1, "ssl_host");
-  const char *ssl_host = lua_tostring(L, -1);
-  if (ssl_host) {
-    conn->ssl_host = strdup(ssl_host);
-  } else {
-    conn->ssl_host = NULL;
-  }
-  lua_pop(L, 1);
+  DUP_STR_FROM_TABLE(L, conn->ssl_host, 1, "ssl_host")
 
   lua_getfield(L, 1, "ssl");
   int ssl = lua_toboolean(L, -1);
@@ -980,21 +859,8 @@ LUA_API int tcpd_connect(lua_State *L) {
   }
 #endif
 
-  lua_getfield(L, 1, "send_buffer_size");
-  if (!lua_isnil(L, -1)) {
-    conn->send_buffer_size = (int)lua_tointeger(L, -1);
-  } else {
-    conn->send_buffer_size = 0;
-  }
-  lua_pop(L, 1);
-
-  lua_getfield(L, 1, "receive_buffer_size");
-  if (!lua_isnil(L, -1)) {
-    conn->receive_buffer_size = (int)lua_tointeger(L, -1);
-  } else {
-    conn->receive_buffer_size = 0;
-  }
-  lua_pop(L, 1);
+  SET_INT_FROM_TABLE(L, conn->send_buffer_size, 1, "send_buffer_size")
+  SET_INT_FROM_TABLE(L, conn->receive_buffer_size, 1, "receive_buffer_size")
 
   lua_getfield(L, 1, "read_timeout");
   lua_Number read_timeout = (int)luaL_optnumber(L, -1, 0);
@@ -1024,30 +890,15 @@ LUA_API int tcpd_conn_close(lua_State *L) {
     bufferevent_free(conn->buf);
     conn->buf = NULL;
   }
-  if (conn->onReadRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onReadRef);
-    conn->onReadRef = LUA_NOREF;
-  }
-  if (conn->onSendReadyRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-    conn->onSendReadyRef = LUA_NOREF;
-  }
-  if (conn->onDisconnectedRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onDisconnectedRef);
-    conn->onDisconnectedRef = LUA_NOREF;
-  }
-  if (conn->onConnectedRef != LUA_NOREF) {
-    luaL_unref(L, LUA_REGISTRYINDEX, conn->onConnectedRef);
-    conn->onConnectedRef = LUA_NOREF;
-  }
-  if (conn->host) {
-    free(conn->host);
-    conn->host = NULL;
-  }
-  if (conn->ssl_host) {
-    free(conn->ssl_host);
-    conn->ssl_host = NULL;
-  }
+
+  CLEAR_REF(L, conn->onReadRef)
+  CLEAR_REF(L, conn->onSendReadyRef)
+  CLEAR_REF(L, conn->onDisconnectedRef)
+  CLEAR_REF(L, conn->onConnectedRef)
+
+  FREE_STR(conn->host)
+  FREE_STR(conn->ssl_host)
+
 #if FAN_HAS_OPENSSL
   if (conn->sslctx) {
     conn->sslctx->retainCount--;
@@ -1123,7 +974,7 @@ LUA_API int tcpd_accept_close(lua_State *L) {
     bufferevent_free(accept->buf);
     accept->buf = NULL;
   }
-  tcpd_accept_unref(accept);
+  TCPD_ACCEPT_UNREF(accept)
   return 0;
 }
 
