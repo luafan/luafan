@@ -22,6 +22,7 @@ config.udp_resend_total = 0
 local MTU = (config.udp_mtu or 576) - 8 - 20
 local HEAD_SIZE = 4 + 2 + 2
 local BODY_SIZE = MTU - HEAD_SIZE
+local MAX_PAYLOAD_SIZE = BODY_SIZE * 65535
 
 local TIMEOUT = config.udp_package_timeout or 2
 local WAITING_COUNT = config.udp_waiting_count or 10
@@ -57,6 +58,12 @@ end
 
 function apt_mt:send(buf)
   if not self.conn then
+    return nil
+  end
+
+  -- print("apt_mt:send", #(buf), MAX_PAYLOAD_SIZE)
+  if #(buf) > MAX_PAYLOAD_SIZE then
+    print(":send body size overlimit", #buf)
     return nil
   end
 
@@ -125,8 +132,8 @@ function apt_mt:_mark_send_completed(head)
 end
 
 function apt_mt:_onack(buf)
-  local output_index,count,package_index = string.unpack("<I4I2I2", buf)
   if config.debug then
+    local output_index,count,package_index = string.unpack("<I4I2I2", buf)
     print(string.format("%s:%d\tack: %d %d/%d", self.host, self.port, output_index, package_index, count))
   end
 
@@ -135,8 +142,9 @@ function apt_mt:_onack(buf)
 
   if map then
     map[buf] = nil
-    if not next(map) then
-      if self.onsent then
+    if self.onsent then
+      if not next(map) then
+        local output_index = string.unpack("<I4", buf)
         coroutine.wrap(self.onsent)(output_index)
       end
     end
@@ -148,7 +156,7 @@ function apt_mt:_onread(buf)
   if #(buf) == HEAD_SIZE then
     -- single ack.
     self:_onack(buf)
-    self.conn:send_req()
+    -- self.conn:send_req()
     return
   elseif #(buf) > HEAD_SIZE then
     local head = string.sub(buf, 1, HEAD_SIZE)
@@ -275,206 +283,221 @@ local max_ack_count = math.floor(BODY_SIZE / HEAD_SIZE)
 local multi_ack_head = string.pack("<I4I2I2", 0x0fffffff, 1, 1)
 
 function apt_mt:_onsendready()
-  if #(self._output_ack_package) > max_ack_count then
-    local tmp = {}
-    local package = table.concat(self._output_ack_package, "", 1, max_ack_count)
-    print("multi ack sub:", #package)
-    table.move(self._output_ack_package, max_ack_count + 1, #(self._output_ack_package), 1, tmp)
-    self._output_ack_package = tmp
-    self:_send(multi_ack_head .. package)
-    return true
-  elseif #(self._output_ack_package) > 1 then
-    local package = table.concat(self._output_ack_package)
-    self._output_ack_package = {}
-    self:_send(multi_ack_head .. package)
-    return true
-  elseif #(self._output_ack_package) > 0 then
-    local package = table.remove(self._output_ack_package)
-    self:_send(package)
-    return true
-  end
-
-  if self._output_wait_count >= WAITING_COUNT then
-    -- print("waiting ...")
-    return false
-  end
-
-  local head,package = self:_output_chain_pop()
-  if head and package then
-    if self._output_wait_package_parts_map[head] then
-      self._output_wait_ack[head] = gettime()
-      self._output_wait_count = self._output_wait_count + 1
-
-      -- print("_output_wait_count", self._output_wait_count)
-
+  if #(self._output_ack_package) >= max_ack_count or gettime() - self.last_ack_time > 0.01 then
+    self.last_ack_time = gettime()
+    if #(self._output_ack_package) > max_ack_count then
+      local tmp = {}
+      local package = table.concat(self._output_ack_package, "", 1, max_ack_count)
+      -- print("multi ack sub:", #package)
+      table.move(self._output_ack_package, max_ack_count + 1, #(self._output_ack_package), 1, tmp)
+      self._output_ack_package = tmp
+      self:_send(multi_ack_head .. package)
+      return true
+    elseif #(self._output_ack_package) > 1 then
+      -- print("multi_ack_head", #(self._output_ack_package))
+      local package = table.concat(self._output_ack_package)
+      self._output_ack_package = {}
+      self:_send(multi_ack_head .. package)
+      return true
+    elseif #(self._output_ack_package) > 0 then
+      local package = table.remove(self._output_ack_package)
       self:_send(package)
       return true
     end
-  end
-
-  return false
-end
-
--- cleanup packages(ack not include) related with host,port
-function apt_mt:cleanup()
-  if self._parent then
-    self._parent.clientmap[self._client_key] = nil
-    self._parent = nil
-  end
-
-  for k,v in pairs(self) do
-    self[k] = nil
-  end
-end
-
-function apt_mt:close()
-  self.stop = true
-
-  if self.conn then
-    self.conn:close()
-    self.conn = nil
-  end
-
-  if self.send_running then
-    local send_running = self.send_running
-    self.send_running = nil
-    coroutine.resume(send_running)
-  end
-end
-
-local function connect(host, port, path)
-  port = tonumber(port)
-
-  local t = {
-    host = host,
-    port = port,
-    dest = udpd.make_dest(host, port),
-    _output_index = 0,
-    _output_chain = {_head = nil, _tail = nil},
-    _output_wait_ack = {},
-    _output_wait_package_parts_map = {},
-    _output_wait_count = 0,
-    _output_ack_package = {},
-    _incoming_map = {},
-  }
-  setmetatable(t, apt_mt)
-
-  t.conn = udpd.new{
-    host = host,
-    port = port,
-    onread = function(buf, from)
-      -- print("onread", #(buf), from, host, port, type(from:getPort()), type(port))
-      config.udp_receive_total = config.udp_receive_total + 1
-      if from:getHost() == host and from:getPort() == port then
-        t:_onread(buf)
-      end
-    end,
-    onsendready = function()
-      if not t:_onsendready() then
-        -- fan.sleep(1)
-        -- print("send_req", t.conn, "conn.onsendready")
-        -- t.conn:send_req()
+  else
+    if not self.pending_ack_req then
+      self.pending_ack_req = true
+      coroutine.wrap(function()
+          fan.sleep(0.01)
+          self.conn:send_req()
+          self.pending_ack_req = false
+          end)()
       end
     end
-  }
 
-  t.stop = false
+    if self._output_wait_count >= WAITING_COUNT then
+      -- print("waiting ...")
+      return false
+    end
 
-  coroutine.wrap(function()
-      while not t.stop do
-        t:_check_timeout()
-        fan.sleep(CHECK_TIMEOUT_DURATION)
+    local head,package = self:_output_chain_pop()
+    if head and package then
+      if self._output_wait_package_parts_map[head] then
+        self._output_wait_ack[head] = gettime()
+        self._output_wait_count = self._output_wait_count + 1
+
+        -- print("_output_wait_count", self._output_wait_count)
+
+        self:_send(package)
+        return true
       end
-      end)()
+    end
 
-    return t
+    return false
   end
 
-  local function bind(host, port, path)
-    local obj = {clientmap = {}}
-
-    obj.getapt = function(host, port, from, client_key)
-      local apt = obj.clientmap[client_key]
-      if not apt then
-        if not host or not port then
-          host = from:getHost()
-          port = from:getPort()
-        end
-
-        apt = {
-          host = host,
-          port = port,
-          dest = from or udpd.make_dest(host, port),
-          conn = obj.serv,
-          _parent = obj,
-          _output_index = 0,
-          _output_chain = {_head = nil, _tail = nil},
-          _output_wait_ack = {},
-          _output_wait_package_parts_map = {},
-          _output_wait_count = 0,
-          _output_ack_package = {},
-          _incoming_map = {},
-          _client_key = client_key,
-        }
-        setmetatable(apt, apt_mt)
-        obj.clientmap[client_key] = apt
-
-        if obj.onaccept then
-          coroutine.wrap(obj.onaccept)(apt)
-        end
-      elseif not apt.dest then
-        apt.dest = from
-      end
-
-      return apt
+  -- cleanup packages(ack not include) related with host,port
+  function apt_mt:cleanup()
+    if self._parent then
+      self._parent.clientmap[self._client_key] = nil
+      self._parent = nil
     end
-    obj.serv = udpd.new{
-      bind_port = port,
-      onsendready = function()
-        for k,apt in pairs(obj.clientmap) do
-          if apt:_moretosend() and apt:_onsendready() then
-            return
-          end
+
+    for k,v in pairs(self) do
+      self[k] = nil
+    end
+  end
+
+  function apt_mt:close()
+    self.stop = true
+
+    if self.conn then
+      self.conn:close()
+      self.conn = nil
+    end
+
+    if self.send_running then
+      local send_running = self.send_running
+      self.send_running = nil
+      coroutine.resume(send_running)
+    end
+  end
+
+  local function connect(host, port, path)
+    port = tonumber(port)
+
+    local t = {
+      host = host,
+      port = port,
+      dest = udpd.make_dest(host, port),
+      _output_index = 0,
+      _output_chain = {_head = nil, _tail = nil},
+      _output_wait_ack = {},
+      _output_wait_package_parts_map = {},
+      _output_wait_count = 0,
+      _output_ack_package = {},
+      _incoming_map = {},
+      last_ack_time = 0,
+    }
+    setmetatable(t, apt_mt)
+
+    t.conn = udpd.new{
+      host = host,
+      port = port,
+      onread = function(buf, from)
+        -- print("onread", #(buf), from, host, port, type(from:getPort()), type(port))
+        config.udp_receive_total = config.udp_receive_total + 1
+        if from:getHost() == host and from:getPort() == port then
+          t:_onread(buf)
         end
       end,
-      onread = function(buf, from)
-        config.udp_receive_total = config.udp_receive_total + 1
-        local apt = obj.getapt(nil, nil, from, tostring(from))
-
-        apt:_onread(buf)
+      onsendready = function()
+        if not t:_onsendready() then
+          -- fan.sleep(1)
+          -- print("send_req", t.conn, "conn.onsendready")
+          -- t.conn:send_req()
+        end
       end
     }
 
-    obj.stop = false
+    t.stop = false
 
     coroutine.wrap(function()
-        while not obj.stop do
-          for clientkey,apt in pairs(obj.clientmap) do
-            if apt:_check_timeout() then
-              break
-            end
-          end
-
+        while not t.stop do
+          t:_check_timeout()
           fan.sleep(CHECK_TIMEOUT_DURATION)
         end
         end)()
 
-      obj.close = function()
-        obj.stop = true
-
-        for clientkey,apt in pairs(obj.clientmap) do
-          apt:close()
-        end
-
-        obj.serv:close()
-        obj.serv = nil
-      end
-      -- print("serv", obj.serv)
-
-      return obj
+      return t
     end
 
-    return {
-      connect = connect,
-      bind = bind,
-    }
+    local function bind(host, port, path)
+      local obj = {clientmap = {}}
+
+      obj.getapt = function(host, port, from, client_key)
+        local apt = obj.clientmap[client_key]
+        if not apt then
+          if not host or not port then
+            host = from:getHost()
+            port = from:getPort()
+          end
+
+          apt = {
+            host = host,
+            port = port,
+            dest = from or udpd.make_dest(host, port),
+            conn = obj.serv,
+            _parent = obj,
+            _output_index = 0,
+            _output_chain = {_head = nil, _tail = nil},
+            _output_wait_ack = {},
+            _output_wait_package_parts_map = {},
+            _output_wait_count = 0,
+            _output_ack_package = {},
+            _incoming_map = {},
+            _client_key = client_key,
+            last_ack_time = 0,
+          }
+          setmetatable(apt, apt_mt)
+          obj.clientmap[client_key] = apt
+
+          if obj.onaccept then
+            coroutine.wrap(obj.onaccept)(apt)
+          end
+        elseif not apt.dest then
+          apt.dest = from
+        end
+
+        return apt
+      end
+      obj.serv = udpd.new{
+        bind_port = port,
+        onsendready = function()
+          for k,apt in pairs(obj.clientmap) do
+            if apt:_moretosend() and apt:_onsendready() then
+              return
+            end
+          end
+        end,
+        onread = function(buf, from)
+          config.udp_receive_total = config.udp_receive_total + 1
+          local apt = obj.getapt(nil, nil, from, tostring(from))
+
+          apt:_onread(buf)
+        end
+      }
+
+      obj.stop = false
+
+      coroutine.wrap(function()
+          while not obj.stop do
+            for clientkey,apt in pairs(obj.clientmap) do
+              if apt:_check_timeout() then
+                break
+              end
+            end
+
+            fan.sleep(CHECK_TIMEOUT_DURATION)
+          end
+          end)()
+
+        obj.close = function()
+          obj.stop = true
+
+          for clientkey,apt in pairs(obj.clientmap) do
+            apt:close()
+          end
+
+          obj.serv:close()
+          obj.serv = nil
+        end
+        -- print("serv", obj.serv)
+
+        return obj
+      end
+
+      return {
+        connect = connect,
+        bind = bind,
+      }
