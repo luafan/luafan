@@ -30,3 +30,4 @@ cmake/*
 *.app
 upload.sh
 *.rock
+.vscode/*

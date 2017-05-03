@@ -25,7 +25,7 @@ local function extract_url(url)
   return scheme, host, port, path
 end
 
-local function connect(url)
+local function connect(url, args)
   local scheme, host, port, path = extract_url(url)
   if not scheme then
     return
@@ -36,10 +36,10 @@ local function connect(url)
     return
   end
 
-  return connector.connect(host, port, path)
+  return connector.connect(host, port, path, args)
 end
 
-local function bind(url)
+local function bind(url, args)
   local scheme, host, port, path = extract_url(url)
   if not scheme then
     return
@@ -50,7 +50,7 @@ local function bind(url)
     return
   end
 
-  return connector.bind(host, port, path)
+  return connector.bind(host, port, path, args)
 end
 
 local function tmpfifoname()

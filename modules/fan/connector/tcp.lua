@@ -84,9 +84,9 @@ function apt_mt:close()
   end
 end
 
-local function connect(host, port, path)
+local function connect(host, port, path, args)
   local t = {_readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
-  t.conn = tcpd.connect{
+  local params = {
     host = host,
     port = port,
     onread = function(buf)
@@ -105,13 +105,22 @@ local function connect(host, port, path)
     end
   }
 
+  if args and type(args) == "table" then
+    for k,v in pairs(args) do
+      params[k] = v
+    end
+  end
+
+  t.conn = tcpd.connect(params)
+
   setmetatable(t, apt_mt)
   return t
 end
 
-local function bind(host, port, path)
+local function bind(host, port, path, args)
   local obj = {onaccept = nil}
-  obj.serv = tcpd.bind{
+
+  local params = {
     host = host,
     port = port,
     onaccept = function(apt)
@@ -132,7 +141,9 @@ local function bind(host, port, path)
           t:_onsendready()
         end,
         ondisconnected = function(msg)
-          print("client ondisconnected", msg)
+          if config.debug then
+            print("client ondisconnected", msg)
+          end
           t:close()
         end
       }
@@ -142,6 +153,14 @@ local function bind(host, port, path)
       end
     end
   }
+  
+  if args and type(args) == "table" then
+    for k,v in pairs(args) do
+      params[k] = v
+    end
+  end
+
+  obj.serv = tcpd.bind(params)
 
   return obj
 end

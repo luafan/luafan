@@ -41,13 +41,13 @@
 #include <evhttp.h>
 
 #if FAN_HAS_OPENSSL
-#include "openssl_hostname_validation.h"
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/pkcs12.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
+#include "openssl_hostname_validation.h"
 
 #include <event2/bufferevent_ssl.h>
 #endif
