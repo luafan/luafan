@@ -15,8 +15,10 @@ static struct event signal_pipe;
 static int looping = 0;
 static int initialized = 0;
 
-struct event_base *event_mgr_base() {
-  if (!base) {
+struct event_base *event_mgr_base()
+{
+  if (!base)
+  {
     base = event_base_new();
   }
 
@@ -25,16 +27,20 @@ struct event_base *event_mgr_base() {
   return base;
 }
 
-struct evdns_base *event_mgr_dnsbase() {
+struct evdns_base *event_mgr_dnsbase()
+{
   return dnsbase;
 }
 
-static void signal_handler(int sig) {
+static void signal_handler(int sig)
+{
   printf("%s: got singal %d\n", __func__, sig);
-  switch (sig) {
+  switch (sig)
+  {
   case SIGINT:
     signal_count++;
-    if (signal_count > 1) {
+    if (signal_count > 1)
+    {
       printf("force exit.\n");
       exit(0);
     }
@@ -49,11 +55,13 @@ static void signal_handler(int sig) {
   }
 }
 
-static void signal_cb(evutil_socket_t fd, short event, void *arg) {
+static void signal_cb(evutil_socket_t fd, short event, void *arg)
+{
   struct event *signal = arg;
   printf("%s: got signal %d\n", __func__, EVENT_SIGNAL(signal));
 
-  switch (EVENT_SIGNAL(signal)) {
+  switch (EVENT_SIGNAL(signal))
+  {
   case SIGTERM:
   case SIGHUP:
   case SIGQUIT:
@@ -64,14 +72,18 @@ static void signal_cb(evutil_socket_t fd, short event, void *arg) {
   }
 }
 
-void event_mgr_break() {
-  if (base) {
+void event_mgr_break()
+{
+  if (base)
+  {
     event_base_loopbreak(base);
   }
 }
 
-int event_mgr_init() {
-  if (!initialized) {
+int event_mgr_init()
+{
+  if (!initialized)
+  {
     initialized = 1;
 
     dnsbase = evdns_base_new(event_mgr_base(), 1);
@@ -103,8 +115,10 @@ int event_mgr_init() {
   return -1;
 }
 
-int event_mgr_loop() {
-  if (!looping) {
+int event_mgr_loop()
+{
+  if (!looping)
+  {
     event_mgr_init();
 
     looping = 1;

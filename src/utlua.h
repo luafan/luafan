@@ -67,12 +67,12 @@
 
 #else
 
-#define LOGD(...)                                                              \
-  fprintf(stdout, __VA_ARGS__);                                                \
-  fflush(stdout);
-#define LOGE(...)                                                              \
-  fprintf(stderr, __VA_ARGS__);                                                \
-  fflush(stderr);
+#define LOGD(...)                     \
+        fprintf(stdout, __VA_ARGS__); \
+        fflush(stdout);
+#define LOGE(...)                     \
+        fprintf(stderr, __VA_ARGS__); \
+        fflush(stderr);
 
 #endif
 
@@ -85,22 +85,22 @@
 #define lua_objlen lua_rawlen
 
 #undef luaL_register
-#define luaL_register(L, n, f)                                                 \
-  {                                                                            \
-    if ((n) == NULL)                                                           \
-      luaL_setfuncs(L, f, 0);                                                  \
-    else                                                                       \
-      luaL_newlib(L, f);                                                       \
-  }
+#define luaL_register(L, n, f)                  \
+        {                                       \
+                if ((n) == NULL)                \
+                        luaL_setfuncs(L, f, 0); \
+                else                            \
+                        luaL_newlib(L, f);      \
+        }
 
 #else
 
 #define LUA_OK 0
-#define lua_rawgetp(L, index, p)                                               \
-  {                                                                            \
-    lua_pushstring(L, p);                                                      \
-    lua_rawget(L, index);                                                      \
-  }
+#define lua_rawgetp(L, index, p)      \
+        {                             \
+                lua_pushstring(L, p); \
+                lua_rawget(L, index); \
+        }
 
 #endif
 
@@ -115,57 +115,69 @@
 int utlua_resume(lua_State *co, lua_State *from, int count);
 lua_State *utlua_mainthread(lua_State *L);
 
-#define PUSH_REF(L)                                                            \
-  lua_lock(L);                                                                 \
-  int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                  \
-  lua_unlock(L);
+#define PUSH_REF(L)                                 \
+        lua_lock(L);                                \
+        int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX); \
+        lua_unlock(L);
 
-#define POP_REF(L)                                                             \
-  lua_lock(L);                                                                 \
-  luaL_unref(L, LUA_REGISTRYINDEX, _ref_);                                     \
-  lua_unlock(L);
+#define POP_REF(L)                               \
+        lua_lock(L);                             \
+        luaL_unref(L, LUA_REGISTRYINDEX, _ref_); \
+        lua_unlock(L);
 
-#define SET_FUNC_REF_FROM_TABLE(L, REF, IDX, KEY)  lua_getfield(L, IDX, KEY); \
-        if (lua_isfunction(L, -1)) {  \
+#define SET_FUNC_REF_FROM_TABLE(L, REF, IDX, KEY)     \
+        lua_getfield(L, IDX, KEY);                    \
+        if (lua_isfunction(L, -1))                    \
+        {                                             \
                 REF = luaL_ref(L, LUA_REGISTRYINDEX); \
-        } else {  \
-                REF = LUA_NOREF;  \
-                lua_pop(L, 1);  \
+        }                                             \
+        else                                          \
+        {                                             \
+                REF = LUA_NOREF;                      \
+                lua_pop(L, 1);                        \
         }
 
-#define CLEAR_REF(L, REF) \
-        if (REF != LUA_NOREF) { \
+#define CLEAR_REF(L, REF)                              \
+        if (REF != LUA_NOREF)                          \
+        {                                              \
                 luaL_unref(L, LUA_REGISTRYINDEX, REF); \
-                REF = LUA_NOREF; \
+                REF = LUA_NOREF;                       \
         }
 
-#define DUP_STR_FROM_TABLE(L, REF, IDX, KEY) \
-        { \
-                lua_getfield(L, IDX, KEY); \
+#define DUP_STR_FROM_TABLE(L, REF, IDX, KEY)           \
+        {                                              \
+                lua_getfield(L, IDX, KEY);             \
                 const char *str = lua_tostring(L, -1); \
-                if (str) { \
-                        REF = strdup(str); \
-                } else { \
-                        REF = NULL; \
-                } \
-                lua_pop(L, 1); \
+                if (str)                               \
+                {                                      \
+                        REF = strdup(str);             \
+                }                                      \
+                else                                   \
+                {                                      \
+                        REF = NULL;                    \
+                }                                      \
+                lua_pop(L, 1);                         \
         }
 
-#define FREE_STR(REF) \
-        if (REF) { \
-                free(REF); \
+#define FREE_STR(REF)       \
+        if (REF)            \
+        {                   \
+                free(REF);  \
                 REF = NULL; \
         }
 
-#define SET_INT_FROM_TABLE(L, REF, IDX, KEY)    \
-        { \
-                lua_getfield(L, IDX, KEY); \
-                if (!lua_isnil(L, -1)) { \
+#define SET_INT_FROM_TABLE(L, REF, IDX, KEY)             \
+        {                                                \
+                lua_getfield(L, IDX, KEY);               \
+                if (!lua_isnil(L, -1))                   \
+                {                                        \
                         REF = (int)lua_tointeger(L, -1); \
-                } else { \
-                        REF = 0; \
-                } \
-                lua_pop(L, 1); \
+                }                                        \
+                else                                     \
+                {                                        \
+                        REF = 0;                         \
+                }                                        \
+                lua_pop(L, 1);                           \
         }
 
 #if (LUA_VERSION_NUM < 502)

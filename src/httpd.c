@@ -1,7 +1,8 @@
 
 #include "utlua.h"
 
-typedef struct {
+typedef struct
+{
   lua_State *L;
 
   struct evhttp *httpd;
@@ -19,7 +20,8 @@ typedef struct {
 #define REPLY_STATUS_REPLYED 1     // replied
 #define REPLY_STATUS_REPLY_START 2 // processing reply chunk, but not ended.
 
-typedef struct {
+typedef struct
+{
   struct evhttp_request *req;
 
   int reply_status;
@@ -28,7 +30,8 @@ typedef struct {
 #define LUA_EVHTTP_REQUEST_TYPE "EVHTTP_REQUEST_TYPE"
 #define LUA_EVHTTP_SERVER_TYPE "EVHTTP_SERVER_TYPE"
 
-static Request *request_from_table(lua_State *L, int idx) {
+static Request *request_from_table(lua_State *L, int idx)
+{
   lua_rawgeti(L, idx, 1);
 
   Request *request = (Request *)lua_touserdata(L, -1);
@@ -37,7 +40,8 @@ static Request *request_from_table(lua_State *L, int idx) {
   return request;
 }
 
-static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
+static void newtable_from_req(lua_State *L, struct evhttp_request *req)
+{
   lua_newtable(L);
   Request *request = (Request *)lua_newuserdata(L, sizeof(Request));
   request->reply_status = REPLY_STATUS_NONE;
@@ -46,7 +50,8 @@ static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
 }
 
 static void httpd_handler_cgi_bin(struct evhttp_request *req,
-                                  LuaServer *server) {
+                                  LuaServer *server)
+{
   lua_State *co = lua_newthread(server->L);
   PUSH_REF(server->L);
 
@@ -63,23 +68,29 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req,
   POP_REF(server->L);
 }
 
-static void request_push_body(lua_State *L, int idx) {
-  if (idx < 0) {
+static void request_push_body(lua_State *L, int idx)
+{
+  if (idx < 0)
+  {
     idx = lua_gettop(L) + idx + 1;
   }
   lua_rawgetp(L, idx, "body");
-  if (lua_isnil(L, -1)) {
+  if (lua_isnil(L, -1))
+  {
     lua_pop(L, 1);
 
     struct evhttp_request *req = request_from_table(L, idx)->req;
     struct evbuffer *bodybuf = evhttp_request_get_input_buffer(req);
-    if (bodybuf) {
+    if (bodybuf)
+    {
       size_t len = evbuffer_get_length(bodybuf);
-      if (len < HTTP_POST_BODY_LIMIT) {
+      if (len < HTTP_POST_BODY_LIMIT)
+      {
         char *data = calloc(1, len + 1);
         int read = 0;
         char *ptrdata = data;
-        while ((read = evbuffer_remove(bodybuf, ptrdata, len)) > 0) {
+        while ((read = evbuffer_remove(bodybuf, ptrdata, len)) > 0)
+        {
           ptrdata += read;
           len -= read;
         }
@@ -103,13 +114,17 @@ static void request_push_body(lua_State *L, int idx) {
   }
 }
 
-LUA_API int lua_evhttp_request_available(lua_State *L) {
+LUA_API int lua_evhttp_request_available(lua_State *L)
+{
   struct evhttp_request *req = request_from_table(L, 1)->req;
   struct evbuffer *bodybuf = evhttp_request_get_input_buffer(req);
-  if (bodybuf) {
+  if (bodybuf)
+  {
     size_t len = evbuffer_get_length(bodybuf);
     lua_pushinteger(L, len);
-  } else {
+  }
+  else
+  {
     lua_pushinteger(L, 0);
   }
 
@@ -120,12 +135,14 @@ LUA_API int lua_evhttp_request_available(lua_State *L) {
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #endif
 
-LUA_API int lua_evhttp_request_read(lua_State *L) {
+LUA_API int lua_evhttp_request_read(lua_State *L)
+{
   struct evhttp_request *req = request_from_table(L, 1)->req;
   struct evbuffer *bodybuf = evhttp_request_get_input_buffer(req);
   size_t evbuffer_length = evbuffer_get_length(bodybuf);
 
-  if (evbuffer_length) {
+  if (evbuffer_length)
+  {
     lua_Integer buff_len =
         luaL_optinteger(L, 2, MIN(READ_BUFF_LEN, evbuffer_length));
 
@@ -133,16 +150,20 @@ LUA_API int lua_evhttp_request_read(lua_State *L) {
     int read = evbuffer_remove(bodybuf, data, buff_len);
     lua_pushlstring(L, data, read);
     free(data);
-  } else {
+  }
+  else
+  {
     lua_pushnil(L);
   }
 
   return 1;
 }
 
-LUA_API int lua_evhttp_request_reply(lua_State *L) {
+LUA_API int lua_evhttp_request_reply(lua_State *L)
+{
   Request *request = request_from_table(L, 1);
-  switch (request->reply_status) {
+  switch (request->reply_status)
+  {
   case REPLY_STATUS_REPLYED:
     return luaL_error(L, "reply has completed already.");
   case REPLY_STATUS_REPLY_START:
@@ -173,9 +194,11 @@ LUA_API int lua_evhttp_request_reply(lua_State *L) {
   return 0;
 }
 
-LUA_API int lua_evhttp_request_reply_addheader(lua_State *L) {
+LUA_API int lua_evhttp_request_reply_addheader(lua_State *L)
+{
   Request *request = request_from_table(L, 1);
-  switch (request->reply_status) {
+  switch (request->reply_status)
+  {
   case REPLY_STATUS_REPLYED:
     return luaL_error(L, "reply has completed already.");
   case REPLY_STATUS_REPLY_START:
@@ -193,9 +216,11 @@ LUA_API int lua_evhttp_request_reply_addheader(lua_State *L) {
   return 1;
 }
 
-LUA_API int lua_evhttp_request_reply_start(lua_State *L) {
+LUA_API int lua_evhttp_request_reply_start(lua_State *L)
+{
   Request *request = request_from_table(L, 1);
-  switch (request->reply_status) {
+  switch (request->reply_status)
+  {
   case REPLY_STATUS_REPLYED:
     return luaL_error(L, "reply has completed already.");
   case REPLY_STATUS_REPLY_START:
@@ -213,9 +238,11 @@ LUA_API int lua_evhttp_request_reply_start(lua_State *L) {
   return 1;
 }
 
-LUA_API int lua_evhttp_request_reply_chunk(lua_State *L) {
+LUA_API int lua_evhttp_request_reply_chunk(lua_State *L)
+{
   Request *request = request_from_table(L, 1);
-  switch (request->reply_status) {
+  switch (request->reply_status)
+  {
   case REPLY_STATUS_REPLYED:
     return luaL_error(L, "reply has completed already.");
   case REPLY_STATUS_NONE:
@@ -225,10 +252,12 @@ LUA_API int lua_evhttp_request_reply_chunk(lua_State *L) {
   }
 
   int top = lua_gettop(L);
-  if (top > 1) {
+  if (top > 1)
+  {
     struct evbuffer *buf = evbuffer_new();
     int i = 2;
-    for (; i <= top; i++) {
+    for (; i <= top; i++)
+    {
       size_t responseBuffLen = 0;
       const char *responseBuff = lua_tolstring(L, i, &responseBuffLen);
       evbuffer_add(buf, responseBuff, responseBuffLen);
@@ -241,9 +270,11 @@ LUA_API int lua_evhttp_request_reply_chunk(lua_State *L) {
   return 1;
 }
 
-LUA_API int lua_evhttp_request_reply_end(lua_State *L) {
+LUA_API int lua_evhttp_request_reply_end(lua_State *L)
+{
   Request *request = request_from_table(L, 1);
-  switch (request->reply_status) {
+  switch (request->reply_status)
+  {
   case REPLY_STATUS_REPLYED:
     return luaL_error(L, "reply has completed already.");
   case REPLY_STATUS_NONE:
@@ -272,39 +303,42 @@ static const struct luaL_Reg evhttp_request_lib[] = {
     {NULL, NULL},
 };
 
-typedef struct {
+typedef struct
+{
   char *name;
   enum evhttp_cmd_type cmd;
 } MethodMap;
 
 static const MethodMap methodMap[] = {
-    {"GET", EVHTTP_REQ_GET},       {"POST", EVHTTP_REQ_POST},
-    {"HEAD", EVHTTP_REQ_HEAD},     {"PUT", EVHTTP_REQ_PUT},
-    {"DELETE", EVHTTP_REQ_DELETE}, {"OPTIONS", EVHTTP_REQ_OPTIONS},
-    {"TRACE", EVHTTP_REQ_TRACE},   {"CONNECT", EVHTTP_REQ_CONNECT},
-    {"PATCH", EVHTTP_REQ_PATCH},   {NULL, EVHTTP_REQ_GET}};
+    {"GET", EVHTTP_REQ_GET}, {"POST", EVHTTP_REQ_POST}, {"HEAD", EVHTTP_REQ_HEAD}, {"PUT", EVHTTP_REQ_PUT}, {"DELETE", EVHTTP_REQ_DELETE}, {"OPTIONS", EVHTTP_REQ_OPTIONS}, {"TRACE", EVHTTP_REQ_TRACE}, {"CONNECT", EVHTTP_REQ_CONNECT}, {"PATCH", EVHTTP_REQ_PATCH}, {NULL, EVHTTP_REQ_GET}};
 
-LUA_API int lua_evhttp_server_gc(lua_State *L) {
+LUA_API int lua_evhttp_server_gc(lua_State *L)
+{
   LuaServer *server = (LuaServer *)lua_touserdata(L, -1);
-  if (server->onServiceRef != LUA_NOREF) {
+  if (server->onServiceRef != LUA_NOREF)
+  {
     luaL_unref(L, LUA_REGISTRYINDEX, server->onServiceRef);
     server->onServiceRef = LUA_NOREF;
   }
 
-  if (event_mgr_base() && server->httpd) {
-    if (server->boundsocket) {
+  if (event_mgr_base() && server->httpd)
+  {
+    if (server->boundsocket)
+    {
       evhttp_del_accept_socket(server->httpd, server->boundsocket);
       server->boundsocket = NULL;
     }
 
-    if (server->httpd) {
+    if (server->httpd)
+    {
       evhttp_free(server->httpd);
       server->httpd = NULL;
     }
   }
 
 #if FAN_HAS_OPENSSL
-  if (server->ctx) {
+  if (server->ctx)
+  {
     SSL_CTX_free(server->ctx);
   }
 #endif
@@ -313,51 +347,67 @@ LUA_API int lua_evhttp_server_gc(lua_State *L) {
   return 0;
 }
 
-LUA_API int lua_evhttp_request_lookup(lua_State *L) {
+LUA_API int lua_evhttp_request_lookup(lua_State *L)
+{
   struct evhttp_request *req = request_from_table(L, 1)->req;
   const char *p = lua_tostring(L, 2);
 
   const luaL_Reg *lib;
 
-  for (lib = evhttp_request_lib; lib->func; lib++) {
-    if (strcmp(p, lib->name) == 0) {
+  for (lib = evhttp_request_lib; lib->func; lib++)
+  {
+    if (strcmp(p, lib->name) == 0)
+    {
       lua_pushcfunction(L, lib->func);
       return 1;
     }
   }
 
-  if (strcmp(p, "path") == 0) {
+  if (strcmp(p, "path") == 0)
+  {
     lua_pushstring(L, evhttp_uri_get_path(req->uri_elems));
     return 1;
-  } else if (strcmp(p, "query") == 0) {
+  }
+  else if (strcmp(p, "query") == 0)
+  {
     lua_pushstring(L, evhttp_uri_get_query(req->uri_elems));
     return 1;
-  } else if (strcmp(p, "method") == 0) {
+  }
+  else if (strcmp(p, "method") == 0)
+  {
     const MethodMap *method;
     enum evhttp_cmd_type cmd = evhttp_request_get_command(req);
-    for (method = methodMap; method->name; method++) {
-      if (cmd == method->cmd) {
+    for (method = methodMap; method->name; method++)
+    {
+      if (cmd == method->cmd)
+      {
         lua_pushstring(L, method->name);
         return 1;
       }
     }
-  } else if (strcmp(p, "headers") == 0) {
+  }
+  else if (strcmp(p, "headers") == 0)
+  {
     struct evkeyvalq *headers = evhttp_request_get_input_headers(req);
 
     lua_newtable(L);
     struct evkeyval *item;
-    TAILQ_FOREACH(item, headers, next) {
+    TAILQ_FOREACH(item, headers, next)
+    {
       lua_pushstring(L, item->value);
       lua_setfield(L, -2, item->key);
     }
     return 1;
-  } else if (strcmp(p, "params") == 0) {
+  }
+  else if (strcmp(p, "params") == 0)
+  {
     struct evkeyvalq params;
     evhttp_parse_query_str(evhttp_uri_get_query(req->uri_elems), &params);
 
     lua_newtable(L);
     struct evkeyval *item;
-    TAILQ_FOREACH(item, &params, next) {
+    TAILQ_FOREACH(item, &params, next)
+    {
       lua_pushstring(L, item->value);
       lua_setfield(L, -2, item->key);
     }
@@ -366,25 +416,32 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L) {
     const char *contentType = evhttp_find_header(headers, "Content-Type");
     if (contentType &&
         strstr(contentType, "application/x-www-form-urlencoded") ==
-            contentType) {
+            contentType)
+    {
       request_push_body(L, 1);
-      if (lua_type(L, -1) == LUA_TSTRING) {
+      if (lua_type(L, -1) == LUA_TSTRING)
+      {
         const char *data = lua_tostring(L, -1);
         struct evkeyvalq params;
         evhttp_parse_query_str(data, &params);
         lua_pop(L, 1);
 
-        TAILQ_FOREACH(item, &params, next) {
+        TAILQ_FOREACH(item, &params, next)
+        {
           lua_pushstring(L, item->value);
           lua_setfield(L, -2, item->key);
         }
       }
     }
     return 1;
-  } else if (strcmp(p, "body") == 0) {
+  }
+  else if (strcmp(p, "body") == 0)
+  {
     request_push_body(L, 1);
     return 1;
-  } else if (strcmp(p, "remoteip") == 0) {
+  }
+  else if (strcmp(p, "remoteip") == 0)
+  {
     char *address = NULL;
     ev_uint16_t port = 0;
     evhttp_connection_get_peer(req->evcon, &address, &port);
@@ -392,7 +449,9 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L) {
     lua_pushstring(L, address);
 
     return 1;
-  } else if (strcmp(p, "remoteport") == 0) {
+  }
+  else if (strcmp(p, "remoteport") == 0)
+  {
     char *address = NULL;
     ev_uint16_t port = 0;
     evhttp_connection_get_peer(req->evcon, &address, &port);
@@ -409,7 +468,8 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L) {
 
 #ifdef EVENT__NUMERIC_VERSION
 #if (EVENT__NUMERIC_VERSION >= 0x02010500)
-static struct bufferevent *bevcb(struct event_base *base, void *arg) {
+static struct bufferevent *bevcb(struct event_base *base, void *arg)
+{
   struct bufferevent *r;
   SSL_CTX *ctx = (SSL_CTX *)arg;
 
@@ -422,11 +482,13 @@ static struct bufferevent *bevcb(struct event_base *base, void *arg) {
 
 #endif
 
-static void smoke_request_cb(struct evhttp_request *req, void *arg) {
+static void smoke_request_cb(struct evhttp_request *req, void *arg)
+{
   evhttp_send_reply(req, 200, "OK", NULL);
 }
 
-LUA_API int utd_bind(lua_State *L) {
+LUA_API int utd_bind(lua_State *L)
+{
   luaL_checktype(L, 1, LUA_TTABLE);
   lua_settop(L, 1);
 
@@ -450,7 +512,8 @@ LUA_API int utd_bind(lua_State *L) {
   lua_getfield(L, 1, "key");
   const char *key = lua_tostring(L, -1);
 
-  if (cert && key) {
+  if (cert && key)
+  {
     SSL_CTX *ctx = SSL_CTX_new(SSLv23_server_method());
     server->ctx = ctx;
     SSL_CTX_set_options(ctx,
@@ -458,11 +521,13 @@ LUA_API int utd_bind(lua_State *L) {
                             0); // SSL_OP_NO_SSLv2
 
     EC_KEY *ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
-    if (!ecdh) {
+    if (!ecdh)
+    {
       die_most_horribly_from_openssl_error("EC_KEY_new_by_curve_name");
     }
 
-    if (1 != SSL_CTX_set_tmp_ecdh(ctx, ecdh)) {
+    if (1 != SSL_CTX_set_tmp_ecdh(ctx, ecdh))
+    {
       die_most_horribly_from_openssl_error("SSL_CTX_set_tmp_ecdh");
     }
 
@@ -487,9 +552,11 @@ LUA_API int utd_bind(lua_State *L) {
       evhttp_bind_socket_with_handle(httpd, host, port);
   lua_pop(L, 2);
 
-  if (!boundsocket) {
+  if (!boundsocket)
+  {
 #if FAN_HAS_OPENSSL
-    if (server->ctx) {
+    if (server->ctx)
+    {
       SSL_CTX_free(server->ctx);
       server->ctx = NULL;
     }
@@ -519,7 +586,8 @@ LUA_API int utd_bind(lua_State *L) {
 
 static const luaL_Reg utdlib[] = {{"bind", utd_bind}, {NULL, NULL}};
 
-LUA_API int luaopen_fan_httpd(lua_State *L) {
+LUA_API int luaopen_fan_httpd(lua_State *L)
+{
   luaL_newmetatable(L, LUA_EVHTTP_REQUEST_TYPE);
 
   lua_pushstring(L, "__index");

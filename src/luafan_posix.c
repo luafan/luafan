@@ -1,42 +1,50 @@
-LUA_API int luafan_fork(lua_State *L) {
+LUA_API int luafan_fork(lua_State *L)
+{
   int result = fork();
   return luafan_push_result(L, result);
 }
 
-LUA_API int luafan_getpid(lua_State *L) {
+LUA_API int luafan_getpid(lua_State *L)
+{
   lua_pushinteger(L, getpid());
   return 1;
 }
 
-LUA_API int luafan_getdtablesize(lua_State *L) {
+LUA_API int luafan_getdtablesize(lua_State *L)
+{
   lua_pushinteger(L, getdtablesize());
   return 1;
 }
 
-LUA_API int luafan_setpgid(lua_State *L) {
+LUA_API int luafan_setpgid(lua_State *L)
+{
   int result = setpgid(luaL_optinteger(L, 1, 0), luaL_optinteger(L, 2, 0));
   return luafan_push_result(L, result);
 }
 
-LUA_API int luafan_open(lua_State *L) {
+LUA_API int luafan_open(lua_State *L)
+{
   int result = open(luaL_checkstring(L, 1), luaL_optinteger(L, 2, O_RDWR),
                     luaL_optinteger(L, 3, 0));
   return luafan_push_result(L, result);
 }
 
-LUA_API int luafan_close(lua_State *L) {
+LUA_API int luafan_close(lua_State *L)
+{
   int result = close(luaL_checkinteger(L, 1));
   return luafan_push_result(L, result);
 }
 
-LUA_API int luafan_setsid(lua_State *L) {
+LUA_API int luafan_setsid(lua_State *L)
+{
   int result = setsid();
   return luafan_push_result(L, result);
 }
 
 extern char *__progname;
 
-LUA_API int luafan_setprogname(lua_State *L) {
+LUA_API int luafan_setprogname(lua_State *L)
+{
   size_t size = 0;
   const char *name = luaL_checklstring(L, 1, &size);
   memset(__progname, 0, 128);
@@ -45,7 +53,8 @@ LUA_API int luafan_setprogname(lua_State *L) {
   return 0;
 }
 
-LUA_API int luafan_getpgid(lua_State *L) {
+LUA_API int luafan_getpgid(lua_State *L)
+{
   int result = getpgid(luaL_optinteger(L, 1, 0));
   return luafan_push_result(L, result);
 }
@@ -57,26 +66,33 @@ LUA_API int luafan_getpgid(lua_State *L) {
 
 #define SYSCTL_CORE_COUNT "machdep.cpu.core_count"
 
-typedef struct cpu_set { uint32_t count; } cpu_set_t;
+typedef struct cpu_set
+{
+  uint32_t count;
+} cpu_set_t;
 
 static inline void CPU_ZERO(cpu_set_t *cs) { cs->count = 0; }
 
 static inline void CPU_SET(int num, cpu_set_t *cs) { cs->count |= (1 << num); }
 
-static inline int CPU_ISSET(int num, cpu_set_t *cs) {
+static inline int CPU_ISSET(int num, cpu_set_t *cs)
+{
   return (cs->count & (1 << num));
 }
 
-int sched_getaffinity(pid_t pid, size_t cpu_size, cpu_set_t *cpu_set) {
+int sched_getaffinity(pid_t pid, size_t cpu_size, cpu_set_t *cpu_set)
+{
   int32_t core_count = 0;
   size_t len = sizeof(core_count);
   int ret = sysctlbyname(SYSCTL_CORE_COUNT, &core_count, &len, 0, 0);
-  if (ret) {
+  if (ret)
+  {
     printf("error while get core count %d\n", ret);
     return -1;
   }
   cpu_set->count = 0;
-  for (int i = 0; i < core_count; i++) {
+  for (int i = 0; i < core_count; i++)
+  {
     cpu_set->count |= (1 << i);
   }
 
@@ -87,22 +103,31 @@ int sched_getaffinity(pid_t pid, size_t cpu_size, cpu_set_t *cpu_set) {
 #include <sched.h>
 #endif
 
-static int get_cpu_count() { return sysconf(_SC_NPROCESSORS_CONF); }
+static int get_cpu_count()
+{
+  return sysconf(_SC_NPROCESSORS_CONF);
+}
 
-LUA_API int luafan_getaffinity(lua_State *L) {
+LUA_API int luafan_getaffinity(lua_State *L)
+{
   unsigned long bitmask = 0;
   cpu_set_t mask;
   CPU_ZERO(&mask);
 
-  if (sched_getaffinity(0, sizeof(cpu_set_t), &mask) == -1) {
+  if (sched_getaffinity(0, sizeof(cpu_set_t), &mask) == -1)
+  {
     lua_pushnil(L);
     lua_pushstring(L, strerror(errno));
     return 2;
-  } else {
+  }
+  else
+  {
     int cpu_count = get_cpu_count();
     int i = 0;
-    for (; i < cpu_count; i++) {
-      if (CPU_ISSET(i, &mask)) {
+    for (; i < cpu_count; i++)
+    {
+      if (CPU_ISSET(i, &mask))
+      {
         bitmask |= (unsigned long)0x01 << i;
       }
     }
@@ -112,7 +137,8 @@ LUA_API int luafan_getaffinity(lua_State *L) {
   }
 }
 
-LUA_API int luafan_setaffinity(lua_State *L) {
+LUA_API int luafan_setaffinity(lua_State *L)
+{
 #ifdef __linux__
   unsigned long mask_value = luaL_checkinteger(L, 1);
   cpu_set_t mask;
@@ -120,17 +146,22 @@ LUA_API int luafan_setaffinity(lua_State *L) {
 
   int cpu_count = get_cpu_count();
   int i = 0;
-  for (; i < cpu_count; i++) {
-    if (mask_value & ((unsigned long)0x01 << i)) {
+  for (; i < cpu_count; i++)
+  {
+    if (mask_value & ((unsigned long)0x01 << i))
+    {
       CPU_SET(i, &mask);
     }
   }
 
-  if (sched_setaffinity(0, sizeof(cpu_set_t), &mask) == -1) {
+  if (sched_setaffinity(0, sizeof(cpu_set_t), &mask) == -1)
+  {
     lua_pushnil(L);
     lua_pushfstring(L, "sched_setaffinity: %s", strerror(errno));
     return 2;
-  } else {
+  }
+  else
+  {
     lua_pushboolean(L, 1);
     return 1;
   }
@@ -140,32 +171,41 @@ LUA_API int luafan_setaffinity(lua_State *L) {
 #endif
 }
 
-LUA_API int luafan_getcpucount(lua_State *L) {
+LUA_API int luafan_getcpucount(lua_State *L)
+{
   lua_pushinteger(L, get_cpu_count());
   return 1;
 }
 #endif
 
-LUA_API int luafan_kill(lua_State *L) {
-  if (kill(luaL_optinteger(L, 1, -1), luaL_optinteger(L, 2, SIGTERM))) {
+LUA_API int luafan_kill(lua_State *L)
+{
+  if (kill(luaL_optinteger(L, 1, -1), luaL_optinteger(L, 2, SIGTERM)))
+  {
     lua_pushnil(L);
     lua_pushstring(L, strerror(errno));
     return 2;
-  } else {
+  }
+  else
+  {
     lua_pushboolean(L, true);
     return 1;
   }
 }
 
-LUA_API int luafan_waitpid(lua_State *L) {
+LUA_API int luafan_waitpid(lua_State *L)
+{
   int stat = 0;
   int result =
       waitpid(luaL_optinteger(L, 1, -1), &stat, luaL_optinteger(L, 2, -1));
-  if (result == -1) {
+  if (result == -1)
+  {
     lua_pushnil(L);
     lua_pushstring(L, strerror(errno));
     return 2;
-  } else {
+  }
+  else
+  {
     lua_pushinteger(L, result);
     lua_pushinteger(L, stat);
     return 2;
@@ -174,11 +214,13 @@ LUA_API int luafan_waitpid(lua_State *L) {
 
 #include <ifaddrs.h>
 
-LUA_API int luafan_getinterfaces(lua_State *L) {
+LUA_API int luafan_getinterfaces(lua_State *L)
+{
   struct ifaddrs *ifaddr, *ifa;
   char host[NI_MAXHOST];
 
-  if (getifaddrs(&ifaddr) == -1) {
+  if (getifaddrs(&ifaddr) == -1)
+  {
     lua_pushnil(L);
     lua_pushstring(L, strerror(errno));
     return 2;
@@ -186,15 +228,19 @@ LUA_API int luafan_getinterfaces(lua_State *L) {
 
   lua_newtable(L);
   int count = 1;
-  for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+  for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
+  {
     lua_newtable(L);
-    if (ifa->ifa_addr) {
+    if (ifa->ifa_addr)
+    {
       if (ifa->ifa_addr->sa_family == AF_INET ||
-          ifa->ifa_addr->sa_family == AF_INET6) {
+          ifa->ifa_addr->sa_family == AF_INET6)
+      {
         lua_pushstring(L, ifa->ifa_name);
         lua_setfield(L, -2, "name");
         if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), host,
-                        NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0) {
+                        NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0)
+        {
           lua_pushstring(L, host);
           lua_setfield(L, -2, "host");
         }
@@ -203,16 +249,20 @@ LUA_API int luafan_getinterfaces(lua_State *L) {
         lua_setfield(L, -2, "type");
       }
     }
-    if (ifa->ifa_netmask) {
+    if (ifa->ifa_netmask)
+    {
       if (getnameinfo(ifa->ifa_netmask, sizeof(struct sockaddr_in), host,
-                      NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0) {
+                      NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0)
+      {
         lua_pushstring(L, host);
         lua_setfield(L, -2, "netmask");
       }
     }
-    if (ifa->ifa_dstaddr) {
+    if (ifa->ifa_dstaddr)
+    {
       if (getnameinfo(ifa->ifa_dstaddr, sizeof(struct sockaddr_in), host,
-                      NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0) {
+                      NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0)
+      {
         lua_pushstring(L, host);
         lua_setfield(L, -2, "dst");
       }

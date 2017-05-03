@@ -9,7 +9,8 @@
 #include <stdbool.h>
 #endif
 
-typedef struct {
+typedef struct
+{
   size_t offset;
   size_t total;
   uint8_t *buffer;
