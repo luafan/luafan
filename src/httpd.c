@@ -499,6 +499,8 @@ LUA_API int utd_bind(lua_State *L)
 
   server->L = utlua_mainthread(L);
   server->onServiceRef = LUA_NOREF;
+  server->boundsocket = NULL;
+  server->httpd = NULL;
 
   struct evhttp *httpd = evhttp_new(event_mgr_base());
 
