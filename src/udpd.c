@@ -9,6 +9,10 @@ typedef struct
   struct event reconnect_clock;
 
   lua_State *L;
+  int selfRef;
+
+  lua_State *mainthread;
+
   int onReadRef;
   int onSendReadyRef;
 
@@ -70,12 +74,14 @@ static void udpd_writecb(evutil_socket_t fd, short what, void *arg)
 
   if (conn->onSendReadyRef != LUA_NOREF)
   {
-    lua_State *co = lua_newthread(conn->L);
-    PUSH_REF(conn->L);
+    lua_lock(conn->mainthread);
+    lua_State *co = lua_newthread(conn->mainthread);
+    PUSH_REF(conn->mainthread);
+    lua_unlock(conn->mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-    utlua_resume(co, conn->L, 0);
-    POP_REF(conn->L);
+    utlua_resume(co, conn->mainthread, 0);
+    POP_REF(conn->mainthread);
   }
 }
 
@@ -93,8 +99,10 @@ static void udpd_readcb(evutil_socket_t fd, short what, void *arg)
   {
     if (conn->onReadRef != LUA_NOREF)
     {
-      lua_State *co = lua_newthread(conn->L);
-      PUSH_REF(conn->L);
+      lua_lock(conn->mainthread);
+      lua_State *co = lua_newthread(conn->mainthread);
+      PUSH_REF(conn->mainthread);
+      lua_unlock(conn->mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
       lua_pushlstring(co, (const char *)buf, len);
@@ -106,8 +114,8 @@ static void udpd_readcb(evutil_socket_t fd, short what, void *arg)
       memcpy(&dest->si_client, &si_client, sizeof(si_client));
       dest->client_len = client_len;
 
-      utlua_resume(co, conn->L, 2);
-      POP_REF(conn->L);
+      utlua_resume(co, conn->mainthread, 2);
+      POP_REF(conn->mainthread);
     }
   }
 }
@@ -131,28 +139,6 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
   if (conn->socket_fd)
   {
     return 1;
-  }
-
-  {
-    char portbuf[6];
-    evutil_snprintf(portbuf, sizeof(portbuf), "%d", conn->port);
-
-    struct evutil_addrinfo hints = {0};
-    struct evutil_addrinfo *answer = NULL;
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_protocol = IPPROTO_UDP;
-    hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
-    int err = evutil_getaddrinfo(conn->host, portbuf, &hints, &answer);
-    if (err < 0)
-    {
-      luaL_error(L, "invaild address %s:%d", conn->host, conn->port);
-    }
-
-    struct sockaddr *addr = answer->ai_addr;
-    memcpy(&conn->addr, addr, sizeof(struct sockaddr));
-    conn->addrlen = answer->ai_addrlen;
-    evutil_freeaddrinfo(answer);
   }
 
   int socket_fd = 0;
@@ -251,15 +237,55 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
   return 1;
 }
 
+void udpd_conn_new_callback(int errcode, struct evutil_addrinfo *addr,
+                            void *ptr)
+{
+  Conn *conn = ptr;
+  lua_State *L = conn->L;
+  conn->L = NULL;
+
+  if (errcode)
+  {
+    if (!conn->selfRef)
+    {
+      lua_settop(L, 1);
+    }
+
+    lua_pushnil(L);
+    lua_pushfstring(L, "'%s' -> %s", conn->host, evutil_gai_strerror(errcode));
+
+    if (conn->selfRef)
+    {
+      luaL_unref(L, LUA_REGISTRYINDEX, conn->selfRef);
+      utlua_resume(L, NULL, 2);
+    }
+  }
+  else
+  {
+    memcpy(&conn->addr, addr->ai_addr, addr->ai_addrlen);
+    conn->addrlen = addr->ai_addrlen;
+
+    luaudpd_reconnect(conn, L);
+
+    if (conn->selfRef)
+    {
+      // Conn userdata on the top.
+      lua_rawgeti(L, LUA_REGISTRYINDEX, conn->selfRef);
+      luaL_unref(L, LUA_REGISTRYINDEX, conn->selfRef);
+      utlua_resume(L, NULL, 1);
+    }
+  }
+}
+
 LUA_API int udpd_new(lua_State *L)
 {
+  event_mgr_init();
+
   luaL_checktype(L, 1, LUA_TTABLE);
   lua_settop(L, 1);
 
   Conn *conn = lua_newuserdata(L, sizeof(Conn));
-  conn->socket_fd = 0;
-  conn->write_ev = NULL;
-  conn->read_ev = NULL;
+  memset(conn, 0, sizeof(Conn));
 
   SET_FUNC_REF_FROM_TABLE(L, conn->onReadRef, 1, "onread")
   SET_FUNC_REF_FROM_TABLE(L, conn->onSendReadyRef, 1, "onsendready")
@@ -273,11 +299,30 @@ LUA_API int udpd_new(lua_State *L)
   luaL_getmetatable(L, LUA_UDPD_CONNECTION_TYPE);
   lua_setmetatable(L, -2);
 
-  conn->L = utlua_mainthread(L);
+  conn->mainthread = utlua_mainthread(L);
+  conn->L = L;
 
-  luaudpd_reconnect(conn, L);
+  char portbuf[6];
+  evutil_snprintf(portbuf, sizeof(portbuf), "%d", conn->port);
 
-  return 1;
+  struct evutil_addrinfo hints = {0};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_DGRAM;
+  hints.ai_protocol = IPPROTO_UDP;
+  hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
+
+  struct evdns_getaddrinfo_request *req =
+      evdns_getaddrinfo(event_mgr_dnsbase(), conn->host, portbuf, &hints,
+                        udpd_conn_new_callback, conn);
+  if (req == NULL)
+  {
+    return lua_gettop(L) - 1;
+  }
+  else
+  {
+    conn->selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    return lua_yield(L, 0);
+  }
 }
 
 struct make_dest_callback_data
@@ -297,7 +342,7 @@ void udpd_conn_make_dest_callback(int errcode, struct evutil_addrinfo *addr,
   if (errcode)
   {
     lua_pushnil(L);
-    lua_pushfstring(L, "%s -> %s", data->host, evutil_gai_strerror(errcode));
+    lua_pushfstring(L, "'%s' -> %s", data->host, evutil_gai_strerror(errcode));
 
     if (data->yielded)
     {
@@ -322,6 +367,8 @@ void udpd_conn_make_dest_callback(int errcode, struct evutil_addrinfo *addr,
 
 LUA_API int udpd_conn_make_dest(lua_State *L)
 {
+  event_mgr_init();
+
   const char *host = luaL_checkstring(L, 1);
   char portbuf[6];
   evutil_snprintf(portbuf, sizeof(portbuf), "%d", (int)luaL_checkinteger(L, 2));
@@ -346,6 +393,7 @@ LUA_API int udpd_conn_make_dest(lua_State *L)
                         udpd_conn_make_dest_callback, data);
   if (req == NULL)
   {
+    // return all the values pushed on the stack by callback.
     return lua_gettop(L) - 2;
   }
   else

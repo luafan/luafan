@@ -3,6 +3,9 @@ fan.udpd
 ### `conn = udpd.new(arg:table)`
 create a udp socket.
 
+### `dest = udpd.make_dest(host:string, port:number)`
+create a dest:[UDP_AddrInfo](#udp_addr_info), can be used in `conn:send`, this api is non-blocking.
+
 ---------
 keys in the `arg`:
 
