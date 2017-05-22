@@ -28,6 +28,7 @@ typedef struct _ConnInfo
   BYTEARRAY input;
 
   lua_State *mainthread;
+  lua_State *L;
 
   int verbose;
 
@@ -141,12 +142,9 @@ static void resume_cb(int fd, short kind, void *userp);
 
 static void http_getpost_complete(ConnInfo *conn)
 {
-  lua_lock(conn->mainthread);
+  lua_State *L = conn->L;
 
-  lua_rawgeti(conn->mainthread, LUA_REGISTRYINDEX, conn->coref);
-  lua_State *L = lua_tothread(conn->mainthread, -1);
-  lua_pop(conn->mainthread, 1);
-
+  lua_lock(L);
   if (conn->bodyref != LUA_NOREF)
   {
     luaL_unref(L, LUA_REGISTRYINDEX, conn->bodyref);
@@ -231,7 +229,7 @@ static void http_getpost_complete(ConnInfo *conn)
 
   luaL_unref(L, LUA_REGISTRYINDEX, conn->headerref);
 
-  lua_unlock(conn->mainthread);
+  lua_unlock(L);
 
   ResumeInfo *info = malloc(sizeof(ResumeInfo));
   info->L = L;
@@ -414,7 +412,7 @@ static size_t filldata(char *ptr, size_t size, size_t nmemb, ConnInfo *conn)
 static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata)
 {
   ConnInfo *conn = (ConnInfo *)userdata;
-  lua_State *L = conn->mainthread;
+  lua_State *L = conn->L;
 
   lua_lock(L);
   size_t total = size * nmemb;
@@ -1318,13 +1316,14 @@ static int http_getpost(lua_State *L, int method)
 
   if (oncompleteref != LUA_NOREF)
   {
-    lua_State *co = lua_newthread(conn->mainthread);
+    conn->L = lua_newthread(conn->mainthread);
     conn->coref = luaL_ref(conn->mainthread, LUA_REGISTRYINDEX);
 
-    lua_rawgeti(co, LUA_REGISTRYINDEX, oncompleteref);
+    lua_rawgeti(conn->L, LUA_REGISTRYINDEX, oncompleteref);
   }
   else
   {
+    conn->L = L;
     lua_pushthread(L);
     conn->coref = luaL_ref(L, LUA_REGISTRYINDEX);
   }
