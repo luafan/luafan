@@ -1316,8 +1316,10 @@ static int http_getpost(lua_State *L, int method)
 
   if (oncompleteref != LUA_NOREF)
   {
+    lua_lock(conn->mainthread);
     conn->L = lua_newthread(conn->mainthread);
     conn->coref = luaL_ref(conn->mainthread, LUA_REGISTRYINDEX);
+    lua_unlock(conn->mainthread);
 
     lua_rawgeti(conn->L, LUA_REGISTRYINDEX, oncompleteref);
   }

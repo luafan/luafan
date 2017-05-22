@@ -18,8 +18,10 @@ static void main_handler(const int fd, const short which, void *arg)
   evtimer_del(mainevent);
   free(mainevent);
 
+  lua_lock(mainState);
   lua_State *co = lua_newthread(mainState);
   PUSH_REF(mainState);
+  lua_unlock(mainState);
 
   lua_rawgeti(co, LUA_REGISTRYINDEX, main_ref);
   utlua_resume(co, NULL, 0);

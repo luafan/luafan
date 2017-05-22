@@ -3,7 +3,7 @@
 
 typedef struct
 {
-  lua_State *L;
+  lua_State *mainthread;
 
   struct evhttp *httpd;
   struct evhttp_bound_socket *boundsocket;
@@ -52,8 +52,10 @@ static void newtable_from_req(lua_State *L, struct evhttp_request *req)
 static void httpd_handler_cgi_bin(struct evhttp_request *req,
                                   LuaServer *server)
 {
-  lua_State *co = lua_newthread(server->L);
-  PUSH_REF(server->L);
+  lua_lock(server->mainthread);
+  lua_State *co = lua_newthread(server->mainthread);
+  PUSH_REF(server->mainthread);
+  lua_unlock(server->mainthread);
 
   lua_rawgeti(co, LUA_REGISTRYINDEX, server->onServiceRef);
 
@@ -64,8 +66,8 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req,
 
   lua_pushvalue(co, -1); // duplicate for req,resp
 
-  utlua_resume(co, server->L, 2);
-  POP_REF(server->L);
+  utlua_resume(co, server->mainthread, 2);
+  POP_REF(server->mainthread);
 }
 
 static void request_push_body(lua_State *L, int idx)
@@ -497,7 +499,7 @@ LUA_API int utd_bind(lua_State *L)
   luaL_getmetatable(L, LUA_EVHTTP_SERVER_TYPE);
   lua_setmetatable(L, -2);
 
-  server->L = utlua_mainthread(L);
+  server->mainthread = utlua_mainthread(L);
   server->onServiceRef = LUA_NOREF;
   server->boundsocket = NULL;
   server->httpd = NULL;

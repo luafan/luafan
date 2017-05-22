@@ -30,7 +30,7 @@ typedef struct
   const char *ssl_error;
 #endif
 
-  lua_State *L;
+  lua_State *mainthread;
   int onReadRef;
   int onSendReadyRef;
 
@@ -58,7 +58,7 @@ static int conn_index = 0;
 typedef struct
 {
   struct evconnlistener *listener;
-  lua_State *L;
+  lua_State *mainthread;
 
   int onAcceptRef;
   int onSSLHostNameRef;
@@ -78,7 +78,7 @@ typedef struct
 typedef struct
 {
   struct bufferevent *buf;
-  lua_State *L;
+  lua_State *mainthread;
 
   int onReadRef;
   int onSendReadyRef;
@@ -91,11 +91,11 @@ typedef struct
   int onDisconnectedRef;
 } ACCEPT;
 
-#define TCPD_ACCEPT_UNREF(accept)                 \
-  CLEAR_REF(accept->L, accept->onSendReadyRef)    \
-  CLEAR_REF(accept->L, accept->onReadRef)         \
-  CLEAR_REF(accept->L, accept->onDisconnectedRef) \
-  CLEAR_REF(accept->L, accept->selfRef)
+#define TCPD_ACCEPT_UNREF(accept)                          \
+  CLEAR_REF(accept->mainthread, accept->onSendReadyRef)    \
+  CLEAR_REF(accept->mainthread, accept->onReadRef)         \
+  CLEAR_REF(accept->mainthread, accept->onDisconnectedRef) \
+  CLEAR_REF(accept->mainthread, accept->selfRef)
 
 LUA_API int lua_tcpd_server_close(lua_State *L)
 {
@@ -177,8 +177,10 @@ static void tcpd_accept_eventcb(struct bufferevent *bev, short events,
 
     if (accept->onDisconnectedRef != LUA_NOREF)
     {
-      lua_State *co = lua_newthread(accept->L);
-      PUSH_REF(accept->L);
+      lua_lock(accept->mainthread);
+      lua_State *co = lua_newthread(accept->mainthread);
+      PUSH_REF(accept->mainthread);
+      lua_unlock(accept->mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, accept->onDisconnectedRef);
 
@@ -200,10 +202,10 @@ static void tcpd_accept_eventcb(struct bufferevent *bev, short events,
         lua_pushnil(co);
       }
 
-      CLEAR_REF(accept->L, accept->onDisconnectedRef)
+      CLEAR_REF(accept->mainthread, accept->onDisconnectedRef)
 
-      utlua_resume(co, accept->L, 1);
-      POP_REF(accept->L);
+      utlua_resume(co, accept->mainthread, 1);
+      POP_REF(accept->mainthread);
     }
 
     TCPD_ACCEPT_UNREF(accept)
@@ -232,13 +234,15 @@ static void tcpd_accept_readcb(struct bufferevent *bev, void *ctx)
 
   if (accept->onReadRef != LUA_NOREF)
   {
-    lua_State *co = lua_newthread(accept->L);
-    PUSH_REF(accept->L);
+    lua_lock(accept->mainthread);
+    lua_State *co = lua_newthread(accept->mainthread);
+    PUSH_REF(accept->mainthread);
+    lua_unlock(accept->mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, accept->onReadRef);
     lua_pushlstring(co, (const char *)ba.buffer, ba.total);
-    utlua_resume(co, accept->L, 1);
-    POP_REF(accept->L);
+    utlua_resume(co, accept->mainthread, 1);
+    POP_REF(accept->mainthread);
   }
 
   bytearray_dealloc(&ba);
@@ -252,12 +256,14 @@ static void tcpd_accept_writecb(struct bufferevent *bev, void *ctx)
   {
     if (accept->onSendReadyRef != LUA_NOREF)
     {
-      lua_State *co = lua_newthread(accept->L);
-      PUSH_REF(accept->L);
+      lua_lock(accept->mainthread);
+      lua_State *co = lua_newthread(accept->mainthread);
+      PUSH_REF(accept->mainthread);
+      lua_unlock(accept->mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, accept->onSendReadyRef);
-      utlua_resume(co, accept->L, 0);
-      POP_REF(accept->L);
+      utlua_resume(co, accept->mainthread, 0);
+      POP_REF(accept->mainthread);
     }
   }
 }
@@ -269,15 +275,17 @@ void connlistener_cb(struct evconnlistener *listener, evutil_socket_t fd,
 
   if (serv->onAcceptRef != LUA_NOREF)
   {
-    lua_State *co = lua_newthread(serv->L);
-    PUSH_REF(serv->L);
+    lua_lock(serv->mainthread);
+    lua_State *co = lua_newthread(serv->mainthread);
+    PUSH_REF(serv->mainthread);
+    lua_unlock(serv->mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, serv->onAcceptRef);
 
     ACCEPT *accept = lua_newuserdata(co, sizeof(ACCEPT));
     memset(accept, 0, sizeof(ACCEPT));
     accept->buf = NULL;
-    accept->L = serv->L;
+    accept->mainthread = serv->mainthread;
     accept->selfRef = LUA_NOREF;
     accept->onReadRef = LUA_NOREF;
     accept->onSendReadyRef = LUA_NOREF;
@@ -338,8 +346,8 @@ void connlistener_cb(struct evconnlistener *listener, evutil_socket_t fd,
 
     accept->buf = bev;
 
-    utlua_resume(co, serv->L, 1);
-    POP_REF(serv->L);
+    utlua_resume(co, serv->mainthread, 1);
+    POP_REF(serv->mainthread);
   }
 }
 
@@ -374,13 +382,15 @@ static int ssl_servername_cb(SSL *s, int *ad, void *arg)
   SERVER *serv = (SERVER *)arg;
   if (hostname && serv->onSSLHostNameRef != LUA_NOREF)
   {
-    lua_State *co = lua_newthread(serv->L);
-    PUSH_REF(serv->L);
+    lua_lock(serv->mainthread);
+    lua_State *co = lua_newthread(serv->mainthread);
+    PUSH_REF(serv->mainthread);
+    lua_unlock(serv->mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, serv->onSSLHostNameRef);
     lua_pushstring(co, hostname);
-    utlua_resume(co, serv->L, 1);
-    POP_REF(serv->L);
+    utlua_resume(co, serv->mainthread, 1);
+    POP_REF(serv->mainthread);
   }
   // if (!p->servername)
   //     return SSL_TLSEXT_ERR_NOACK;
@@ -456,7 +466,7 @@ LUA_API int tcpd_bind(lua_State *L)
   luaL_getmetatable(L, LUA_TCPD_SERVER_TYPE);
   lua_setmetatable(L, -2);
 
-  serv->L = utlua_mainthread(L);
+  serv->mainthread = utlua_mainthread(L);
 
   lua_getfield(L, 1, "ipv6");
   int ipv6 = lua_toboolean(L, -1);
@@ -548,13 +558,15 @@ static void tcpd_conn_readcb(struct bufferevent *bev, void *ctx)
 
   if (conn->onReadRef != LUA_NOREF)
   {
-    lua_State *co = lua_newthread(conn->L);
-    PUSH_REF(conn->L);
+    lua_lock(conn->mainthread);
+    lua_State *co = lua_newthread(conn->mainthread);
+    PUSH_REF(conn->mainthread);
+    lua_unlock(conn->mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
     lua_pushlstring(co, (const char *)ba.buffer, ba.total);
-    utlua_resume(co, conn->L, 1);
-    POP_REF(conn->L);
+    utlua_resume(co, conn->mainthread, 1);
+    POP_REF(conn->mainthread);
   }
 
   bytearray_dealloc(&ba);
@@ -568,12 +580,14 @@ static void tcpd_conn_writecb(struct bufferevent *bev, void *ctx)
   {
     if (conn->onSendReadyRef != LUA_NOREF)
     {
-      lua_State *co = lua_newthread(conn->L);
-      PUSH_REF(conn->L);
+      lua_lock(conn->mainthread);
+      lua_State *co = lua_newthread(conn->mainthread);
+      PUSH_REF(conn->mainthread);
+      lua_unlock(conn->mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-      utlua_resume(co, conn->L, 0);
-      POP_REF(conn->L);
+      utlua_resume(co, conn->mainthread, 0);
+      POP_REF(conn->mainthread);
     }
   }
 }
@@ -589,12 +603,14 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
 
     if (conn->onConnectedRef != LUA_NOREF)
     {
-      lua_State *co = lua_newthread(conn->L);
-      PUSH_REF(conn->L);
+      lua_lock(conn->mainthread);
+      lua_State *co = lua_newthread(conn->mainthread);
+      PUSH_REF(conn->mainthread);
+      lua_unlock(conn->mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onConnectedRef);
-      utlua_resume(co, conn->L, 0);
-      POP_REF(conn->L);
+      utlua_resume(co, conn->mainthread, 0);
+      POP_REF(conn->mainthread);
     }
   }
   else if (events & BEV_EVENT_ERROR || events & BEV_EVENT_EOF ||
@@ -613,8 +629,10 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
 
     if (conn->onDisconnectedRef != LUA_NOREF)
     {
-      lua_State *co = lua_newthread(conn->L);
-      PUSH_REF(conn->L);
+      lua_lock(conn->mainthread);
+      lua_State *co = lua_newthread(conn->mainthread);
+      PUSH_REF(conn->mainthread);
+      lua_unlock(conn->mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onDisconnectedRef);
       if (events & BEV_EVENT_TIMEOUT)
@@ -669,8 +687,8 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
       {
         lua_pushnil(co);
       }
-      utlua_resume(co, conn->L, 1);
-      POP_REF(conn->L);
+      utlua_resume(co, conn->mainthread, 1);
+      POP_REF(conn->mainthread);
     }
   }
 }
@@ -1006,7 +1024,7 @@ LUA_API int tcpd_connect(lua_State *L)
   luaL_getmetatable(L, LUA_TCPD_CONNECTION_TYPE);
   lua_setmetatable(L, -2);
 
-  conn->L = utlua_mainthread(L);
+  conn->mainthread = utlua_mainthread(L);
 
   luatcpd_reconnect(conn);
   return 1;
