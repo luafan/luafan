@@ -74,14 +74,15 @@ static void udpd_writecb(evutil_socket_t fd, short what, void *arg)
 
   if (conn->onSendReadyRef != LUA_NOREF)
   {
-    lua_lock(conn->mainthread);
-    lua_State *co = lua_newthread(conn->mainthread);
-    PUSH_REF(conn->mainthread);
-    lua_unlock(conn->mainthread);
+    lua_State *mainthread = conn->mainthread;
+    lua_lock(mainthread);
+    lua_State *co = lua_newthread(mainthread);
+    PUSH_REF(mainthread);
+    lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-    utlua_resume(co, conn->mainthread, 0);
-    POP_REF(conn->mainthread);
+    utlua_resume(co, mainthread, 0);
+    POP_REF(mainthread);
   }
 }
 
@@ -99,10 +100,11 @@ static void udpd_readcb(evutil_socket_t fd, short what, void *arg)
   {
     if (conn->onReadRef != LUA_NOREF)
     {
-      lua_lock(conn->mainthread);
-      lua_State *co = lua_newthread(conn->mainthread);
-      PUSH_REF(conn->mainthread);
-      lua_unlock(conn->mainthread);
+      lua_State *mainthread = conn->mainthread;
+      lua_lock(mainthread);
+      lua_State *co = lua_newthread(mainthread);
+      PUSH_REF(mainthread);
+      lua_unlock(mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
       lua_pushlstring(co, (const char *)buf, len);
@@ -114,8 +116,8 @@ static void udpd_readcb(evutil_socket_t fd, short what, void *arg)
       memcpy(&dest->si_client, &si_client, sizeof(si_client));
       dest->client_len = client_len;
 
-      utlua_resume(co, conn->mainthread, 2);
-      POP_REF(conn->mainthread);
+      utlua_resume(co, mainthread, 2);
+      POP_REF(mainthread);
     }
   }
 }

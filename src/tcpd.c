@@ -177,10 +177,11 @@ static void tcpd_accept_eventcb(struct bufferevent *bev, short events,
 
     if (accept->onDisconnectedRef != LUA_NOREF)
     {
-      lua_lock(accept->mainthread);
-      lua_State *co = lua_newthread(accept->mainthread);
-      PUSH_REF(accept->mainthread);
-      lua_unlock(accept->mainthread);
+      lua_State *mainthread = accept->mainthread;
+      lua_lock(mainthread);
+      lua_State *co = lua_newthread(mainthread);
+      PUSH_REF(mainthread);
+      lua_unlock(mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, accept->onDisconnectedRef);
 
@@ -202,10 +203,10 @@ static void tcpd_accept_eventcb(struct bufferevent *bev, short events,
         lua_pushnil(co);
       }
 
-      CLEAR_REF(accept->mainthread, accept->onDisconnectedRef)
+      CLEAR_REF(mainthread, accept->onDisconnectedRef)
 
-      utlua_resume(co, accept->mainthread, 1);
-      POP_REF(accept->mainthread);
+      utlua_resume(co, mainthread, 1);
+      POP_REF(mainthread);
     }
 
     TCPD_ACCEPT_UNREF(accept)
@@ -234,15 +235,16 @@ static void tcpd_accept_readcb(struct bufferevent *bev, void *ctx)
 
   if (accept->onReadRef != LUA_NOREF)
   {
-    lua_lock(accept->mainthread);
-    lua_State *co = lua_newthread(accept->mainthread);
-    PUSH_REF(accept->mainthread);
-    lua_unlock(accept->mainthread);
+    lua_State *mainthread = accept->mainthread;
+    lua_lock(mainthread);
+    lua_State *co = lua_newthread(mainthread);
+    PUSH_REF(mainthread);
+    lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, accept->onReadRef);
     lua_pushlstring(co, (const char *)ba.buffer, ba.total);
-    utlua_resume(co, accept->mainthread, 1);
-    POP_REF(accept->mainthread);
+    utlua_resume(co, mainthread, 1);
+    POP_REF(mainthread);
   }
 
   bytearray_dealloc(&ba);
@@ -256,14 +258,15 @@ static void tcpd_accept_writecb(struct bufferevent *bev, void *ctx)
   {
     if (accept->onSendReadyRef != LUA_NOREF)
     {
-      lua_lock(accept->mainthread);
-      lua_State *co = lua_newthread(accept->mainthread);
-      PUSH_REF(accept->mainthread);
-      lua_unlock(accept->mainthread);
+      lua_State *mainthread = accept->mainthread;
+      lua_lock(mainthread);
+      lua_State *co = lua_newthread(mainthread);
+      PUSH_REF(mainthread);
+      lua_unlock(mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, accept->onSendReadyRef);
-      utlua_resume(co, accept->mainthread, 0);
-      POP_REF(accept->mainthread);
+      utlua_resume(co, mainthread, 0);
+      POP_REF(mainthread);
     }
   }
 }
@@ -275,17 +278,18 @@ void connlistener_cb(struct evconnlistener *listener, evutil_socket_t fd,
 
   if (serv->onAcceptRef != LUA_NOREF)
   {
-    lua_lock(serv->mainthread);
-    lua_State *co = lua_newthread(serv->mainthread);
-    PUSH_REF(serv->mainthread);
-    lua_unlock(serv->mainthread);
+    lua_State *mainthread = serv->mainthread;
+    lua_lock(mainthread);
+    lua_State *co = lua_newthread(mainthread);
+    PUSH_REF(mainthread);
+    lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, serv->onAcceptRef);
 
     ACCEPT *accept = lua_newuserdata(co, sizeof(ACCEPT));
     memset(accept, 0, sizeof(ACCEPT));
     accept->buf = NULL;
-    accept->mainthread = serv->mainthread;
+    accept->mainthread = mainthread;
     accept->selfRef = LUA_NOREF;
     accept->onReadRef = LUA_NOREF;
     accept->onSendReadyRef = LUA_NOREF;
@@ -346,8 +350,8 @@ void connlistener_cb(struct evconnlistener *listener, evutil_socket_t fd,
 
     accept->buf = bev;
 
-    utlua_resume(co, serv->mainthread, 1);
-    POP_REF(serv->mainthread);
+    utlua_resume(co, mainthread, 1);
+    POP_REF(mainthread);
   }
 }
 
@@ -382,15 +386,16 @@ static int ssl_servername_cb(SSL *s, int *ad, void *arg)
   SERVER *serv = (SERVER *)arg;
   if (hostname && serv->onSSLHostNameRef != LUA_NOREF)
   {
-    lua_lock(serv->mainthread);
-    lua_State *co = lua_newthread(serv->mainthread);
-    PUSH_REF(serv->mainthread);
-    lua_unlock(serv->mainthread);
+    lua_State *mainthread = serv->mainthread;
+    lua_lock(mainthread);
+    lua_State *co = lua_newthread(mainthread);
+    PUSH_REF(mainthread);
+    lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, serv->onSSLHostNameRef);
     lua_pushstring(co, hostname);
-    utlua_resume(co, serv->mainthread, 1);
-    POP_REF(serv->mainthread);
+    utlua_resume(co, mainthread, 1);
+    POP_REF(mainthread);
   }
   // if (!p->servername)
   //     return SSL_TLSEXT_ERR_NOACK;
@@ -558,15 +563,16 @@ static void tcpd_conn_readcb(struct bufferevent *bev, void *ctx)
 
   if (conn->onReadRef != LUA_NOREF)
   {
-    lua_lock(conn->mainthread);
-    lua_State *co = lua_newthread(conn->mainthread);
-    PUSH_REF(conn->mainthread);
-    lua_unlock(conn->mainthread);
+    lua_State *mainthread = conn->mainthread;
+    lua_lock(mainthread);
+    lua_State *co = lua_newthread(mainthread);
+    PUSH_REF(mainthread);
+    lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
     lua_pushlstring(co, (const char *)ba.buffer, ba.total);
-    utlua_resume(co, conn->mainthread, 1);
-    POP_REF(conn->mainthread);
+    utlua_resume(co, mainthread, 1);
+    POP_REF(mainthread);
   }
 
   bytearray_dealloc(&ba);
@@ -580,14 +586,15 @@ static void tcpd_conn_writecb(struct bufferevent *bev, void *ctx)
   {
     if (conn->onSendReadyRef != LUA_NOREF)
     {
-      lua_lock(conn->mainthread);
-      lua_State *co = lua_newthread(conn->mainthread);
-      PUSH_REF(conn->mainthread);
-      lua_unlock(conn->mainthread);
+      lua_State *mainthread = conn->mainthread;
+      lua_lock(mainthread);
+      lua_State *co = lua_newthread(mainthread);
+      PUSH_REF(mainthread);
+      lua_unlock(mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-      utlua_resume(co, conn->mainthread, 0);
-      POP_REF(conn->mainthread);
+      utlua_resume(co, mainthread, 0);
+      POP_REF(mainthread);
     }
   }
 }
@@ -603,14 +610,15 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
 
     if (conn->onConnectedRef != LUA_NOREF)
     {
-      lua_lock(conn->mainthread);
-      lua_State *co = lua_newthread(conn->mainthread);
-      PUSH_REF(conn->mainthread);
-      lua_unlock(conn->mainthread);
+      lua_State *mainthread = conn->mainthread;
+      lua_lock(mainthread);
+      lua_State *co = lua_newthread(mainthread);
+      PUSH_REF(mainthread);
+      lua_unlock(mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onConnectedRef);
-      utlua_resume(co, conn->mainthread, 0);
-      POP_REF(conn->mainthread);
+      utlua_resume(co, mainthread, 0);
+      POP_REF(mainthread);
     }
   }
   else if (events & BEV_EVENT_ERROR || events & BEV_EVENT_EOF ||
@@ -629,10 +637,11 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
 
     if (conn->onDisconnectedRef != LUA_NOREF)
     {
-      lua_lock(conn->mainthread);
-      lua_State *co = lua_newthread(conn->mainthread);
-      PUSH_REF(conn->mainthread);
-      lua_unlock(conn->mainthread);
+      lua_State *mainthread = conn->mainthread;
+      lua_lock(mainthread);
+      lua_State *co = lua_newthread(mainthread);
+      PUSH_REF(mainthread);
+      lua_unlock(mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onDisconnectedRef);
       if (events & BEV_EVENT_TIMEOUT)
@@ -687,8 +696,8 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
       {
         lua_pushnil(co);
       }
-      utlua_resume(co, conn->mainthread, 1);
-      POP_REF(conn->mainthread);
+      utlua_resume(co, mainthread, 1);
+      POP_REF(mainthread);
     }
   }
 }
