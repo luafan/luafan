@@ -1170,7 +1170,7 @@ static int http_getpost(lua_State *L, int method)
 
     if (proxy && proxyport > 0)
     {
-      LOGD("set proxy %s:%d", proxy, proxyport);
+      LOGD("set proxy %s:%d\n", proxy, proxyport);
       curl_easy_setopt(conn->easy, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
       curl_easy_setopt(conn->easy, CURLOPT_PROXY, proxy);
       curl_easy_setopt(conn->easy, CURLOPT_PROXYPORT, proxyport);

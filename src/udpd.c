@@ -421,7 +421,11 @@ LUA_API int udpd_conn_send(lua_State *L)
   size_t len = 0;
   const char *data = luaL_checklstring(L, 2, &len);
 
-  luaudpd_reconnect(conn, L);
+  if (!conn->socket_fd) {
+    lua_pushnil(L);
+    lua_pushliteral(L, "socket was not created.");
+    return 2;
+  }
 
   int ret = 0;
   if (data && len > 0 && conn->socket_fd && lua_gettop(L) > 2)

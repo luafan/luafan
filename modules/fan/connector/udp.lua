@@ -135,7 +135,7 @@ end
 function apt_mt:_onack(buf)
   if config.debug then
     local output_index,count,package_index = string.unpack("<I4I2I2", buf)
-    print(string.format("%s:%d\tack: %d %d/%d", self.host, self.port, output_index, package_index, count))
+    print(string.format("recv<ack> %s:%d\t[%d] %d/%d", self.host, self.port, output_index, package_index, count))
   end
 
   local map = self._output_wait_package_parts_map[buf]
@@ -180,7 +180,7 @@ function apt_mt:_onread(buf)
       -- end
 
       if config.debug then
-        print(string.format("%s:%d\trecv: [%d] %d/%d (body=%d)", self.host, self.port, output_index, package_index, count, #(body)))
+        print(string.format("recv<data> %s:%d\t[%d] %d/%d (body=%d)", self.host, self.port, output_index, package_index, count, #(body)))
       end
 
       local incoming_object = self._incoming_map[output_index]
@@ -221,15 +221,11 @@ function apt_mt:_onread(buf)
   end
 end
 
-function apt_mt:_send(buf)
+function apt_mt:_send(buf, kind)
   -- print("send", #(buf))
   if config.debug then
     local output_index,count,package_index = string.unpack("<I4I2I2", buf)
-    if dest and #(dest) > 0 then
-      print(string.format("send: %s:%d\t[%d]\t%d/%d", dest[1], dest[2], output_index, package_index, count))
-    else
-      print(string.format("send: [%d]\t%d/%d", output_index, package_index, count))
-    end
+    print(string.format("send<%s> %s\t[%d] %d/%d", kind, self.dest, output_index, package_index, count))
   end
 
   self.conn:send(buf, self.dest)
@@ -289,18 +285,18 @@ function apt_mt:_onsendready()
       -- print("multi ack sub:", #package)
       table.move(self._output_ack_package, max_ack_count + 1, #(self._output_ack_package), 1, tmp)
       self._output_ack_package = tmp
-      self:_send(multi_ack_head .. package)
+      self:_send(multi_ack_head .. package, "mack")
       return true
     elseif #(self._output_ack_package) > 1 then
       -- print("multi_ack_head", #(self._output_ack_package))
       local package = table.concat(self._output_ack_package)
       self._output_ack_package = {}
-      self:_send(multi_ack_head .. package)
+      self:_send(multi_ack_head .. package, "mack")
       return true
     end
   elseif #(self._output_ack_package) > 0 then
     local package = table.remove(self._output_ack_package)
-    self:_send(package)
+    self:_send(package, "ack")
     return true
   end
 
@@ -317,7 +313,7 @@ function apt_mt:_onsendready()
 
       -- print("_output_wait_count", self._output_wait_count)
 
-      self:_send(package)
+      self:_send(package, "data")
       return true
     end
   end
@@ -369,12 +365,17 @@ local function connect(host, port, path)
   }
   setmetatable(t, apt_mt)
 
+  host = t.dest:getHost()
+  port = t.dest:getPort()
+
   t.conn = udpd.new{
     host = host,
     port = port,
     onread = function(buf, from)
       -- print("onread", #(buf), from, host, port, type(from:getPort()), type(port))
       config.udp_receive_total = config.udp_receive_total + 1
+      
+      -- connect() protection, only accept connected host/port.
       if from:getHost() == host and from:getPort() == port then
         t:_onread(buf)
       end
