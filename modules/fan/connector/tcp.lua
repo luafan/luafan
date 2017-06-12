@@ -1,5 +1,8 @@
 local tcpd = require "fan.tcpd"
 local stream = require "fan.stream"
+local config = require "config"
+
+local TCP_PAUSE_READ_WRITE_ON_CALLBACK = config.tcp_pause_read_write_on_callback
 
 local apt_mt = {}
 apt_mt.__index = apt_mt
@@ -94,7 +97,15 @@ local function connect(host, port, path, args)
       t._readstream:AddBytes(buf)
       t._readstream:prepare_get()
 
+      if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
+        t.conn:pause_read()
+      end
+      
       t:_onread(t._readstream)
+
+      if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
+        t.conn:resume_read()
+      end
     end,
     onsendready = function()
       t:_onsendready()
@@ -133,8 +144,18 @@ local function bind(host, port, path, args)
           t._readstream:AddBytes(buf)
           t._readstream:prepare_get()
 
+          if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
+            t.conn:pause_read()
+          end
+
           if not t:_onread(t._readstream) and t.onread then
-            t.onread(t._readstream)
+            local status,msg = pcall(t.onread, t._readstream)
+            if not status then
+              print(msg)
+            end
+          end
+          if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
+            t.conn:resume_read()
           end
         end,
         onsendready = function()
