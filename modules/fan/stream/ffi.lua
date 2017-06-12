@@ -16,6 +16,9 @@ void ffi_stream_new(BYTEARRAY *ba, const char *data, size_t len);
 void ffi_stream_gc(BYTEARRAY *ba);
 size_t ffi_stream_available(BYTEARRAY *ba);
 
+bool ffi_stream_mark(BYTEARRAY *ba);
+bool ffi_stream_reset(BYTEARRAY *ba);
+
 bool ffi_stream_get_u8(BYTEARRAY *ba, uint8_t *result);
 bool ffi_stream_get_u16(BYTEARRAY *ba, uint16_t *result);
 bool ffi_stream_get_u32(BYTEARRAY *ba, uint32_t *result);
@@ -83,6 +86,14 @@ end
 
 function stream_mt:empty()
   stream_ffi.ffi_stream_empty(self)
+end
+
+function stream_mt:mark()
+  return stream_ffi.ffi_stream_mark(self)
+end
+
+function stream_mt:reset()
+  return stream_ffi.ffi_stream_reset(self)
 end
 
 function stream_mt:GetU8()
