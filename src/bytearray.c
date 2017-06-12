@@ -128,6 +128,28 @@ size_t bytearray_read_available(BYTEARRAY *ba)
   return ba->total - ba->offset;
 }
 
+bool bytearray_mark(BYTEARRAY *ba)
+{
+  if (ba == NULL || ba->buffer == NULL || !ba->reading)
+  {
+    return 0;
+  }
+
+  ba->mark = ba->offset;
+  return 1;
+}
+
+bool bytearray_reset(BYTEARRAY *ba)
+{
+  if (ba == NULL || ba->buffer == NULL || !ba->reading)
+  {
+    return 0;
+  }
+
+  ba->offset = ba->mark;
+  return 1;
+}
+
 bool bytearray_empty(BYTEARRAY *ba)
 {
   if (ba != NULL)
@@ -158,6 +180,7 @@ bool bytearray_write_ready(BYTEARRAY *ba)
     ba->offset = ba->total;
   }
 
+  ba->mark = 0;
   ba->total = ba->buflen;
   ba->reading = false;
 

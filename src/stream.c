@@ -204,6 +204,28 @@ LUA_API int luafan_stream_get_string(lua_State *L)
   }
 }
 
+LUA_API int luafan_stream_mark(lua_State *L)
+{
+  BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
+  if (ffi_stream_mark(ba)) {
+    lua_pushboolean(L, true);
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+LUA_API int luafan_stream_reset(lua_State *L)
+{
+  BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
+  if (ffi_stream_reset(ba)) {
+    lua_pushboolean(L, true);
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
 LUA_API int luafan_stream_get_bytes(lua_State *L)
 {
   size_t buflen = luaL_optinteger(L, 2, -1);
@@ -325,6 +347,9 @@ static const struct luaL_Reg streammtlib[] = {
     {"AddD64", luafan_stream_add_d64},
     {"AddBytes", luafan_stream_add_bytes},
     {"AddString", luafan_stream_add_string},
+
+    {"mark", luafan_stream_mark},
+    {"reset", luafan_stream_reset},
 
     {"package", luafan_stream_package},
     {NULL, NULL},

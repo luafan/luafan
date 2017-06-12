@@ -13,6 +13,7 @@ typedef struct
 {
   size_t offset;
   size_t total;
+  size_t mark;
   uint8_t *buffer;
   size_t buflen;
   bool reading;
@@ -27,6 +28,9 @@ bool bytearray_read_ready(BYTEARRAY *ba);
 bool bytearray_write_ready(BYTEARRAY *ba);
 bool bytearray_empty(BYTEARRAY *ba);
 size_t bytearray_read_available(BYTEARRAY *ba);
+
+bool bytearray_mark(BYTEARRAY *ba);
+bool bytearray_reset(BYTEARRAY *ba);
 
 bool bytearray_write8(BYTEARRAY *ba, const uint8_t value);
 bool bytearray_write16(BYTEARRAY *ba, const uint16_t value);

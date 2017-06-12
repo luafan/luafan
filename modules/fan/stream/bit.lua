@@ -199,6 +199,21 @@ function stream_mt:prepare_add()
   if self.rw == "r" then
     self.data = string.sub(self.data, self.offset)
     self.rw = "w"
+    self.offset_mark = 0
+  end
+end
+
+function stream_mt:mark()
+  if self.rw == "r" then
+    self.offset_mark = self.offset
+    return true
+  end
+end
+
+function stream_mt:reset()
+  if self.rw == "r" then
+    self.offset = self.offset_mark
+    return true
   end
 end
 

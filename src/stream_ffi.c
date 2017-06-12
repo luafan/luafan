@@ -102,6 +102,16 @@ bool ffi_stream_get_d64(BYTEARRAY *ba, double *result)
   return bytearray_read64d(ba, result);
 }
 
+bool ffi_stream_mark(BYTEARRAY *ba)
+{
+  return bytearray_mark(ba);
+}
+
+bool ffi_stream_reset(BYTEARRAY *ba)
+{
+  return bytearray_reset(ba);
+}
+
 void ffi_stream_get_string(BYTEARRAY *ba, uint8_t **buff, size_t *buflen)
 {
   size_t offset = ba->offset;
