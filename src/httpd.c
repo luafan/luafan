@@ -591,7 +591,7 @@ LUA_API int utd_bind(lua_State *L)
 
 static const luaL_Reg utdlib[] = {{"bind", utd_bind}, {NULL, NULL}};
 
-LUA_API int luaopen_fan_httpd(lua_State *L)
+LUA_API int luaopen_fan_httpd_core(lua_State *L)
 {
   luaL_newmetatable(L, LUA_EVHTTP_REQUEST_TYPE);
 
