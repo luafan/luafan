@@ -1,8 +1,8 @@
 package = "luafan"
-version = "0.5-1"
+version = "0.6-1"
 source = {
    url = "git://github.com/luafan/luafan",
-   tag = "v0.5"
+   tag = "v0.6"
 }
 
 description = {

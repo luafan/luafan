@@ -1,8 +1,8 @@
-package = "luafanmicro"
-version = "0.5-1"
+package = "luafanlite"
+version = "0.6-1"
 source = {
    url = "git://github.com/luafan/luafan",
-   tag = "v0.5"
+   tag = "v0.6"
 }
 
 description = {
@@ -19,9 +19,15 @@ dependencies = {
 }
 
 external_dependencies = {
+   OPENSSL = {
+      header = "openssl/opensslv.h"
+   },
    LIBEVENT = {
       header = "event2/event.h"
    },
+   CURL = {
+      header = "curl/curl.h"
+   }
 }
 
 build = {
@@ -32,18 +38,21 @@ build = {
             "src/utlua.c",
             "src/bytearray.c",
             "src/event_mgr.c",
+            "src/hostcheck.c",
+            "src/openssl_hostname_validation.c",
             "src/luafan.c",
             "src/tcpd.c",
             "src/udpd.c",
             "src/stream.c",
             "src/objectbuf.c",
             "src/fifo.c",
+            "src/http.c",
             "src/httpd.c",
          },
-         defines = { "FAN_HAS_OPENSSL=0", "FAN_HAS_LUAJIT=1" },
-         libraries = { "event" },
-         incdirs = { "$(LIBEVENT_INCDIR)" },
-         libdirs = { "$(LIBEVENT_LIBDIR)" }
+         defines = {"FAN_HAS_OPENSSL=1", "FAN_HAS_LUAJIT=1"},
+         libraries = { "event", "event_openssl", "ssl", "crypto", "curl", "resolv" },
+         incdirs = { "$(CURL_INCDIR)", "$(LIBEVENT_INCDIR)", "$(OPENSSL_INCDIR)" },
+         libdirs = { "$(CURL_LIBDIR)", "$(LIBEVENT_LIBDIR)", "$(OPENSSL_LIBDIR)" }
       },
       ["fan.connector.init"] = "modules/fan/connector/init.lua",
       ["fan.connector.tcp"] = "modules/fan/connector/tcp.lua",
@@ -59,7 +68,6 @@ build = {
       ["fan.objectbuf.init"] = "modules/fan/objectbuf/init.lua",
       ["fan.upnp"] = "modules/fan/upnp.lua",
       ["fan.utils"] = "modules/fan/utils.lua",
-      ["fan.http"] = "modules/fan/http.lua",
       ["config"] = "modules/config.lua",
       ["sqlite3.orm"] = "modules/sqlite3/orm.lua"
    }
