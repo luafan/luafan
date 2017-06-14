@@ -238,6 +238,14 @@ context_mt.__index = function(ctx, key)
     end
 end
 
+local headers_mt = {}
+headers_mt.__index = function(headers, key)
+    local lk = key:lower()
+    local obj = rawget(headers, lk)
+    headers[key] = obj
+    return obj
+end
+
 local function onaccept(apt, onservice)
     local context
     
@@ -245,6 +253,7 @@ local function onaccept(apt, onservice)
         if not context or context.reply_status == "end" then
             -- recreate context if previous has been replied.
             context = {headers = {}, out_headers = {}, apt = apt, content_type = "text/plain; charset=utf-8", read_offset = 0}
+            setmetatable(context.headers, headers_mt)
             setmetatable(context, context_mt)
         end
         
