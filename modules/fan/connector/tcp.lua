@@ -88,10 +88,15 @@ function apt_mt:close()
 end
 
 local function connect(host, port, path, args)
+  local running = coroutine.running()
+
   local t = {_readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
   local params = {
     host = host,
     port = port,
+    onconnected = function()
+      coroutine.resume(running)
+    end,
     onread = function(buf)
       t._readstream:prepare_add()
       t._readstream:AddBytes(buf)
@@ -111,8 +116,15 @@ local function connect(host, port, path, args)
       t:_onsendready()
     end,
     ondisconnected = function(msg)
-      print("client ondisconnected", msg)
+      if config.debug then
+        print("client ondisconnected", msg)
+      end
+      t.disconnected_message = msg
       t:close()
+
+      if running then
+        coroutine.resume(running)
+      end
     end
   }
 
@@ -125,6 +137,10 @@ local function connect(host, port, path, args)
   t.conn = tcpd.connect(params)
 
   setmetatable(t, apt_mt)
+
+  coroutine.yield()
+  running = nil
+  
   return t
 end
 
