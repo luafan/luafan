@@ -35,6 +35,7 @@ local mt = getmetatable(test)
 
 function mt:readline()
     if self:available() > 0 then
+        local breakflag
         local t = {}
         while true do
             local b = self:GetBytes(1)
@@ -44,16 +45,20 @@ function mt:readline()
                 self:mark()
                 if self:GetBytes(1) ~= "\n" then
                     self:reset()
+                    breakflag = "\r"
+                else
+                    breakflag = "\r\n"
                 end
                 break
             elseif b == "\n" then
+                breakflag = "\n"
                 break
             else
                 table.insert(t, b)
             end
         end
 
-        return table.concat(t)
+        return table.concat(t), breakflag
     end
 end
 

@@ -4,15 +4,21 @@ local http = require "fan.http"
 
 local function readheader(ctx, input)
     while not ctx.header_complete do
-        local line = input:readline()
+        local line,breakflag = input:readline()
         if not line then
             break
+        elseif not breakflag then
+            return false, #line + 2
         else
             if #(line) == 0 then
                 ctx.header_complete = true
             else
                 if ctx.first_line then
                     local k, v = string.match(line, "([^:]+):[ ]*(.*)")
+                    if not k or not v then
+                        return false
+                    end
+                    
                     k = string.lower(k)
                     local old = ctx.headers[k]
                     if old then
@@ -26,6 +32,9 @@ local function readheader(ctx, input)
                     end
                 else
                     ctx.method, ctx.path, ctx.version = string.match(line, "([A-Z]+) ([^ ]+) HTTP/([0-9.]+)")
+                    if not ctx.method or not ctx.path or not ctx.version then
+                        return false
+                    end
                     local a, b = string.find(ctx.path, "?", 1, true)
                     if a and b then
                         ctx.query = string.sub(ctx.path, b + 1)
@@ -36,6 +45,8 @@ local function readheader(ctx, input)
             end
         end
     end
+
+    return true
 end
 
 local context_mt = {}
@@ -263,7 +274,15 @@ local function onaccept(apt, onservice)
         end
         
         if not context.header_complete then
-            readheader(context, input)
+            local status,expect = readheader(context, input)
+            if not status then
+                if expect then
+                    input = apt:receive(expect)
+                else
+                    apt:close()
+                    return
+                end
+            end
         end
         
         if context.header_complete then

@@ -40,7 +40,13 @@ function apt_mt:receive(expect)
   else
     self.receiving_expect = expect
     self.receiving = coroutine.running()
-    return coroutine.yield()
+
+    local input = coroutine.yield()
+    
+    self.receiving_expect = 0
+    self.receiving = nil
+
+    return input
   end
 end
 
@@ -60,11 +66,7 @@ end
 
 function apt_mt:_onread(input)
   if self.receiving and (not input or input:available() >= self.receiving_expect) then
-    local receiving = self.receiving
-    self.receiving = nil
-    self.receiving_expect = 0
-
-    local st,msg = coroutine.resume(receiving, input)
+    local st,msg = coroutine.resume(self.receiving, input)
     if not st then
       print(msg)
     end

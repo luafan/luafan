@@ -895,7 +895,10 @@ LUA_API int tcpd_connect(lua_State *L)
   if (ssl)
   {
     lua_getfield(L, 1, "cainfo");
-    const char *cainfo = luaL_checkstring(L, -1);
+    const char *cainfo = luaL_optstring(L, -1, NULL);
+    if (!cainfo) {
+      luaL_error(L, "expect cainfo on ssl connection.");
+    }
     lua_pop(L, 1);
 
     BYTEARRAY ba = {0};
