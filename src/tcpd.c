@@ -328,7 +328,7 @@ void connlistener_cb(struct evconnlistener *listener, evutil_socket_t fd,
     }
     if (serv->receive_buffer_size)
     {
-      setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &serv->receive_buffer_size,
+      setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &serv->receive_buffer_size,
                  sizeof(serv->receive_buffer_size));
     }
 
@@ -748,7 +748,7 @@ static void luatcpd_reconnect(Conn *conn)
   }
   if (conn->receive_buffer_size)
   {
-    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &conn->receive_buffer_size,
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &conn->receive_buffer_size,
                sizeof(conn->receive_buffer_size));
   }
 
