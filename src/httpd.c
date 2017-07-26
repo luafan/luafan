@@ -583,10 +583,24 @@ LUA_API int utd_bind(lua_State *L)
       httpd, (void (*)(struct evhttp_request *, void *))httpd_handler_cgi_bin,
       server);
 
-  lua_settop(L, 2);
-  lua_pushinteger(L, port);
+  lua_newtable(L);
+  lua_pushvalue(L, 2);
+  lua_setfield(L, -2, "serv");
 
-  return 2;
+  lua_pushinteger(L, port);
+  lua_setfield(L, -2, "port");
+
+  if (host)
+  {
+    lua_getfield(L, 1, "host");
+  }
+  else
+  {
+    lua_pushliteral(L, "0.0.0.0");
+  }
+  lua_setfield(L, -2, "host");
+
+  return 1;
 }
 
 static const luaL_Reg utdlib[] = {{"bind", utd_bind}, {NULL, NULL}};

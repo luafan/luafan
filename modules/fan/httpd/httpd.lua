@@ -142,7 +142,9 @@ function context_mt:reply(code, message, body)
 
     table.insert(t, "\r\n")
     
-    table.insert(t, body)
+    if body then
+        table.insert(t, body)
+    end
     self.apt:send(table.concat(t))
 end
 

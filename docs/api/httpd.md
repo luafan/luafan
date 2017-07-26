@@ -1,8 +1,8 @@
 fan.httpd
 =========
 
-### `serv,port = httpd.bind(arg:table)`
-create a simple http server.
+### `serv_info_table = httpd.bind(arg:table)`
+create a simple http server, `serv_info_table` contains `host` and `port`.
 
 ---------
 keys in the `arg`:
@@ -22,11 +22,11 @@ on request callback, arg1 => [http_request](#http_request), arg2 => [http_respon
 
 * `cert`
 
-ssl support, only available with libevent2.1.5+
+ssl support, if using core `config.httpd_using_core`, this property only available with libevent2.1.5+
 
 * `key`
 
-ssl support, only available with libevent2.1.5+
+ssl support, if using core `config.httpd_using_core`, this property only available with libevent2.1.5+
 
 HTTP_REQUEST
 ============
