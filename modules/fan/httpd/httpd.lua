@@ -63,10 +63,12 @@ function context_reply_fillheader(t, ctx, code, message)
         table.insert(t, string.format("Content-Type: %s\r\n", ctx.content_type))
     end
 
-    local accept = ctx.headers["accept-encoding"]
-    if accept and type(accept) == "string" and string.find(accept, "gzip") then
-        table.insert(t, "Content-Encoding: gzip\r\n")
-        ctx._gzip_body = true
+    if not ctx._content_encoding_set then
+        local accept = ctx.headers["accept-encoding"]
+        if accept and type(accept) == "string" and string.find(accept, "gzip") then
+            table.insert(t, "Content-Encoding: gzip\r\n")
+            ctx._gzip_body = true
+        end
     end
 end
 
@@ -95,6 +97,10 @@ function context_mt:reply_start(code, message)
     
     table.insert(t, "Transfer-Encoding: chunked\r\n")
     table.insert(t, "\r\n")
+
+    if self._gzip_body then
+        self._gzip_body_list = {}
+    end
     
     self.apt:send(table.concat(t))
 end
@@ -105,10 +111,11 @@ function context_mt:reply_chunk(data)
     end
 
     if self._gzip_body then
-        data = zlib.compress(data, nil, nil, 31)
+        table.insert(self._gzip_body_list, data)
+    else
+        local output = string.format("%X\r\n%s\r\n", #data, data)
+        self.apt:send(output)
     end
-
-    self.apt:send(string.format("%X\r\n%s\r\n", #data, data))
 end
 
 function context_mt:reply_end()
@@ -116,6 +123,12 @@ function context_mt:reply_end()
         return
     end
     self.reply_status = "end"
+
+    if self._gzip_body then
+        local output = table.concat(self._gzip_body_list)
+        output = zlib.compress(output, nil, nil, 31)
+        self.apt:send(string.format("%X\r\n%s\r\n", #output, output))
+    end
     self.apt:send("0\r\n\r\n")
 end
 
@@ -160,7 +173,7 @@ function context_mt:reply(code, message, body)
     if body then
         table.insert(t, body)
     end
-    
+
     self.apt:send(table.concat(t))
 end
 
@@ -170,6 +183,8 @@ function context_mt:addheader(k, v)
         self._content_type_set = true
     elseif lk == "content-length" then
         self._content_length_set = true
+    elseif lk == "content-encoding" then
+        self._content_encoding_set = true
     end
     table.insert(self.out_headers, {key = k, value = v})
 end
