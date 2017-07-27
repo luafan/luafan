@@ -1,6 +1,7 @@
 local fan = require "fan"
 local connector = require "fan.connector"
 local http = require "fan.http"
+local zlib = require "zlib"
 
 local function readheader(ctx, input)
     while not ctx.header_complete do
@@ -61,6 +62,12 @@ function context_reply_fillheader(t, ctx, code, message)
     if not ctx._content_type_set then
         table.insert(t, string.format("Content-Type: %s\r\n", ctx.content_type))
     end
+
+    local accept = ctx.headers["accept-encoding"]
+    if accept and type(accept) == "string" and string.find(accept, "gzip") then
+        table.insert(t, "Content-Encoding: gzip\r\n")
+        ctx._gzip_body = true
+    end
 end
 
 function context_mt:_ready_for_reply()
@@ -95,6 +102,10 @@ end
 function context_mt:reply_chunk(data)
     if not self.reply_status or not data or #(data) == 0 then
         return
+    end
+
+    if self._gzip_body then
+        data = zlib.compress(data, nil, nil, 31)
     end
 
     self.apt:send(string.format("%X\r\n%s\r\n", #data, data))
@@ -136,6 +147,10 @@ function context_mt:reply(code, message, body)
     local t = {}
     context_reply_fillheader(t, self, code, message)
     
+    if body and self._gzip_body then
+        body = zlib.compress(body, nil, nil, 31)
+    end
+
     if not self._content_length_set then
         table.insert(t, string.format("Content-Length: %d\r\n", body and #body or 0))
     end
@@ -145,6 +160,7 @@ function context_mt:reply(code, message, body)
     if body then
         table.insert(t, body)
     end
+    
     self.apt:send(table.concat(t))
 end
 
