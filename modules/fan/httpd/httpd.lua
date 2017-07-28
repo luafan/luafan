@@ -99,7 +99,14 @@ function context_mt:reply_start(code, message)
     table.insert(t, "\r\n")
 
     if self._gzip_body then
-        self._gzip_body_list = {}
+        local apt = self.apt
+        self._gzip_outputstream = zlib.deflate({
+            write = function(self, data)
+                coroutine.wrap(function()
+                    apt:send(string.format("%X\r\n%s\r\n", #data, data))
+                end)()
+            end,
+        }, 9, nil, 15 + 16)
     end
     
     self.apt:send(table.concat(t))
@@ -111,7 +118,8 @@ function context_mt:reply_chunk(data)
     end
 
     if self._gzip_body then
-        table.insert(self._gzip_body_list, data)
+        self._gzip_outputstream:write(data)
+        self._gzip_outputstream:flush()
     else
         local output = string.format("%X\r\n%s\r\n", #data, data)
         self.apt:send(output)
@@ -124,11 +132,9 @@ function context_mt:reply_end()
     end
     self.reply_status = "end"
 
-    if self._gzip_body then
-        local output = table.concat(self._gzip_body_list)
-        output = zlib.compress(output, nil, nil, 31)
-        self.apt:send(string.format("%X\r\n%s\r\n", #output, output))
-    end
+    self._gzip_outputstream:close()
+    self._gzip_outputstream = nil
+
     self.apt:send("0\r\n\r\n")
 end
 
