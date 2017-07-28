@@ -63,7 +63,7 @@ function context_reply_fillheader(t, ctx, code, message)
         table.insert(t, string.format("Content-Type: %s\r\n", ctx.content_type))
     end
 
-    if not ctx._content_encoding_set then
+    if not ctx._content_encoding_set and not ctx._content_length_set then
         local accept = ctx.headers["accept-encoding"]
         if accept and type(accept) == "string" and string.find(accept, "gzip") then
             table.insert(t, "Content-Encoding: gzip\r\n")
