@@ -1,6 +1,7 @@
 local tcpd = require "fan.tcpd"
 local stream = require "fan.stream"
 local config = require "config"
+local utils = require "fan.utils"
 
 local TCP_PAUSE_READ_WRITE_ON_CALLBACK = config.tcp_pause_read_write_on_callback
 
@@ -83,7 +84,9 @@ function apt_mt:close()
   self.disconnected = true
 
   self:_onread(nil)
+
   if self.conn then
+    self.connection_map[self.conn] = nil
     self.conn:close()
     self.conn = nil
   end
@@ -93,6 +96,8 @@ local function connect(host, port, path, args)
   local running = coroutine.running()
 
   local t = {_readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
+  t._pack = {t}
+  local weak_t = utils.weakify_object(t._pack)
   local params = {
     host = host,
     port = port,
@@ -100,6 +105,7 @@ local function connect(host, port, path, args)
       coroutine.resume(running)
     end,
     onread = function(buf)
+      local t = weak_t[1]
       t._readstream:prepare_add()
       t._readstream:AddBytes(buf)
       t._readstream:prepare_get()
@@ -115,12 +121,14 @@ local function connect(host, port, path, args)
       end
     end,
     onsendready = function()
+      local t = weak_t[1]
       t:_onsendready()
     end,
     ondisconnected = function(msg)
       if config.debug then
         print("client ondisconnected", msg)
       end
+      local t = weak_t[1]
       t.disconnected_message = msg
       t:close()
 
@@ -147,17 +155,25 @@ local function connect(host, port, path, args)
 end
 
 local function bind(host, port, path, args)
-  local obj = {onaccept = nil}
+  local connection_map = {}
+  local obj = {onaccept = nil, connection_map = connection_map}
 
+  local weak_connection_map = utils.weakify_object(connection_map)
   local params = {
     host = host,
     port = port,
     onaccept = function(apt)
-      local t = {conn = apt, _readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
+      local t = {connection_map = weak_connection_map, conn = apt, _readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
+      t._pack = {t}
       setmetatable(t, apt_mt)
+
+      weak_connection_map[apt] = t
+
+      local weak_obj = utils.weakify_object(t._pack)
 
       apt:bind{
         onread = function(buf)
+          local t = weak_obj[1]
           t._readstream:prepare_add()
           t._readstream:AddBytes(buf)
           t._readstream:prepare_get()
@@ -177,12 +193,14 @@ local function bind(host, port, path, args)
           end
         end,
         onsendready = function()
+          local t = weak_obj[1]
           t:_onsendready()
         end,
         ondisconnected = function(msg)
           if config.debug then
             print("client ondisconnected", msg)
           end
+          local t = weak_obj[1]
           t:close()
         end
       }

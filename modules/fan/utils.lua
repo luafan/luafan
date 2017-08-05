@@ -3,6 +3,7 @@ local type = type
 local table = table
 local math = math
 local tonumber = tonumber
+local setmetatable = setmetatable
 
 local function random_string(letters, count, join, joingroupcount)
     local tb = {}
@@ -33,10 +34,47 @@ end
 
 math.randomseed((fan.gettime()))
 
+local weak_mt = {}
+weak_mt.__index = function(self, key)
+    local target = self[weak_mt].target
+    if target then
+        return target[key]
+    end
+end
+
+weak_mt.__newindex = function(self, key, value)
+    local target = self[weak_mt].target
+    if target then
+        target[key] = value
+    end
+end
+
+local function weakify_object(target)
+    local obj = {[weak_mt] = setmetatable({target = target}, {__mode = "v"})}
+    setmetatable(obj, weak_mt)
+    return obj
+end
+
+local function weakify(...)
+    local t = {...}
+    if #t > 1 then
+        local out = {}
+        for i,v in ipairs(t) do
+            table.insert(out, weakify_object(v))
+        end
+
+        return table.unpack(out)
+    else
+        return weakify_object(t[1])
+    end
+end
+
 local m = {
     random_string = random_string,
     gettime = gettime,
     LETTERS_W = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    weakify = weakify,
+    weakify_object = weakify_object,
 }
 
 if jit then

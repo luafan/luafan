@@ -3,6 +3,8 @@ local udpd = require "fan.udpd"
 local utils = require "fan.utils"
 local config = require "config"
 
+local utils = require "fan.utils"
+
 local string = string
 local next = next
 local table = table
@@ -368,6 +370,8 @@ local function connect(host, port, path)
   host = t.dest:getHost()
   port = t.dest:getPort()
 
+  local weak_t = utils.weakify(t)
+
   t.conn = udpd.new{
     host = host,
     port = port,
@@ -377,11 +381,11 @@ local function connect(host, port, path)
       
       -- connect() protection, only accept connected host/port.
       if from:getHost() == host and from:getPort() == port then
-        t:_onread(buf)
+        weak_t:_onread(buf)
       end
     end,
     onsendready = function()
-      if not t:_onsendready() then
+      if not weak_t:_onsendready() then
         -- fan.sleep(1)
         -- print("send_req", t.conn, "conn.onsendready")
         -- t.conn:send_req()
@@ -439,10 +443,11 @@ local function connect(host, port, path)
 
       return apt
     end
+    local weak_obj = utils.weakify(obj)
     obj.serv = udpd.new{
       bind_port = port,
       onsendready = function()
-        for k,apt in pairs(obj.clientmap) do
+        for k,apt in pairs(weak_obj.clientmap) do
           if apt:_moretosend() and apt:_onsendready() then
             return
           end
@@ -450,7 +455,7 @@ local function connect(host, port, path)
       end,
       onread = function(buf, from)
         config.udp_receive_total = config.udp_receive_total + 1
-        local apt = obj.getapt(nil, nil, from, tostring(from))
+        local apt = weak_obj.getapt(nil, nil, from, tostring(from))
 
         apt:_onread(buf)
       end
