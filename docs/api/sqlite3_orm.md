@@ -60,7 +60,7 @@ local results = context.<tablename>("list|select", format, ...)
 * `one` return only the first row.
 
 ```lua
-local results = context.blob("list", "id>? and typeid=?", 40, 2)
+local results = context.blob("list", "where id>? and typeid=?", 40, 2)
 for k,v in ipairs(results) do
     print(v.id)
 end
