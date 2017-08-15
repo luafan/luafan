@@ -15,7 +15,7 @@ keys in the `arg`:
 
 * `onsendready: function?`
 
-	callback on data sent. no arg.
+	callback on ready to send new data after `send_req`. no arg.
 
 * `host: string?`
 

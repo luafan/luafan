@@ -110,9 +110,18 @@ function apt_mt:send(buf)
   end
 
   -- print("send_req")
-  self.conn:send_req()
+  self:send_req()
 
   return output_index
+end
+
+function apt_mt:send_req()
+  local obj = self._parent or self
+
+  if not obj._pending_for_send then
+    obj._pending_for_send = true
+    self.conn:send_req()
+  end
 end
 
 function apt_mt:_moretosend()
@@ -139,7 +148,12 @@ end
 function apt_mt:_onack(buf)
   if config.debug then
     local output_index,count,package_index = string.unpack("<I4I2I2", buf)
-    print(string.format("recv<ack> %s:%d\t[%d] %d/%d", self.host, self.port, output_index, package_index, count))
+    print(self, string.format("recv<ack> %s:%d\t[%d] %d/%d", self.host, self.port, output_index, package_index, count))
+  end
+
+  local last_output_time = self._output_wait_ack[buf]
+  if last_output_time then
+    self.latency = gettime() - last_output_time
   end
 
   local map = self._output_wait_package_parts_map[buf]
@@ -161,7 +175,7 @@ function apt_mt:_onread(buf)
   if #(buf) == HEAD_SIZE then
     -- single ack.
     self:_onack(buf)
-    self.conn:send_req()
+    self:send_req()
     return
   elseif #(buf) > HEAD_SIZE then
     local head = string.sub(buf, 1, HEAD_SIZE)
@@ -178,13 +192,13 @@ function apt_mt:_onread(buf)
       end
     else
       table.insert(self._output_ack_package, head)
-      self.conn:send_req()
-      -- if config.debug then
-      -- print("sending ack", #(head), #(self._output_ack_package))
-      -- end
+      if config.debug then
+        print(self, "sending ack", #(self._output_ack_package), self._pending_for_send)
+      end
+      self:send_req()
 
       if config.debug then
-        print(string.format("recv<data> %s:%d\t[%d] %d/%d (body=%d)", self.host, self.port, output_index, package_index, count, #(body)))
+        print(self, string.format("recv<data> %s:%d\t[%d] %d/%d (body=%d)", self.host, self.port, output_index, package_index, count, #(body)))
       end
 
       local incoming_object = self._incoming_map[output_index]
@@ -229,15 +243,15 @@ function apt_mt:_send(buf, kind)
   -- print("send", #(buf))
   if config.debug then
     local output_index,count,package_index = string.unpack("<I4I2I2", buf)
-    print(string.format("send<%s> %s\t[%d] %d/%d", kind, self.dest, output_index, package_index, count))
+    print(self, string.format("send<%s> %s\t[%d] %d/%d", kind, self.dest, output_index, package_index, count))
   end
 
   self.conn:send(buf, self.dest)
 
   config.udp_send_total = config.udp_send_total + 1
 
+  self:send_req()
   -- print("send_req")
-  self.conn:send_req()
 end
 
 function apt_mt:_check_timeout()
@@ -250,29 +264,38 @@ function apt_mt:_check_timeout()
   for k,map in pairs(self._output_wait_package_parts_map) do
     local last_output_time = self._output_wait_ack[k]
 
-    if last_output_time and gettime() - last_output_time >= TIMEOUT then
-      has_timeout = true
-      local resend = true
-      if self.ontimeout then
-        resend = self.ontimeout(map[k])
-      end
+    if last_output_time then
+      local timeout = math.max(self.latency and self.latency * 3 or TIMEOUT, 0.1)
+      if gettime() - last_output_time >= timeout then
+        has_timeout = true
+        local resend = true
+        if self.ontimeout then
+          resend = self.ontimeout(map[k])
+        end
 
-      if resend and self._output_wait_ack[k] then
-        self._output_wait_count = self._output_wait_count - 1
-        config.udp_resend_total = config.udp_resend_total + 1
-        self:_output_chain_push(k, map[k])
-        self._output_wait_ack[k] = nil
-      else
-        for k,v in pairs(map) do
-          map[k] = nil
-          self:_mark_send_completed(k)
+        if resend and self._output_wait_ack[k] then
+          self._output_wait_count = self._output_wait_count - 1
+          config.udp_resend_total = config.udp_resend_total + 1
+          self:_output_chain_push(k, map[k])
+          self._output_wait_ack[k] = nil
+        else
+          for k,v in pairs(map) do
+            map[k] = nil
+            self:_mark_send_completed(k)
+          end
         end
       end
     end
   end
 
   if has_timeout then
-    self.conn:send_req()
+    self:send_req()
+  elseif not self._pending_for_send then
+    -- temp fix for packages pending for send with no more send_req
+    if self:_moretosend() then
+      print("send_req")
+      self:send_req()
+    end
   end
 
   return has_timeout
@@ -388,6 +411,8 @@ local function connect(host, port, path)
       end
     end,
     onsendready = function()
+      weak_t._pending_for_send = nil
+
       if not weak_t:_onsendready() then
         -- fan.sleep(1)
         -- print("send_req", t.conn, "conn.onsendready")
@@ -410,6 +435,7 @@ local function connect(host, port, path)
 
   local function bind(host, port, path)
     local obj = {clientmap = {}}
+    local weak_obj = utils.weakify(obj)
 
     obj.getapt = function(host, port, from, client_key)
       local apt = obj.clientmap[client_key]
@@ -424,7 +450,7 @@ local function connect(host, port, path)
           port = port,
           dest = from or udpd.make_dest(host, port),
           conn = obj.serv,
-          _parent = obj,
+          _parent = weak_obj,
           _output_index = 0,
           _output_chain = {_head = nil, _tail = nil},
           _output_wait_ack = {},
@@ -446,10 +472,11 @@ local function connect(host, port, path)
 
       return apt
     end
-    local weak_obj = utils.weakify(obj)
     obj.serv = udpd.new{
       bind_port = port,
       onsendready = function()
+        weak_obj._pending_for_send = nil
+
         for k,apt in pairs(weak_obj.clientmap) do
           if apt:_moretosend() and apt:_onsendready() then
             return

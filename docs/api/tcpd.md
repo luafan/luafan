@@ -21,7 +21,7 @@ keys in the `arg`:
 
 * `onsendready: function?`
 
-	stream output complete callback, no arg
+	callback on ready to send new data (stream output complete), no arg
 
 * `ondisconnected: function?`
 
