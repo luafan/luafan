@@ -293,7 +293,7 @@ function apt_mt:_check_timeout()
   elseif not self._pending_for_send then
     -- temp fix for packages pending for send with no more send_req
     if self:_moretosend() then
-      print("send_req")
+      -- print("send_req")
       self:send_req()
     end
   end
