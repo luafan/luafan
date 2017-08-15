@@ -63,6 +63,11 @@ LUA_API int lua_udpd_conn_gc(lua_State *L)
     conn->write_ev = NULL;
   }
 
+  if (conn->socket_fd) {
+    EVUTIL_CLOSESOCKET(conn->socket_fd);
+    conn->socket_fd = NULL;
+  }
+
   return 0;
 }
 
