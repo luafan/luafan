@@ -61,7 +61,7 @@ context.hi("delete", "id=? and cc=?", 40, 2)
 
 ### sql
 ```lua
-context.<select|update|delete|insert>(sql, ...)
+context:<select|update|delete|insert>(sql, ...)
 ```
 ```lua
 local list = ctx:select("select * from hi")

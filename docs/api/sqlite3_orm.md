@@ -41,7 +41,10 @@ local context = orm.new(db, {
 ```lua
 local row = context.<tablename>("new|insert", {modelmap})
 ```
-```lualocal row = context.blob("new", {    path = "test",size = 123 })
+```lua
+local row = context.blob("new", {
+    path = "test",
+size = 123 })
 ```
 
 ### update row
@@ -78,7 +81,7 @@ context.blob("delete", "id=? and typeid=?", 40, 2)
 
 ### sql
 ```lua
-context.<select|update|delete|insert>(sql, ...)
+context:<select|update|delete|insert>(sql, ...)
 ```
 ```lua
 local results = context:select("select * from aa,bb where aa.id=bb.id and
