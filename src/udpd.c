@@ -65,7 +65,7 @@ LUA_API int lua_udpd_conn_gc(lua_State *L)
 
   if (conn->socket_fd) {
     EVUTIL_CLOSESOCKET(conn->socket_fd);
-    conn->socket_fd = NULL;
+    conn->socket_fd = 0;
   }
 
   return 0;

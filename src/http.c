@@ -1095,14 +1095,18 @@ static int http_getpost(lua_State *L, int method)
         size_t valuelen = 0;
         const char *value = lua_tolstring(L, -1, &valuelen);
 
-        char *buf = malloc(keylen + valuelen + 3);
-        strcpy(buf, key);
-        strcpy(buf + keylen, ": ");
-        strcpy(buf + keylen + 2, value);
-
-        headers = curl_slist_append(headers, buf);
-
-        free(buf);
+        if (value && valuelen) {
+          char *buf = malloc(keylen + valuelen + 3);
+          strcpy(buf, key);
+          strcpy(buf + keylen, ": ");
+          strcpy(buf + keylen + 2, value);
+  
+          headers = curl_slist_append(headers, buf);
+  
+          free(buf);  
+        } else {
+          printf("[fan.http] ignore header '%s' and value with type '%s'\n", key, lua_typename(L, lua_type(L, -1)));
+        }
 
         /* removes 'value'; keeps 'key' for next iteration */
         lua_pop(L, 1);
