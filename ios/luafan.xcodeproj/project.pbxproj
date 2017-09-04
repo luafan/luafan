@@ -25,6 +25,7 @@
 		225C477B1F5CFAF300DCC767 /* tcpd.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C474A1F5CFAF300DCC767 /* tcpd.c */; };
 		225C477D1F5CFAF300DCC767 /* udpd.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C474C1F5CFAF300DCC767 /* udpd.c */; };
 		225C477F1F5CFAF300DCC767 /* utlua.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C474E1F5CFAF300DCC767 /* utlua.c */; };
+		225C47811F5D30F500DCC767 /* luafan_posix.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C472B1F5CFAF300DCC767 /* luafan_posix.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -277,6 +278,7 @@
 				225C47591F5CFAF300DCC767 /* http.c in Sources */,
 				225C47781F5CFAF300DCC767 /* stream.c in Sources */,
 				225C477A1F5CFAF300DCC767 /* stream_ffi.c in Sources */,
+				225C47811F5D30F500DCC767 /* luafan_posix.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
