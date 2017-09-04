@@ -1,3 +1,25 @@
+#include "utlua.h"
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+static int luafan_push_result(lua_State *L, int result)
+{
+  if (result == -1)
+  {
+    lua_pushboolean(L, false);
+    lua_pushstring(L, strerror(errno));
+    return 2;
+  }
+  else
+  {
+    lua_pushinteger(L, result);
+    return 1;
+  }
+}
+
 LUA_API int luafan_fork(lua_State *L)
 {
   int result = fork();
@@ -18,20 +40,20 @@ LUA_API int luafan_getdtablesize(lua_State *L)
 
 LUA_API int luafan_setpgid(lua_State *L)
 {
-  int result = setpgid(luaL_optinteger(L, 1, 0), luaL_optinteger(L, 2, 0));
+  int result = setpgid((pid_t) luaL_optinteger(L, 1, 0), (pid_t) luaL_optinteger(L, 2, 0));
   return luafan_push_result(L, result);
 }
 
 LUA_API int luafan_open(lua_State *L)
 {
-  int result = open(luaL_checkstring(L, 1), luaL_optinteger(L, 2, O_RDWR),
+  int result = open(luaL_checkstring(L, 1), (int) luaL_optinteger(L, 2, O_RDWR),
                     luaL_optinteger(L, 3, 0));
   return luafan_push_result(L, result);
 }
 
 LUA_API int luafan_close(lua_State *L)
 {
-  int result = close(luaL_checkinteger(L, 1));
+  int result = close((int) luaL_checkinteger(L, 1));
   return luafan_push_result(L, result);
 }
 
@@ -55,7 +77,7 @@ LUA_API int luafan_setprogname(lua_State *L)
 
 LUA_API int luafan_getpgid(lua_State *L)
 {
-  int result = getpgid(luaL_optinteger(L, 1, 0));
+  int result = getpgid((pid_t) luaL_optinteger(L, 1, 0));
   return luafan_push_result(L, result);
 }
 
@@ -180,7 +202,7 @@ LUA_API int luafan_getcpucount(lua_State *L)
 
 LUA_API int luafan_kill(lua_State *L)
 {
-  if (kill(luaL_optinteger(L, 1, -1), luaL_optinteger(L, 2, SIGTERM)))
+  if (kill(luaL_optinteger(L, 1, -1), (pid_t) luaL_optinteger(L, 2, SIGTERM)))
   {
     lua_pushnil(L);
     lua_pushstring(L, strerror(errno));
@@ -197,7 +219,7 @@ LUA_API int luafan_waitpid(lua_State *L)
 {
   int stat = 0;
   int result =
-      waitpid(luaL_optinteger(L, 1, -1), &stat, luaL_optinteger(L, 2, -1));
+      waitpid((pid_t) luaL_optinteger(L, 1, -1), &stat, (int) luaL_optinteger(L, 2, -1));
   if (result == -1)
   {
     lua_pushnil(L);

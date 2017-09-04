@@ -33,6 +33,7 @@ build = {
             "src/bytearray.c",
             "src/event_mgr.c",
             "src/luafan.c",
+            "src/luafan_posix.c",
             "src/tcpd.c",
             "src/udpd.c",
             "src/stream.c",

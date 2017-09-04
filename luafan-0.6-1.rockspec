@@ -44,6 +44,7 @@ build = {
             "src/hostcheck.c",
             "src/openssl_hostname_validation.c",
             "src/luafan.c",
+            "src/luafan_posix.c",
             "src/tcpd.c",
             "src/udpd.c",
             "src/stream.c",

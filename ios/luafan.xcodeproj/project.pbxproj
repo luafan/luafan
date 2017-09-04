@@ -1,0 +1,420 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		02C1CB2399F3CB61AAA0A371 /* libPods-luafan.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 6464C73198A802D5EE98C23D /* libPods-luafan.a */; };
+		225C47111F5CFAAC00DCC767 /* luafan.m in Sources */ = {isa = PBXBuildFile; fileRef = 225C47101F5CFAAC00DCC767 /* luafan.m */; };
+		225C47121F5CFAAC00DCC767 /* luafan.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 225C470F1F5CFAAC00DCC767 /* luafan.h */; };
+		225C47511F5CFAF300DCC767 /* bytearray.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47191F5CFAF300DCC767 /* bytearray.c */; };
+		225C47531F5CFAF300DCC767 /* event_mgr.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C471D1F5CFAF300DCC767 /* event_mgr.c */; };
+		225C47551F5CFAF300DCC767 /* fifo.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47201F5CFAF300DCC767 /* fifo.c */; };
+		225C47571F5CFAF300DCC767 /* hostcheck.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47221F5CFAF300DCC767 /* hostcheck.c */; };
+		225C47591F5CFAF300DCC767 /* http.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47251F5CFAF300DCC767 /* http.c */; };
+		225C475B1F5CFAF300DCC767 /* httpd.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47271F5CFAF300DCC767 /* httpd.c */; };
+		225C475D1F5CFAF300DCC767 /* luafan.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47291F5CFAF300DCC767 /* luafan.c */; };
+		225C47621F5CFAF300DCC767 /* luasql.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C472E1F5CFAF300DCC767 /* luasql.c */; };
+		225C47741F5CFAF300DCC767 /* objectbuf.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47421F5CFAF300DCC767 /* objectbuf.c */; };
+		225C47761F5CFAF300DCC767 /* openssl_hostname_validation.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47441F5CFAF300DCC767 /* openssl_hostname_validation.c */; };
+		225C47781F5CFAF300DCC767 /* stream.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47471F5CFAF300DCC767 /* stream.c */; };
+		225C477A1F5CFAF300DCC767 /* stream_ffi.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47491F5CFAF300DCC767 /* stream_ffi.c */; };
+		225C477B1F5CFAF300DCC767 /* tcpd.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C474A1F5CFAF300DCC767 /* tcpd.c */; };
+		225C477D1F5CFAF300DCC767 /* udpd.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C474C1F5CFAF300DCC767 /* udpd.c */; };
+		225C477F1F5CFAF300DCC767 /* utlua.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C474E1F5CFAF300DCC767 /* utlua.c */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		225C470A1F5CFAAC00DCC767 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "include/$(PRODUCT_NAME)";
+			dstSubfolderSpec = 16;
+			files = (
+				225C47121F5CFAAC00DCC767 /* luafan.h in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		1B5EBBC956C4A6C9116A8731 /* Pods-luafan.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-luafan.debug.xcconfig"; path = "Pods/Target Support Files/Pods-luafan/Pods-luafan.debug.xcconfig"; sourceTree = "<group>"; };
+		225C470C1F5CFAAC00DCC767 /* libluafan.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libluafan.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		225C470F1F5CFAAC00DCC767 /* luafan.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = luafan.h; sourceTree = "<group>"; };
+		225C47101F5CFAAC00DCC767 /* luafan.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = luafan.m; sourceTree = "<group>"; };
+		225C47191F5CFAF300DCC767 /* bytearray.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = bytearray.c; sourceTree = "<group>"; };
+		225C471A1F5CFAF300DCC767 /* bytearray.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = bytearray.h; sourceTree = "<group>"; };
+		225C471D1F5CFAF300DCC767 /* event_mgr.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = event_mgr.c; sourceTree = "<group>"; };
+		225C471E1F5CFAF300DCC767 /* event_mgr.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = event_mgr.h; sourceTree = "<group>"; };
+		225C47201F5CFAF300DCC767 /* fifo.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = fifo.c; sourceTree = "<group>"; };
+		225C47221F5CFAF300DCC767 /* hostcheck.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = hostcheck.c; sourceTree = "<group>"; };
+		225C47231F5CFAF300DCC767 /* hostcheck.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = hostcheck.h; sourceTree = "<group>"; };
+		225C47251F5CFAF300DCC767 /* http.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = http.c; sourceTree = "<group>"; };
+		225C47271F5CFAF300DCC767 /* httpd.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = httpd.c; sourceTree = "<group>"; };
+		225C47291F5CFAF300DCC767 /* luafan.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = luafan.c; sourceTree = "<group>"; };
+		225C472B1F5CFAF300DCC767 /* luafan_posix.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = luafan_posix.c; sourceTree = "<group>"; };
+		225C472E1F5CFAF300DCC767 /* luasql.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = luasql.c; sourceTree = "<group>"; };
+		225C472F1F5CFAF300DCC767 /* luasql.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = luasql.h; sourceTree = "<group>"; };
+		225C47421F5CFAF300DCC767 /* objectbuf.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = objectbuf.c; sourceTree = "<group>"; };
+		225C47441F5CFAF300DCC767 /* openssl_hostname_validation.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = openssl_hostname_validation.c; sourceTree = "<group>"; };
+		225C47451F5CFAF300DCC767 /* openssl_hostname_validation.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = openssl_hostname_validation.h; sourceTree = "<group>"; };
+		225C47471F5CFAF300DCC767 /* stream.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = stream.c; sourceTree = "<group>"; };
+		225C47491F5CFAF300DCC767 /* stream_ffi.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = stream_ffi.c; sourceTree = "<group>"; };
+		225C474A1F5CFAF300DCC767 /* tcpd.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = tcpd.c; sourceTree = "<group>"; };
+		225C474C1F5CFAF300DCC767 /* udpd.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = udpd.c; sourceTree = "<group>"; };
+		225C474E1F5CFAF300DCC767 /* utlua.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = utlua.c; sourceTree = "<group>"; };
+		225C474F1F5CFAF300DCC767 /* utlua.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = utlua.h; sourceTree = "<group>"; };
+		424B08251FC05E3AD310F333 /* Pods-luafan.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-luafan.release.xcconfig"; path = "Pods/Target Support Files/Pods-luafan/Pods-luafan.release.xcconfig"; sourceTree = "<group>"; };
+		6464C73198A802D5EE98C23D /* libPods-luafan.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-luafan.a"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		225C47091F5CFAAC00DCC767 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				02C1CB2399F3CB61AAA0A371 /* libPods-luafan.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		225C47031F5CFAAC00DCC767 = {
+			isa = PBXGroup;
+			children = (
+				225C47181F5CFAF300DCC767 /* src */,
+				225C470E1F5CFAAC00DCC767 /* luafan */,
+				225C470D1F5CFAAC00DCC767 /* Products */,
+				2E8D7455072723B81C24C5B2 /* Pods */,
+				68733571A8C86C16AA3FE781 /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		225C470D1F5CFAAC00DCC767 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				225C470C1F5CFAAC00DCC767 /* libluafan.a */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		225C470E1F5CFAAC00DCC767 /* luafan */ = {
+			isa = PBXGroup;
+			children = (
+				225C470F1F5CFAAC00DCC767 /* luafan.h */,
+				225C47101F5CFAAC00DCC767 /* luafan.m */,
+			);
+			path = luafan;
+			sourceTree = "<group>";
+		};
+		225C47181F5CFAF300DCC767 /* src */ = {
+			isa = PBXGroup;
+			children = (
+				225C47191F5CFAF300DCC767 /* bytearray.c */,
+				225C471A1F5CFAF300DCC767 /* bytearray.h */,
+				225C471C1F5CFAF300DCC767 /* connector */,
+				225C471D1F5CFAF300DCC767 /* event_mgr.c */,
+				225C471E1F5CFAF300DCC767 /* event_mgr.h */,
+				225C47201F5CFAF300DCC767 /* fifo.c */,
+				225C47221F5CFAF300DCC767 /* hostcheck.c */,
+				225C47231F5CFAF300DCC767 /* hostcheck.h */,
+				225C47251F5CFAF300DCC767 /* http.c */,
+				225C47271F5CFAF300DCC767 /* httpd.c */,
+				225C47291F5CFAF300DCC767 /* luafan.c */,
+				225C472B1F5CFAF300DCC767 /* luafan_posix.c */,
+				225C472E1F5CFAF300DCC767 /* luasql.c */,
+				225C472F1F5CFAF300DCC767 /* luasql.h */,
+				225C47421F5CFAF300DCC767 /* objectbuf.c */,
+				225C47441F5CFAF300DCC767 /* openssl_hostname_validation.c */,
+				225C47451F5CFAF300DCC767 /* openssl_hostname_validation.h */,
+				225C47471F5CFAF300DCC767 /* stream.c */,
+				225C47491F5CFAF300DCC767 /* stream_ffi.c */,
+				225C474A1F5CFAF300DCC767 /* tcpd.c */,
+				225C474C1F5CFAF300DCC767 /* udpd.c */,
+				225C474E1F5CFAF300DCC767 /* utlua.c */,
+				225C474F1F5CFAF300DCC767 /* utlua.h */,
+			);
+			name = src;
+			path = ../src;
+			sourceTree = "<group>";
+		};
+		225C471C1F5CFAF300DCC767 /* connector */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = connector;
+			sourceTree = "<group>";
+		};
+		2E8D7455072723B81C24C5B2 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				1B5EBBC956C4A6C9116A8731 /* Pods-luafan.debug.xcconfig */,
+				424B08251FC05E3AD310F333 /* Pods-luafan.release.xcconfig */,
+			);
+			name = Pods;
+			sourceTree = "<group>";
+		};
+		68733571A8C86C16AA3FE781 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				6464C73198A802D5EE98C23D /* libPods-luafan.a */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		225C470B1F5CFAAC00DCC767 /* luafan */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 225C47151F5CFAAC00DCC767 /* Build configuration list for PBXNativeTarget "luafan" */;
+			buildPhases = (
+				FB52F9572B9795FD0CA1600F /* [CP] Check Pods Manifest.lock */,
+				225C47081F5CFAAC00DCC767 /* Sources */,
+				225C47091F5CFAAC00DCC767 /* Frameworks */,
+				225C470A1F5CFAAC00DCC767 /* CopyFiles */,
+				FE52611B75F2AE5D4D1B8065 /* [CP] Copy Pods Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = luafan;
+			productName = luafan;
+			productReference = 225C470C1F5CFAAC00DCC767 /* libluafan.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		225C47041F5CFAAC00DCC767 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 0830;
+				ORGANIZATIONNAME = LF;
+				TargetAttributes = {
+					225C470B1F5CFAAC00DCC767 = {
+						CreatedOnToolsVersion = 8.3.3;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 225C47071F5CFAAC00DCC767 /* Build configuration list for PBXProject "luafan" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = English;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = 225C47031F5CFAAC00DCC767;
+			productRefGroup = 225C470D1F5CFAAC00DCC767 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				225C470B1F5CFAAC00DCC767 /* luafan */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		FB52F9572B9795FD0CA1600F /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-luafan-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+		FE52611B75F2AE5D4D1B8065 /* [CP] Copy Pods Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "[CP] Copy Pods Resources";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/Pods/Target Support Files/Pods-luafan/Pods-luafan-resources.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		225C47081F5CFAAC00DCC767 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				225C477D1F5CFAF300DCC767 /* udpd.c in Sources */,
+				225C477B1F5CFAF300DCC767 /* tcpd.c in Sources */,
+				225C47621F5CFAF300DCC767 /* luasql.c in Sources */,
+				225C475D1F5CFAF300DCC767 /* luafan.c in Sources */,
+				225C47571F5CFAF300DCC767 /* hostcheck.c in Sources */,
+				225C47111F5CFAAC00DCC767 /* luafan.m in Sources */,
+				225C47511F5CFAF300DCC767 /* bytearray.c in Sources */,
+				225C47761F5CFAF300DCC767 /* openssl_hostname_validation.c in Sources */,
+				225C47531F5CFAF300DCC767 /* event_mgr.c in Sources */,
+				225C477F1F5CFAF300DCC767 /* utlua.c in Sources */,
+				225C475B1F5CFAF300DCC767 /* httpd.c in Sources */,
+				225C47741F5CFAF300DCC767 /* objectbuf.c in Sources */,
+				225C47551F5CFAF300DCC767 /* fifo.c in Sources */,
+				225C47591F5CFAF300DCC767 /* http.c in Sources */,
+				225C47781F5CFAF300DCC767 /* stream.c in Sources */,
+				225C477A1F5CFAF300DCC767 /* stream_ffi.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		225C47131F5CFAAC00DCC767 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 10.3;
+				MTL_ENABLE_DEBUG_INFO = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+			};
+			name = Debug;
+		};
+		225C47141F5CFAAC00DCC767 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 10.3;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		225C47161F5CFAAC00DCC767 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 1B5EBBC956C4A6C9116A8731 /* Pods-luafan.debug.xcconfig */;
+			buildSettings = {
+				OTHER_LDFLAGS = "-ObjC";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		225C47171F5CFAAC00DCC767 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 424B08251FC05E3AD310F333 /* Pods-luafan.release.xcconfig */;
+			buildSettings = {
+				OTHER_LDFLAGS = "-ObjC";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		225C47071F5CFAAC00DCC767 /* Build configuration list for PBXProject "luafan" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				225C47131F5CFAAC00DCC767 /* Debug */,
+				225C47141F5CFAAC00DCC767 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		225C47151F5CFAAC00DCC767 /* Build configuration list for PBXNativeTarget "luafan" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				225C47161F5CFAAC00DCC767 /* Debug */,
+				225C47171F5CFAAC00DCC767 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 225C47041F5CFAAC00DCC767 /* Project object */;
+}

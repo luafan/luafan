@@ -189,22 +189,21 @@ LUA_API int luafan_gettime(lua_State *L)
   return 2;
 }
 
-static int luafan_push_result(lua_State *L, int result)
-{
-  if (result == -1)
-  {
-    lua_pushboolean(L, false);
-    lua_pushstring(L, strerror(errno));
-    return 2;
-  }
-  else
-  {
-    lua_pushinteger(L, result);
-    return 1;
-  }
-}
-
-#include "luafan_posix.c"
+LUA_API int luafan_fork(lua_State *L);
+LUA_API int luafan_getpid(lua_State *L);
+LUA_API int luafan_getdtablesize(lua_State *L);
+LUA_API int luafan_setpgid(lua_State *L);
+LUA_API int luafan_open(lua_State *L);
+LUA_API int luafan_close(lua_State *L);
+LUA_API int luafan_setsid(lua_State *L);
+LUA_API int luafan_setprogname(lua_State *L);
+LUA_API int luafan_getpgid(lua_State *L);
+LUA_API int luafan_getaffinity(lua_State *L);
+LUA_API int luafan_setaffinity(lua_State *L);
+LUA_API int luafan_getcpucount(lua_State *L);
+LUA_API int luafan_kill(lua_State *L);
+LUA_API int luafan_waitpid(lua_State *L);
+LUA_API int luafan_getinterfaces(lua_State *L);
 
 LUA_API int luafan_gettop(lua_State *L)
 {

@@ -477,6 +477,7 @@ local function connect(host, port, path)
       onsendready = function()
         weak_obj._pending_for_send = nil
 
+        -- TODO: schedule, otherwise some client with heavy traffic may block others.
         for k,apt in pairs(weak_obj.clientmap) do
           if apt:_moretosend() and apt:_onsendready() then
             return
