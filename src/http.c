@@ -14,7 +14,14 @@ static struct event *timer_check_multi_info;
 static CURLM *multi;
 static int still_running;
 
+#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
+extern char *proxyHost;
+extern long proxyPort;
+extern char *proxyUsername;
+extern char *proxyPassword;
+extern int proxyType;
 extern int GLOBAL_VERBOSE;
+#endif
 
 /* Information associated with a specific easy handle */
 typedef struct _ConnInfo
@@ -64,9 +71,37 @@ typedef struct _SockInfo
     int evset;
 } SockInfo;
 
-#include <curl/curl.h>
+#if defined(ANDROID) || defined(__ANDROID__)
 
-// static CURLSH *share_handle = NULL;
+#include "jni.h"
+#include <curl/curl.h>
+extern JavaVM *cachedJVM;
+extern char *dns_servers;
+#define IncrNetworkActivity() (void)0;
+#define DecrNetworkActivity() (void)0;
+extern void incrRef(lua_State *L);
+extern void decrRef(lua_State *L);
+
+#elif TARGET_OS_IPHONE
+
+static char *dns_servers = NULL;
+extern void IncrNetworkActivity();
+extern void DecrNetworkActivity();
+extern void incrRef(lua_State *L);
+extern void decrRef(lua_State *L);
+
+#else
+
+#define IncrNetworkActivity() (void)0;
+#define DecrNetworkActivity() (void)0;
+#define incrRef(L) (void)0;
+#define decrRef(L) (void)0;
+
+#endif
+
+#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
+static CURLSH *share_handle = NULL;
+#endif
 
 #define CURL_TIMEOUT_DEFAULT 60
 
@@ -143,8 +178,8 @@ static void resume_cb(int fd, short kind, void *userp);
 static void http_getpost_complete(ConnInfo *conn)
 {
     lua_State *L = conn->L;
-
     lua_lock(L);
+
     if (conn->bodyref != LUA_NOREF)
     {
         luaL_unref(L, LUA_REGISTRYINDEX, conn->bodyref);
@@ -228,6 +263,8 @@ static void http_getpost_complete(ConnInfo *conn)
     }
 
     luaL_unref(L, LUA_REGISTRYINDEX, conn->headerref);
+
+    DecrNetworkActivity();
 
     lua_unlock(L);
 
@@ -322,13 +359,16 @@ static void resume_cb(int fd, short kind, void *userp)
     ResumeInfo *info = (ResumeInfo *)userp;
     //    fprintf(MSG_OUT, "resume\n");
     lua_State *L = info->L;
+    lua_State *mainthread = utlua_mainthread(L);
     int coref = info->coref;
 
     event_free(info->resume_timer);
     free(info);
 
     utlua_resume(L, NULL, 1);
-    luaL_unref(L, LUA_REGISTRYINDEX, coref);
+
+    luaL_unref(mainthread, LUA_REGISTRYINDEX, coref);
+    decrRef(mainthread);
 }
 
 /* Clean up the SockInfo structure */
@@ -445,7 +485,7 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata)
                     lua_pushlstring(L, offset, i); // key
                     lua_pushvalue(L, -2);
                     lua_rawset(L, -5); // <header table -5><exist value -4><newtable
-                                       // -3><key -2><newtablecopy -1>
+                    // -3><key -2><newtablecopy -1>
                     lua_pushvalue(L, -2);
                     lua_rawseti(L, -2, 1);
                     lua_remove(L, -2);
@@ -502,10 +542,9 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata)
         long responseCode = -1;
         curl_easy_getinfo(conn->easy, CURLINFO_RESPONSE_CODE, &responseCode);
 
-        lua_pushvalue(L, -1);
         lua_pushliteral(L, "responseCode");
         lua_pushinteger(L, responseCode);
-        lua_rawset(L, -3);
+        lua_rawset(L, -3); // header table
 
         lua_State *co = lua_newthread(L);
         PUSH_REF(L);
@@ -517,8 +556,10 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata)
 
         POP_REF(L);
     }
-
-    lua_pop(L, 1); // pop header ref
+    else
+    {
+        lua_pop(L, 1); // pop header table
+    }
 
     lua_unlock(L);
 
@@ -654,7 +695,7 @@ int debug_callback(CURL *curl_handle, curl_infotype infotype, char *buf,
                 lua_pushstring(L, "/verbose.log");
                 lua_concat(L, 2);
 
-                LOGD("set verbose %s", lua_tostring(L, -1));
+                LOGD("set verbose %s\n", lua_tostring(L, -1));
                 curlLogFile = fopen(lua_tostring(L, -1), "w");
 
                 if (curlLogFile)
@@ -776,9 +817,6 @@ static int http_getpost(lua_State *L, int method)
 
     conn->retref = luaL_ref(L, LUA_REGISTRYINDEX);
 
-#ifdef DEBUG
-// curl_easy_setopt(conn->easy, CURLOPT_VERBOSE, 1);
-#endif
     curl_easy_setopt(conn->easy, CURLOPT_WRITEFUNCTION, filldata);
     curl_easy_setopt(conn->easy, CURLOPT_WRITEDATA, conn);
 
@@ -829,7 +867,11 @@ static int http_getpost(lua_State *L, int method)
     {
         lua_pushliteral(L, "verbose");
         lua_gettable(L, 1);
+#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
         conn->verbose = luaL_optnumber(L, -1, GLOBAL_VERBOSE);
+#else
+        conn->verbose = luaL_optnumber(L, -1, 0);
+#endif
         lua_pop(L, 1);
 
         lua_pushliteral(L, "url");
@@ -867,6 +909,15 @@ static int http_getpost(lua_State *L, int method)
         {
             LOGE("invalid dns_servers type in table parameter");
         }
+#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
+        else
+        {
+            if (dns_servers)
+            {
+                curl_easy_setopt(conn->easy, CURLOPT_DNS_SERVERS, dns_servers);
+            }
+        }
+#endif
         lua_pop(L, 1);
 
         lua_getfield(L, 1, "onprogress");
@@ -888,8 +939,6 @@ static int http_getpost(lua_State *L, int method)
             lua_pop(L, 1);
         }
 
-        curl_easy_setopt(conn->easy, CURLOPT_HEADERFUNCTION, fillheader);
-        curl_easy_setopt(conn->easy, CURLOPT_HEADERDATA, conn);
         curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_LIMIT, 1);
 
         lua_getfield(L, 1, "timeout");
@@ -1040,7 +1089,10 @@ static int http_getpost(lua_State *L, int method)
             }
             else
             {
-                // curl_easy_setopt(conn->easy, CURLOPT_CAINFO, "cert.pem");
+#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
+#else
+                curl_easy_setopt(conn->easy, CURLOPT_CAINFO, "cert.pem");
+#endif
             }
             lua_pop(L, 1);
         }
@@ -1108,7 +1160,7 @@ static int http_getpost(lua_State *L, int method)
                 }
                 else
                 {
-                    printf("[fan.http] ignore header '%s' and value with type '%s'\n", key, lua_typename(L, lua_type(L, -1)));
+                    printf("[http] ignore header '%s' and value with type '%s'\n", key, lua_typename(L, lua_type(L, -1)));
                 }
 
                 /* removes 'value'; keeps 'key' for next iteration */
@@ -1132,6 +1184,32 @@ static int http_getpost(lua_State *L, int method)
             goto ERROR;
         }
 
+#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
+
+        if (proxyType != INT16_MAX)
+        {
+            curl_easy_setopt(conn->easy, CURLOPT_PROXYTYPE, proxyType);
+            if (proxyHost)
+            {
+                curl_easy_setopt(conn->easy, CURLOPT_PROXY, proxyHost);
+            }
+            if (proxyPort)
+            {
+                curl_easy_setopt(conn->easy, CURLOPT_PROXYPORT, proxyPort);
+            }
+            if (proxyUsername)
+            {
+                curl_easy_setopt(conn->easy, CURLOPT_PROXYUSERNAME, proxyUsername);
+            }
+            if (proxyPassword)
+            {
+                curl_easy_setopt(conn->easy, CURLOPT_PROXYPASSWORD, proxyPassword);
+            }
+            curl_easy_setopt(conn->easy, CURLOPT_HEADEROPT, CURLHEADER_SEPARATE);
+            curl_easy_setopt(conn->easy, CURLOPT_NOPROXY, "127.0.0.1,localhost");
+        }
+
+#endif
         lua_pushliteral(L, "proxytunnel");
         lua_gettable(L, 1);
         if (lua_isnumber(L, -1))
@@ -1177,7 +1255,7 @@ static int http_getpost(lua_State *L, int method)
 
         if (proxy && proxyport > 0)
         {
-            LOGD("set proxy %s:%d\n", proxy, proxyport);
+            LOGD("set proxy %s:%d", proxy, proxyport);
             curl_easy_setopt(conn->easy, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
             curl_easy_setopt(conn->easy, CURLOPT_PROXY, proxy);
             curl_easy_setopt(conn->easy, CURLOPT_PROXYPORT, proxyport);
@@ -1345,7 +1423,9 @@ static int http_getpost(lua_State *L, int method)
         curl_multi_setopt(multi, CURLMOPT_SOCKETDATA, NULL);
         curl_multi_setopt(multi, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
         curl_multi_setopt(multi, CURLMOPT_TIMERDATA, NULL);
-        // curl_multi_setopt(multi, CURLOPT_SHARE, share_handle);
+#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
+        curl_multi_setopt(multi, CURLOPT_SHARE, share_handle);
+#endif
     }
 
     CURLMcode rc = curl_multi_add_handle(multi, conn->easy);
@@ -1355,6 +1435,9 @@ static int http_getpost(lua_State *L, int method)
         goto ERROR;
     }
 
+    IncrNetworkActivity();
+
+    incrRef(L);
     if (oncompleteref != LUA_NOREF)
     {
         luaL_unref(L, LUA_REGISTRYINDEX, oncompleteref);
@@ -1418,72 +1501,90 @@ ERROR:
 
 LUA_API int http_get(lua_State *L)
 {
+    lua_lock(L);
     if (http_getpost(L, HTTP_GET) == LUA_YIELD)
     {
+        lua_unlock(L);
         return lua_yield(L, 0);
     }
     else
     {
+        lua_unlock(L);
         return 0;
     }
 }
 
 LUA_API int http_post(lua_State *L)
 {
+    lua_lock(L);
     if (http_getpost(L, HTTP_POST) == LUA_YIELD)
     {
+        lua_unlock(L);
         return lua_yield(L, 0);
     }
     else
     {
+        lua_unlock(L);
         return 0;
     }
 }
 
 LUA_API int http_put(lua_State *L)
 {
+    lua_lock(L);
     if (http_getpost(L, HTTP_PUT) == LUA_YIELD)
     {
+        lua_unlock(L);
         return lua_yield(L, 0);
     }
     else
     {
+        lua_unlock(L);
         return 0;
     }
 }
 
 LUA_API int http_update(lua_State *L)
 {
+    lua_lock(L);
     if (http_getpost(L, HTTP_UPDATE) == LUA_YIELD)
     {
+        lua_unlock(L);
         return lua_yield(L, 0);
     }
     else
     {
+        lua_unlock(L);
         return 0;
     }
 }
 
 LUA_API int http_delete(lua_State *L)
 {
+    lua_lock(L);
     if (http_getpost(L, HTTP_DELETE) == LUA_YIELD)
     {
+        lua_unlock(L);
         return lua_yield(L, 0);
     }
     else
     {
+        lua_unlock(L);
         return 0;
     }
 }
 
 LUA_API int http_head(lua_State *L)
 {
+    lua_lock(L);
     if (http_getpost(L, HTTP_HEAD) == LUA_YIELD)
     {
+        lua_unlock(L);
         return lua_yield(L, 0);
     }
     else
     {
+        lua_unlock(L);
         return 0;
     }
 }
@@ -1516,7 +1617,7 @@ LUA_API int http_escape(lua_State *L)
 {
     size_t size = 0;
     const char *str = luaL_checklstring(L, 1, &size);
-    char *escaped = curl_escape(str, size);
+    char *escaped = curl_escape(str, (int)size);
     if (escaped)
     {
         lua_pushstring(L, escaped);
@@ -1533,7 +1634,7 @@ LUA_API int http_unescape(lua_State *L)
 {
     size_t size = 0;
     const char *s = luaL_checklstring(L, 1, &size);
-    char *unescaped = curl_unescape(s, size);
+    char *unescaped = curl_unescape(s, (int)size);
     if (unescaped)
     {
         lua_pushstring(L, unescaped);
@@ -1559,15 +1660,143 @@ static const luaL_Reg httplib[] = {{"get", http_get},
                                    {"unescape", http_unescape},
                                    {NULL, NULL}};
 
+#if TARGET_OS_IPHONE
+
+static pthread_mutex_t share_lock;
+
+void lock_function(CURL *handle, curl_lock_data data, curl_lock_access access,
+                   void *userptr)
+{
+    pthread_mutex_lock(&share_lock);
+}
+
+void unlock_function(CURL *handle, curl_lock_data data, void *userptr)
+{
+    pthread_mutex_unlock(&share_lock);
+}
+#endif
+
+#if TARGET_OS_IPHONE
+#include <arpa/inet.h>
+#include <resolv.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+
+#define BUFF_LEN 1024
+
+static struct event *reset_timer_event;
+
+static void reset_dns_servers_timercb(int fd, short kind, void *userp)
+{
+    char buf[BUFF_LEN] = {0};
+    int offset = 0;
+
+    if (dns_servers)
+    {
+        free(dns_servers);
+        dns_servers = NULL;
+    }
+
+    evdns_base_clear_nameservers_and_suspend(event_mgr_dnsbase());
+
+    struct evdns_base *dns_base = event_mgr_dnsbase();
+
+    struct __res_state res = {0};
+    int result = res_ninit(&res);
+
+    if (result == 0)
+    {
+        union res_9_sockaddr_union *addr_union =
+            malloc(res.nscount * sizeof(union res_9_sockaddr_union));
+        res_getservers(&res, addr_union, res.nscount);
+
+        for (int i = 0; i < res.nscount; i++)
+        {
+            if (addr_union[i].sin.sin_family == AF_INET)
+            {
+                char ip[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &(addr_union[i].sin.sin_addr), ip, INET_ADDRSTRLEN);
+
+                evdns_base_nameserver_ip_add(dns_base, ip);
+
+                memcpy(buf + offset, ip, strlen(ip));
+                offset += strlen(ip);
+                memcpy(buf + offset, ",", 1);
+                offset += 1;
+
+                if (offset > BUFF_LEN - 21)
+                {
+                    break;
+                }
+            }
+            else if (addr_union[i].sin6.sin6_family == AF_INET6)
+            {
+                char ip[INET6_ADDRSTRLEN];
+                inet_ntop(AF_INET6, &(addr_union[i].sin6.sin6_addr), ip,
+                          INET6_ADDRSTRLEN);
+                evdns_base_nameserver_ip_add(dns_base, ip);
+
+                memcpy(buf + offset, ip, strlen(ip));
+                offset += strlen(ip);
+                memcpy(buf + offset, ",", 1);
+                offset += 1;
+
+                if (offset > BUFF_LEN - 21)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                //                printf("Undefined family.\n");
+            }
+        }
+        free(addr_union);
+    }
+    res_ndestroy(&res);
+
+    evdns_base_resume(event_mgr_dnsbase());
+
+    dns_servers = strdup(buf);
+
+    event_del(reset_timer_event);
+    event_free(reset_timer_event);
+    reset_timer_event = NULL;
+}
+
+extern void reset_dns_servers()
+{
+    if (reset_timer_event)
+    {
+        return;
+    }
+
+    struct timeval tv = {0, 1};
+    reset_timer_event =
+        evtimer_new(event_mgr_base(), reset_dns_servers_timercb, NULL);
+    event_add(reset_timer_event, &tv);
+}
+
+#endif
+
 LUA_API int luaopen_fan_http(lua_State *L)
 {
     curl_global_init(CURL_GLOBAL_ALL);
 
-    // if (!share_handle) {
-    //   share_handle = curl_share_init();
-    //   curl_share_setopt(share_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
-    // }
+#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
+    if (!share_handle)
+    {
+        share_handle = curl_share_init();
+        curl_share_setopt(share_handle, CURLSHOPT_LOCKFUNC, lock_function);
+        curl_share_setopt(share_handle, CURLSHOPT_UNLOCKFUNC, unlock_function);
+        curl_share_setopt(share_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
 
+        pthread_mutexattr_t a;
+        pthread_mutexattr_init(&a);
+        pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
+        pthread_mutex_init(&share_lock, &a);
+    }
+#endif
     if (!timer_event)
     {
         timer_event = evtimer_new(event_mgr_base(), timer_cb, NULL);

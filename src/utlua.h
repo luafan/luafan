@@ -2,6 +2,9 @@
 #ifndef utlua_h
 #define utlua_h
 
+#if defined(__IPHONE_OS_VERSION_MAX_ALLOWED)
+#define TARGET_OS_IPHONE            1
+#endif
 // #define FAN_HAS_OPENSSL 1
 // #define FAN_HAS_LUAJIT  1
 
