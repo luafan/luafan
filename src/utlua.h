@@ -118,6 +118,10 @@
 int utlua_resume(lua_State *co, lua_State *from, int count);
 lua_State *utlua_mainthread(lua_State *L);
 
+#ifndef FAN_RESUME
+#define FAN_RESUME      utlua_resume
+#endif
+
 #define PUSH_REF(L)                                 \
         lua_lock(L);                                \
         int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX); \

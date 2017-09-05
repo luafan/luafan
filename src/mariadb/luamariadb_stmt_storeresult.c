@@ -5,7 +5,7 @@ static void stmt_store_result_cont(int fd, short event, void *_userdata) {
 
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
     UNREF_CO(st);
   } else {
     int ret = 0;
@@ -15,10 +15,10 @@ static void stmt_store_result_cont(int fd, short event, void *_userdata) {
       wait_for_status(L, st->conn_data, st, status, stmt_store_result_cont,
                       ms->extra);
     } else if (ret == 0) {
-      utlua_resume(L, NULL, 0);
+      FAN_RESUME(L, NULL, 0);
       UNREF_CO(st);
     } else {
-      utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+      FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
       UNREF_CO(st);
     }
   }

@@ -8,7 +8,7 @@ LUA_API void conn_close_cont(int fd, short event, void *_userdata) {
     wait_for_status(L, ms->conn_data, conn, status, conn_close_cont, ms->extra);
   } else {
     lua_pushboolean(L, 1);
-    utlua_resume(L, NULL, 1);
+    FAN_RESUME(L, NULL, 1);
     UNREF_CO(ms->conn_data);
   }
 

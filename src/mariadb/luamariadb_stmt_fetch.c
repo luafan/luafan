@@ -104,7 +104,7 @@ static void stmt_fetch_cont(int fd, short event, void *_userdata) {
   int ret = 0;
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
     UNREF_CO(st);
   } else {
     int status = mysql_stmt_fetch_cont(&ret, st->my_stmt, ms->status);
@@ -112,10 +112,10 @@ static void stmt_fetch_cont(int fd, short event, void *_userdata) {
       wait_for_status(L, st->conn_data, st, status, stmt_fetch_cont, ms->extra);
     } else if (ret == 0) {
       int count = stmt_fetch_result(L, st);
-      utlua_resume(L, NULL, count);
+      FAN_RESUME(L, NULL, count);
       UNREF_CO(st);
     } else {
-      utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+      FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
       UNREF_CO(st);
     }
   }

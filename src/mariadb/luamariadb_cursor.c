@@ -85,7 +85,7 @@ static void free_result_cont(int fd, short event, void *_userdata) {
                     ms->extra);
   } else {
     lua_pushboolean(L, true);
-    utlua_resume(L, NULL, 1);
+    FAN_RESUME(L, NULL, 1);
     UNREF_CO(cur);
   }
 
@@ -159,7 +159,7 @@ static void fetch_row_cont(int fd, short event, void *_userdata) {
   } else {
     int count = fetch_row_result(L, cur, row);
     if (count >= 0) {
-      utlua_resume(L, NULL, count);
+      FAN_RESUME(L, NULL, count);
       UNREF_CO(cur);
     } else if (count == CONTINUE_YIELD) {
       // continue yield

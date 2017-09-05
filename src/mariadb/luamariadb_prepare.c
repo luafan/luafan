@@ -30,7 +30,7 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata) {
 
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
     UNREF_CO(st);
   } else {
     int ret = 0;
@@ -43,10 +43,10 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata) {
       stmt_prepare_result(L, st);
 
       lua_rawgeti(L, LUA_REGISTRYINDEX, ms->extra);
-      utlua_resume(L, NULL, 1);
+      FAN_RESUME(L, NULL, 1);
       UNREF_CO(st);
     } else {
-      utlua_resume(L, NULL, luamariadb_push_errno(L, st->conn_data));
+      FAN_RESUME(L, NULL, luamariadb_push_errno(L, st->conn_data));
       UNREF_CO(st);
     }
   }

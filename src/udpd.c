@@ -86,7 +86,7 @@ static void udpd_writecb(evutil_socket_t fd, short what, void *arg)
     lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-    utlua_resume(co, mainthread, 0);
+    FAN_RESUME(co, mainthread, 0);
     POP_REF(mainthread);
   }
 }
@@ -121,7 +121,7 @@ static void udpd_readcb(evutil_socket_t fd, short what, void *arg)
       memcpy(&dest->si_client, &si_client, sizeof(si_client));
       dest->client_len = client_len;
 
-      utlua_resume(co, mainthread, 2);
+      FAN_RESUME(co, mainthread, 2);
       POP_REF(mainthread);
     }
   }
@@ -264,7 +264,7 @@ void udpd_conn_new_callback(int errcode, struct evutil_addrinfo *addr,
     if (conn->selfRef)
     {
       luaL_unref(L, LUA_REGISTRYINDEX, conn->selfRef);
-      utlua_resume(L, NULL, 2);
+      FAN_RESUME(L, NULL, 2);
     }
   }
   else
@@ -279,7 +279,7 @@ void udpd_conn_new_callback(int errcode, struct evutil_addrinfo *addr,
       // Conn userdata on the top.
       lua_rawgeti(L, LUA_REGISTRYINDEX, conn->selfRef);
       luaL_unref(L, LUA_REGISTRYINDEX, conn->selfRef);
-      utlua_resume(L, NULL, 1);
+      FAN_RESUME(L, NULL, 1);
     }
   }
 }
@@ -353,7 +353,7 @@ void udpd_conn_make_dest_callback(int errcode, struct evutil_addrinfo *addr,
 
     if (data->yielded)
     {
-      utlua_resume(L, NULL, 2);
+      FAN_RESUME(L, NULL, 2);
     }
   }
   else
@@ -367,7 +367,7 @@ void udpd_conn_make_dest_callback(int errcode, struct evutil_addrinfo *addr,
 
     if (data->yielded)
     {
-      utlua_resume(L, NULL, 1);
+      FAN_RESUME(L, NULL, 1);
     }
   }
 }

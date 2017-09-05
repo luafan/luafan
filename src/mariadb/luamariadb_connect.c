@@ -16,10 +16,10 @@ static void real_connect_cont(int fd, short event, void *_userdata) {
     mysql_options(conn, MYSQL_OPT_RECONNECT, &value);
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, ms->extra);
-    utlua_resume(L, NULL, 1);
+    FAN_RESUME(L, NULL, 1);
     UNREF_CO(ms->conn_data);
   } else {
-    utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    FAN_RESUME(L, NULL, luamariadb_push_errno(L, ms->conn_data));
     UNREF_CO(ms->conn_data);
   }
 

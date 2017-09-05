@@ -205,7 +205,7 @@ static void tcpd_accept_eventcb(struct bufferevent *bev, short events,
 
       CLEAR_REF(mainthread, accept->onDisconnectedRef)
 
-      utlua_resume(co, mainthread, 1);
+      FAN_RESUME(co, mainthread, 1);
       POP_REF(mainthread);
     }
 
@@ -243,7 +243,7 @@ static void tcpd_accept_readcb(struct bufferevent *bev, void *ctx)
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, accept->onReadRef);
     lua_pushlstring(co, (const char *)ba.buffer, ba.total);
-    utlua_resume(co, mainthread, 1);
+    FAN_RESUME(co, mainthread, 1);
     POP_REF(mainthread);
   }
 
@@ -265,7 +265,7 @@ static void tcpd_accept_writecb(struct bufferevent *bev, void *ctx)
       lua_unlock(mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, accept->onSendReadyRef);
-      utlua_resume(co, mainthread, 0);
+      FAN_RESUME(co, mainthread, 0);
       POP_REF(mainthread);
     }
   }
@@ -350,7 +350,7 @@ void connlistener_cb(struct evconnlistener *listener, evutil_socket_t fd,
 
     accept->buf = bev;
 
-    utlua_resume(co, mainthread, 1);
+    FAN_RESUME(co, mainthread, 1);
     POP_REF(mainthread);
   }
 }
@@ -394,7 +394,7 @@ static int ssl_servername_cb(SSL *s, int *ad, void *arg)
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, serv->onSSLHostNameRef);
     lua_pushstring(co, hostname);
-    utlua_resume(co, mainthread, 1);
+    FAN_RESUME(co, mainthread, 1);
     POP_REF(mainthread);
   }
   // if (!p->servername)
@@ -571,7 +571,7 @@ static void tcpd_conn_readcb(struct bufferevent *bev, void *ctx)
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
     lua_pushlstring(co, (const char *)ba.buffer, ba.total);
-    utlua_resume(co, mainthread, 1);
+    FAN_RESUME(co, mainthread, 1);
     POP_REF(mainthread);
   }
 
@@ -593,7 +593,7 @@ static void tcpd_conn_writecb(struct bufferevent *bev, void *ctx)
       lua_unlock(mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-      utlua_resume(co, mainthread, 0);
+      FAN_RESUME(co, mainthread, 0);
       POP_REF(mainthread);
     }
   }
@@ -617,7 +617,7 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
       lua_unlock(mainthread);
 
       lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onConnectedRef);
-      utlua_resume(co, mainthread, 0);
+      FAN_RESUME(co, mainthread, 0);
       POP_REF(mainthread);
     }
   }
@@ -696,7 +696,7 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
       {
         lua_pushnil(co);
       }
-      utlua_resume(co, mainthread, 1);
+      FAN_RESUME(co, mainthread, 1);
       POP_REF(mainthread);
     }
   }

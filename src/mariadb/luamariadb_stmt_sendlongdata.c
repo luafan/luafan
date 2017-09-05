@@ -10,7 +10,7 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata) {
 
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
     UNREF_CO(st);
   } else {
     my_bool ret = 0;
@@ -20,10 +20,10 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata) {
                       ms->extra);
     } else if (ret == 0) {
       int count = stmt_send_long_data_result(L, st);
-      utlua_resume(L, NULL, count);
+      FAN_RESUME(L, NULL, count);
       UNREF_CO(st);
     } else {
-      utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+      FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
       UNREF_CO(st);
     }
   }

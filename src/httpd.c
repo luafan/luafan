@@ -67,7 +67,7 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req,
 
   lua_pushvalue(co, -1); // duplicate for req,resp
 
-  utlua_resume(co, mainthread, 2);
+  FAN_RESUME(co, mainthread, 2);
   POP_REF(mainthread);
 }
 

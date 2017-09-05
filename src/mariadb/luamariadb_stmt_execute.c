@@ -96,7 +96,7 @@ static void stmt_execute_cont(int fd, short event, void *_userdata) {
 
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode) {
-    utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+    FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
     UNREF_CO(st);
   } else {
     int ret = 0;
@@ -107,11 +107,11 @@ static void stmt_execute_cont(int fd, short event, void *_userdata) {
     } else if (ret == 0) {
       int count = stmt_execute_result(L, st);
       if (count != CONTINUE_YIELD) {
-        utlua_resume(L, NULL, count);
+        FAN_RESUME(L, NULL, count);
         UNREF_CO(st);
       }
     } else {
-      utlua_resume(L, NULL, luamariadb_push_stmt_error(L, st));
+      FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
       UNREF_CO(st);
     }
   }

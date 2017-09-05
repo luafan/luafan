@@ -11,11 +11,11 @@ static void stmt_close_cont(int fd, short event, void *_userdata) {
     luaL_unref(L, LUA_REGISTRYINDEX, st->table);
 
     lua_pushboolean(L, 1);
-    utlua_resume(L, NULL, 1);
+    FAN_RESUME(L, NULL, 1);
     UNREF_CO(st);
   } else {
     luaL_unref(L, LUA_REGISTRYINDEX, st->table);
-    utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    FAN_RESUME(L, NULL, luamariadb_push_errno(L, ms->conn_data));
     UNREF_CO(st);
   }
 }

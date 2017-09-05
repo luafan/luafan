@@ -21,7 +21,7 @@ static void real_query_cont(int fd, short event, void *_userdata) {
 
   int errorcode = mysql_errno(conn);
   if (errorcode) {
-    utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    FAN_RESUME(L, NULL, luamariadb_push_errno(L, ms->conn_data));
     UNREF_CO(ms->conn_data);
   } else {
     int ret = 0;
@@ -31,10 +31,10 @@ static void real_query_cont(int fd, short event, void *_userdata) {
                       ms->extra);
     } else if (ret == 0) {
       int count = real_query_result(L, ms->conn_data);
-      utlua_resume(L, NULL, count);
+      FAN_RESUME(L, NULL, count);
       UNREF_CO(ms->conn_data);
     } else {
-      utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+      FAN_RESUME(L, NULL, luamariadb_push_errno(L, ms->conn_data));
       UNREF_CO(ms->conn_data);
     }
   }

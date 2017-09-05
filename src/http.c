@@ -275,9 +275,6 @@ static void http_getpost_complete(ConnInfo *conn)
     struct timeval tv = {0, 1};
     event_add(info->resume_timer, &tv);
 
-    // utlua_resume(L, NULL, 1);
-    // luaL_unref(L, LUA_REGISTRYINDEX, conn->coref);
-
     conn->coref = LUA_NOREF;
 }
 
@@ -365,7 +362,7 @@ static void resume_cb(int fd, short kind, void *userp)
     event_free(info->resume_timer);
     free(info);
 
-    utlua_resume(L, NULL, 1);
+    FAN_RESUME(L, NULL, 1);
 
     luaL_unref(mainthread, LUA_REGISTRYINDEX, coref);
     decrRef(mainthread);
@@ -552,7 +549,7 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata)
         lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onheaderref);
         lua_xmove(L, co, 1);
 
-        utlua_resume(co, L, 1);
+        FAN_RESUME(co, L, 1);
 
         POP_REF(L);
     }
@@ -584,7 +581,7 @@ static int onprogress(void *clientp, double dltotal, double dlnow,
     lua_pushinteger(co, ultotal);
     lua_pushinteger(co, ulnow);
 
-    int status = utlua_resume(co, L, 4);
+    int status = FAN_RESUME(co, L, 4);
     long ret = 0;
     if (status == 0 && lua_gettop(co) > 0)
     {
@@ -612,7 +609,7 @@ static size_t onwrite(char *ptr, size_t size, size_t nmemb, void *userdata)
 
     lua_pushlstring(co, ptr, size * nmemb);
 
-    int status = utlua_resume(co, L, 1);
+    int status = FAN_RESUME(co, L, 1);
     long ret = 0;
     if (status == 0 && lua_gettop(co) > 0)
     {
@@ -647,7 +644,7 @@ static size_t onread(void *ptr, size_t size, size_t nmemb, void *userdata)
 
     lua_pushinteger(co, accept_size);
 
-    int status = utlua_resume(co, L, 1);
+    int status = FAN_RESUME(co, L, 1);
     long ret = 0;
     if (status == 0 && lua_gettop(co) > 0)
     {

@@ -5,7 +5,7 @@ static void conn_autocommit_event(int fd, short event, void *_userdata) {
 
   int errorcode = mysql_errno(conn);
   if (errorcode) {
-    utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+    FAN_RESUME(L, NULL, luamariadb_push_errno(L, ms->conn_data));
     UNREF_CO(ms->conn_data);
   } else {
     my_bool ret = 0;
@@ -15,10 +15,10 @@ static void conn_autocommit_event(int fd, short event, void *_userdata) {
                       ms->extra);
     } else if (ret == 0) {
       lua_pushboolean(L, true);
-      utlua_resume(L, NULL, 1);
+      FAN_RESUME(L, NULL, 1);
       UNREF_CO(ms->conn_data);
     } else {
-      utlua_resume(L, NULL, luamariadb_push_errno(L, ms->conn_data));
+      FAN_RESUME(L, NULL, luamariadb_push_errno(L, ms->conn_data));
       UNREF_CO(ms->conn_data);
     }
   }
