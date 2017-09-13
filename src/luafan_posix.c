@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <sched.h>
 
 static int luafan_push_result(lua_State *L, int result)
 {
@@ -34,9 +35,14 @@ LUA_API int luafan_getpid(lua_State *L)
 
 LUA_API int luafan_getdtablesize(lua_State *L)
 {
+#ifndef __ANDROID__
   lua_pushinteger(L, getdtablesize());
+#else
+  lua_pushinteger(L, -1);
+#endif
   return 1;
 }
+
 
 LUA_API int luafan_setpgid(lua_State *L)
 {
@@ -125,6 +131,8 @@ int sched_getaffinity(pid_t pid, size_t cpu_size, cpu_set_t *cpu_set)
 #include <sched.h>
 #endif
 
+#ifndef __ANDROID__
+
 static int get_cpu_count()
 {
   return sysconf(_SC_NPROCESSORS_CONF);
@@ -199,6 +207,7 @@ LUA_API int luafan_getcpucount(lua_State *L)
   return 1;
 }
 #endif
+#endif
 
 LUA_API int luafan_kill(lua_State *L)
 {
@@ -234,7 +243,11 @@ LUA_API int luafan_waitpid(lua_State *L)
   }
 }
 
+#ifdef __ANDROID__
+#include "ifaddrs.h"
+#else
 #include <ifaddrs.h>
+#endif
 
 LUA_API int luafan_getinterfaces(lua_State *L)
 {

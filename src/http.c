@@ -1657,7 +1657,7 @@ static const luaL_Reg httplib[] = {{"get", http_get},
                                    {"unescape", http_unescape},
                                    {NULL, NULL}};
 
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
 
 static pthread_mutex_t share_lock;
 
