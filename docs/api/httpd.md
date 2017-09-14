@@ -5,6 +5,14 @@ fan.httpd
 create a simple http server, `serv_info_table` contains `host` and `port`.
 
 ---------
+keys in `serv_info_table`
+
+* `serv` the server instance.
+    * `rebind()` rebind the same host/port.(e.g. resume back in mobile device, rebind port.)
+* `host` bind host.
+* `port` bind port.
+
+---------
 keys in the `arg`:
 
 * `host: string?`

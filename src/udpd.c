@@ -63,7 +63,8 @@ LUA_API int lua_udpd_conn_gc(lua_State *L)
     conn->write_ev = NULL;
   }
 
-  if (conn->socket_fd) {
+  if (conn->socket_fd)
+  {
     EVUTIL_CLOSESOCKET(conn->socket_fd);
     conn->socket_fd = 0;
   }
@@ -145,7 +146,18 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
 {
   if (conn->socket_fd)
   {
-    return 1;
+    EVUTIL_CLOSESOCKET(conn->socket_fd);    
+    conn->socket_fd = 0;
+  }
+
+  if (conn->write_ev) {
+    event_del(conn->write_ev);    
+    conn->write_ev = NULL;
+  }
+
+  if (conn->read_ev) {
+    event_del(conn->read_ev);    
+    conn->read_ev = NULL;
   }
 
   int socket_fd = 0;
@@ -211,6 +223,17 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
     {
       return 0;
     }
+  }
+
+  if(!conn->bind_port)
+  {
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    if (getsockname(socket_fd, (struct sockaddr *)&addr, &len) == -1) {
+      return 0;
+    }
+    
+    conn->bind_port = ntohs(addr.sin_port);
   }
 
   if (setnonblock(socket_fd) < 0)
@@ -282,6 +305,14 @@ void udpd_conn_new_callback(int errcode, struct evutil_addrinfo *addr,
       FAN_RESUME(L, NULL, 1);
     }
   }
+}
+
+LUA_API int lua_udpd_conn_rebind(lua_State *L)
+{
+  Conn *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
+  luaudpd_reconnect(conn, L);
+
+  return 0;
 }
 
 LUA_API int udpd_new(lua_State *L)
@@ -426,7 +457,8 @@ LUA_API int udpd_conn_send(lua_State *L)
   size_t len = 0;
   const char *data = luaL_checklstring(L, 2, &len);
 
-  if (!conn->socket_fd) {
+  if (!conn->socket_fd)
+  {
     lua_pushnil(L);
     lua_pushliteral(L, "socket was not created.");
     return 2;
@@ -443,8 +475,16 @@ LUA_API int udpd_conn_send(lua_State *L)
   {
     ret = sendto(conn->socket_fd, data, len, 0, &conn->addr, conn->addrlen);
   }
+
   lua_pushinteger(L, ret);
-  return 1;
+  
+  if (ret < 0)
+  {
+    lua_pushstring(L, strerror(errno));
+    return 2;
+  } else {
+    return 1;    
+  }
 }
 
 LUA_API int udpd_conn_send_request(lua_State *L)
@@ -523,6 +563,9 @@ LUA_API int luaopen_fan_udpd(lua_State *L)
 
   lua_pushcfunction(L, &lua_udpd_conn_gc);
   lua_setfield(L, -2, "close");
+
+  lua_pushcfunction(L, &lua_udpd_conn_rebind);
+  lua_setfield(L, -2, "rebind");
 
   lua_pushcfunction(L, &udpd_conn_tostring);
   lua_setfield(L, -2, "__tostring");

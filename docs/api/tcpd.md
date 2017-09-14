@@ -103,6 +103,7 @@ listening on tcp socket.
 `serv` apis
 
 * `close()` shutdown the server.
+* `rebind()` rebind the same host/port.(e.g. resume back in mobile device, rebind port.)
 
 ---------
 keys in the `arg`:

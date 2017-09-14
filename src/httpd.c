@@ -8,6 +8,9 @@ typedef struct
   struct evhttp *httpd;
   struct evhttp_bound_socket *boundsocket;
 
+  char *host;
+  int port;
+
 #if FAN_HAS_OPENSSL
   SSL_CTX *ctx;
 #endif
@@ -317,7 +320,7 @@ static const MethodMap methodMap[] = {
 
 LUA_API int lua_evhttp_server_gc(lua_State *L)
 {
-  LuaServer *server = (LuaServer *)lua_touserdata(L, -1);
+  LuaServer *server = (LuaServer *)luaL_checkudata(L, 1, LUA_EVHTTP_SERVER_TYPE);
   if (server->onServiceRef != LUA_NOREF)
   {
     luaL_unref(L, LUA_REGISTRYINDEX, server->onServiceRef);
@@ -490,6 +493,22 @@ static void smoke_request_cb(struct evhttp_request *req, void *arg)
   evhttp_send_reply(req, 200, "OK", NULL);
 }
 
+void httpd_server_rebind(lua_State *L, LuaServer *server)
+{
+  struct evhttp_bound_socket *boundsocket =
+      evhttp_bind_socket_with_handle(server->httpd, server->host, server->port);
+
+  server->boundsocket = boundsocket;
+  if (boundsocket)
+  {
+    server->port = regress_get_socket_port(evhttp_bound_socket_get_fd(boundsocket));
+  }
+  else
+  {
+    server->port = 0;
+  }
+}
+
 LUA_API int utd_bind(lua_State *L)
 {
   luaL_checktype(L, 1, LUA_TTABLE);
@@ -547,17 +566,14 @@ LUA_API int utd_bind(lua_State *L)
 
 #endif
 
-  lua_getfield(L, 1, "host");
-  const char *host = lua_tostring(L, -1);
+  DUP_STR_FROM_TABLE(L, server->host, 1, "host")
+  SET_INT_FROM_TABLE(L, server->port, 1, "port")
 
-  lua_getfield(L, 1, "port");
-  lua_Integer port = lua_tointeger(L, -1);
+  server->httpd = httpd;
 
-  struct evhttp_bound_socket *boundsocket =
-      evhttp_bind_socket_with_handle(httpd, host, port);
-  lua_pop(L, 2);
+  httpd_server_rebind(L, server);
 
-  if (!boundsocket)
+  if (!server->boundsocket)
   {
 #if FAN_HAS_OPENSSL
     if (server->ctx)
@@ -569,11 +585,6 @@ LUA_API int utd_bind(lua_State *L)
     evhttp_free(httpd);
     return 0;
   }
-
-  port = regress_get_socket_port(evhttp_bound_socket_get_fd(boundsocket));
-
-  server->httpd = httpd;
-  server->boundsocket = boundsocket;
 
   SET_FUNC_REF_FROM_TABLE(L, server->onServiceRef, 1, "onService")
 
@@ -587,10 +598,10 @@ LUA_API int utd_bind(lua_State *L)
   lua_pushvalue(L, 2);
   lua_setfield(L, -2, "serv");
 
-  lua_pushinteger(L, port);
+  lua_pushinteger(L, server->port);
   lua_setfield(L, -2, "port");
 
-  if (host)
+  if (server->host)
   {
     lua_getfield(L, 1, "host");
   }
@@ -601,6 +612,13 @@ LUA_API int utd_bind(lua_State *L)
   lua_setfield(L, -2, "host");
 
   return 1;
+}
+
+LUA_API int lua_evhttp_server_rebind(lua_State *L)
+{
+  LuaServer *server = (LuaServer *)luaL_checkudata(L, 1, LUA_EVHTTP_SERVER_TYPE);
+  httpd_server_rebind(L, server);
+  return 0;
 }
 
 static const luaL_Reg utdlib[] = {{"bind", utd_bind}, {NULL, NULL}};
@@ -615,9 +633,18 @@ LUA_API int luaopen_fan_httpd_core(lua_State *L)
   lua_pop(L, 1);
 
   luaL_newmetatable(L, LUA_EVHTTP_SERVER_TYPE);
+
   lua_pushstring(L, "__gc");
   lua_pushcfunction(L, &lua_evhttp_server_gc);
   lua_rawset(L, -3);
+
+  lua_pushcfunction(L, &lua_evhttp_server_rebind);
+  lua_setfield(L, -2, "rebind");
+
+  lua_pushstring(L, "__index");
+  lua_pushvalue(L, -2);
+  lua_rawset(L, -3);
+  
   lua_pop(L, 1);
 
   lua_newtable(L);

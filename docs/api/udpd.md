@@ -47,6 +47,9 @@ get the udp local binding port.
 ### `close()`
 cleanup udp reference.
 
+### `rebind()`
+rebind the same host/port.(e.g. resume back in mobile device, rebind port.)
+
 UDP_ADDR_INFO
 =============
 

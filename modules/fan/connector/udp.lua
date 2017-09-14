@@ -246,7 +246,10 @@ function apt_mt:_send(buf, kind)
     print(self, string.format("send<%s> %s\t[%d] %d/%d", kind, self.dest, output_index, package_index, count))
   end
 
-  self.conn:send(buf, self.dest)
+  local result = self.conn:send(buf, self.dest)
+  if result < 0 then
+    self.conn:rebind()
+  end
 
   config.udp_send_total = config.udp_send_total + 1
 

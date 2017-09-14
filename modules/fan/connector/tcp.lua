@@ -219,6 +219,10 @@ local function bind(host, port, path, args)
 
   obj.serv = tcpd.bind(params)
 
+  obj.rebind = function(obj)
+    obj.serv:rebind()
+  end
+
   return obj
 end
 
