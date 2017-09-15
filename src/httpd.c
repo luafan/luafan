@@ -583,6 +583,7 @@ LUA_API int utd_bind(lua_State *L)
     }
 #endif
     evhttp_free(httpd);
+    server->httpd = NULL;
     return 0;
   }
 
