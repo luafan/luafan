@@ -1,6 +1,6 @@
 PODS:
   - CAPKit-3rdparty-libs (0.1.0)
-  - CAPKit-lua53 (0.1.3)
+  - CAPKit-lua53 (0.1.4)
 
 DEPENDENCIES:
   - CAPKit-3rdparty-libs (~> 0.1.0)
@@ -8,7 +8,7 @@ DEPENDENCIES:
 
 SPEC CHECKSUMS:
   CAPKit-3rdparty-libs: 7a91196274c4ef1c7669feb5fb226dd7d6ddf3bd
-  CAPKit-lua53: 29233413545a1d5edd9002ecdec3e3d172c61a87
+  CAPKit-lua53: 588b04d5a5ccda9388f9268eba6cf489bc023465
 
 PODFILE CHECKSUM: acfd491a111f7d863127009e0e7bcc2253687ae9
 

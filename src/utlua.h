@@ -35,9 +35,15 @@
 #include <stdbool.h>
 #endif
 
+#if TARGET_OS_IPHONE
+#include <lua53/lauxlib.h>
+#include <lua53/lua.h>
+#include <lua53/lualib.h>
+#else
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
+#endif
 
 #include <event.h>
 #include <event2/bufferevent.h>

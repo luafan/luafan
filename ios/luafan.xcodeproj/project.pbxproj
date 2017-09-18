@@ -117,7 +117,6 @@
 			children = (
 				225C47191F5CFAF300DCC767 /* bytearray.c */,
 				225C471A1F5CFAF300DCC767 /* bytearray.h */,
-				225C471C1F5CFAF300DCC767 /* connector */,
 				225C471D1F5CFAF300DCC767 /* event_mgr.c */,
 				225C471E1F5CFAF300DCC767 /* event_mgr.h */,
 				225C47201F5CFAF300DCC767 /* fifo.c */,
@@ -141,13 +140,6 @@
 			);
 			name = src;
 			path = ../src;
-			sourceTree = "<group>";
-		};
-		225C471C1F5CFAF300DCC767 /* connector */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = connector;
 			sourceTree = "<group>";
 		};
 		2E8D7455072723B81C24C5B2 /* Pods */ = {
