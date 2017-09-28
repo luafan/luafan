@@ -36,7 +36,7 @@ lua_State *utlua_mainthread(lua_State *L)
   return mt;
 }
 
-int utlua_resume(lua_State *co, lua_State *from, int count)
+int _utlua_resume(lua_State *co, lua_State *from, int count)
 {
   lua_lock(co);
 
@@ -66,6 +66,12 @@ int utlua_resume(lua_State *co, lua_State *from, int count)
   lua_unlock(co);
 
   return status;
+}
+
+FAN_RESUME_TPYE FAN_RESUME = &_utlua_resume;
+
+void utlua_set_resume(FAN_RESUME_TPYE resume){
+    FAN_RESUME = resume;
 }
 
 void d2tv(double x, struct timeval *tv)

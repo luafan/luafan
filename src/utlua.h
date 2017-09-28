@@ -72,7 +72,7 @@
 #ifdef __ANDROID__
 
 #include <android/log.h>
-#define LOG_TAG "luafan.log"
+#define LOG_TAG "lua.print"
 #undef LOG
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -124,12 +124,13 @@
 #define lua_unlock(L) ((void)0)
 #endif
 
-int utlua_resume(lua_State *co, lua_State *from, int count);
 lua_State *utlua_mainthread(lua_State *L);
 
-#ifndef FAN_RESUME
-#define FAN_RESUME      utlua_resume
-#endif
+typedef int(*FAN_RESUME_TPYE)(lua_State *co, lua_State *from, int count);
+
+void utlua_set_resume(FAN_RESUME_TPYE resume);
+
+extern FAN_RESUME_TPYE FAN_RESUME;
 
 #define PUSH_REF(L)                                 \
         lua_lock(L);                                \
