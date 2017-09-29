@@ -30,6 +30,12 @@ local TIMEOUT = config.udp_package_timeout or 2
 local WAITING_COUNT = config.udp_waiting_count or 100
 local MULTI_ACK = config.multi_ack
 
+math.randomseed(utils.gettime())
+
+-- preserve first 4 bit.
+local MAX_OUTPUT_INDEX = 0x0ffffff0
+local MULTI_ACK_OUTPUT_INDEX = 0x0fffffff
+
 local CHECK_TIMEOUT_DURATION = config.udp_check_timeout_duration or 0.5
 
 local apt_mt = {}
@@ -71,7 +77,7 @@ function apt_mt:send(buf)
   end
 
   local output_index = self._output_index + 1
-  if output_index >= 0x0ffffff0 then -- preserve first 4 bit.
+  if output_index >= MAX_OUTPUT_INDEX then
     output_index = 1
     if config.debug then
       print("reset output_index = 1")
@@ -182,7 +188,7 @@ function apt_mt:_onread(buf)
     local body = string.sub(buf, HEAD_SIZE + 1)
     local output_index,count,package_index = string.unpack("<I4I2I2", head)
 
-    if output_index == 0x0fffffff and #(body)%HEAD_SIZE == 0 then
+    if output_index == MULTI_ACK_OUTPUT_INDEX and #(body)%HEAD_SIZE == 0 then
       -- multi-ack
       local offset = 1
       while offset < #(body) do
@@ -305,7 +311,7 @@ function apt_mt:_check_timeout()
 end
 
 local max_ack_count = math.floor(BODY_SIZE / HEAD_SIZE)
-local multi_ack_head = string.pack("<I4I2I2", 0x0fffffff, 1, 1)
+local multi_ack_head = string.pack("<I4I2I2", MULTI_ACK_OUTPUT_INDEX, 1, 1)
 
 function apt_mt:_onsendready()
   if MULTI_ACK then
@@ -386,7 +392,7 @@ local function connect(host, port, path)
     host = host,
     port = port,
     dest = udpd.make_dest(host, port),
-    _output_index = 0,
+    _output_index = math.random(MAX_OUTPUT_INDEX),
     _output_chain = {_head = nil, _tail = nil},
     _output_wait_ack = {},
     _output_wait_package_parts_map = {},
@@ -454,7 +460,7 @@ local function connect(host, port, path)
           dest = from or udpd.make_dest(host, port),
           conn = obj.serv,
           _parent = weak_obj,
-          _output_index = 0,
+          _output_index = math.random(MAX_OUTPUT_INDEX),
           _output_chain = {_head = nil, _tail = nil},
           _output_wait_ack = {},
           _output_wait_package_parts_map = {},
