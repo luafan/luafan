@@ -2,7 +2,7 @@ package = "luafanlite"
 version = "0.6-1"
 source = {
    url = "git://github.com/luafan/luafan",
-   tag = "v0.6"
+   tag = "v0.6.6"
 }
 
 description = {
