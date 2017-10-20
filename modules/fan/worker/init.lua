@@ -73,6 +73,8 @@ end
 local master_mt = {}
 master_mt.__index = function(obj, k)
   if obj.func_names[k] then
+    obj:wait_all_slaves()
+
     return function(obj, ...)
       local slave = obj.loadbalance:findbest()
 
@@ -152,74 +154,74 @@ local function new(funcmap, slavecount, max_job_count, url)
 
     setmetatable(obj, master_mt)
 
-    obj.serv = connector.bind(url)
-
     obj.wait_all_slaves = function()
       if #(obj.slaves) == #(slave_pids) then
         return
       end
 
+      obj.serv = connector.bind(url)
+      
+      obj.serv.onaccept = function(apt)
+        -- print("onaccept", apt)
+        apt.task_map = {}
+        apt.task_index = 1
+        apt.jobcount = 0
+        apt.status = "running"
+        apt.max_job_count = max_job_count
+  
+        table.insert(obj.slaves, apt)
+        obj.loadbalance:add(apt)
+  
+        if #(obj.slaves) == #(slave_pids) then
+          if obj._wait_all_slaves_running then
+            local running = obj._wait_all_slaves_running
+            obj._wait_all_slaves_running = nil
+            coroutine.resume(running, obj)
+          end
+        end
+  
+        local last_expect = 1
+  
+        while true do
+          local input = apt:receive(last_expect)
+          if not input then
+            break
+          end
+  
+          local str,expect = input:GetString()
+          if str then
+            last_expect = 1
+            local args = objectbuf.decode(str)
+  
+            if apt.task_map[args[1]] then
+              local running = apt.task_map[args[1]]
+              apt.task_map[args[1]] = nil
+              local st,msg = coroutine.resume(running, true, table.unpack(args, 2, maxn(args)))
+              if not st then
+                print(msg)
+              end
+            else
+              apt.task_map[args[1]] = {true, table.unpack(args, 2, maxn(args))}
+            end
+  
+            obj.loadbalance:telldone(apt)
+          else
+            -- print(pid, "not enough, expect", expect)
+            last_expect = expect
+          end
+        end
+  
+        for task_key,co in pairs(apt.task_map) do
+          if coroutine.status(co) == "suspended" then
+            apt.status = "dead"
+            assert(coroutine.resume(co, false, "slave dead."))
+          end
+        end
+  
+      end
+      
       obj._wait_all_slaves_running = coroutine.running()
       return coroutine.yield()
-    end
-
-    obj.serv.onaccept = function(apt)
-      -- print("onaccept", apt)
-      apt.task_map = {}
-      apt.task_index = 1
-      apt.jobcount = 0
-      apt.status = "running"
-      apt.max_job_count = max_job_count
-
-      table.insert(obj.slaves, apt)
-      obj.loadbalance:add(apt)
-
-      if #(obj.slaves) == #(slave_pids) then
-        if obj._wait_all_slaves_running then
-          local running = obj._wait_all_slaves_running
-          obj._wait_all_slaves_running = nil
-          coroutine.resume(running, obj)
-        end
-      end
-
-      local last_expect = 1
-
-      while true do
-        local input = apt:receive(last_expect)
-        if not input then
-          break
-        end
-
-        local str,expect = input:GetString()
-        if str then
-          last_expect = 1
-          local args = objectbuf.decode(str)
-
-          if apt.task_map[args[1]] then
-            local running = apt.task_map[args[1]]
-            apt.task_map[args[1]] = nil
-            local st,msg = coroutine.resume(running, true, table.unpack(args, 2, maxn(args)))
-            if not st then
-              print(msg)
-            end
-          else
-            apt.task_map[args[1]] = {true, table.unpack(args, 2, maxn(args))}
-          end
-
-          obj.loadbalance:telldone(apt)
-        else
-          -- print(pid, "not enough, expect", expect)
-          last_expect = expect
-        end
-      end
-
-      for task_key,co in pairs(apt.task_map) do
-        if coroutine.status(co) == "suspended" then
-          apt.status = "dead"
-          assert(coroutine.resume(co, false, "slave dead."))
-        end
-      end
-
     end
 
     return obj
