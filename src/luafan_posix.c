@@ -69,14 +69,23 @@ LUA_API int luafan_setsid(lua_State *L)
   return luafan_push_result(L, result);
 }
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
+#if TARGET_OS_IOS == 0
 extern char *__progname;
+#endif
+
 
 LUA_API int luafan_setprogname(lua_State *L)
 {
+#if TARGET_OS_IOS == 0
   size_t size = 0;
   const char *name = luaL_checklstring(L, 1, &size);
   memset(__progname, 0, 128);
   strncpy(__progname, name, 127 > size ? size : 127);
+#endif
 
   return 0;
 }
