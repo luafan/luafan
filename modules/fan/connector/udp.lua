@@ -30,6 +30,8 @@ local TIMEOUT = config.udp_package_timeout or 2
 local WAITING_COUNT = config.udp_waiting_count or 100
 local MULTI_ACK = config.multi_ack
 
+local UDP_WINDOW_SIZE = config.udp_window_size or 10
+
 math.randomseed(utils.gettime())
 
 -- preserve first 4 bit.
@@ -177,6 +179,8 @@ function apt_mt:_onack(buf)
 end
 
 function apt_mt:_onread(buf)
+  self.incoming_bytes_total = self.incoming_bytes_total + #(buf)
+  
   -- print("read", self.dest, #(buf))
   if #(buf) == HEAD_SIZE then
     -- single ack.
@@ -196,7 +200,15 @@ function apt_mt:_onread(buf)
         self:_onack(line)
         offset = offset + HEAD_SIZE
       end
-    else
+    elseif output_index < MAX_OUTPUT_INDEX then
+      local window = self._window and self._window or output_index
+      if output_index - window > UDP_WINDOW_SIZE and output_index + MAX_OUTPUT_INDEX - window > UDP_WINDOW_SIZE then
+        if config.debug then
+          print(self, string.format("drop package outside window, win:%d pkg:%d", window, output_index))
+        end
+        return
+      end
+      
       table.insert(self._output_ack_package, head)
       if config.debug then
         print(self, "sending ack", #(self._output_ack_package), self._pending_for_send)
@@ -205,6 +217,12 @@ function apt_mt:_onread(buf)
 
       if config.debug then
         print(self, string.format("recv<data> %s:%d\t[%d] %d/%d (body=%d)", self.host, self.port, output_index, package_index, count, #(body)))
+      end
+
+      if self._window_holes[output_index] then
+        if config.debug then
+          print(self, "drop dup package.")
+        end
       end
 
       local incoming_object = self._incoming_map[output_index]
@@ -226,22 +244,25 @@ function apt_mt:_onread(buf)
         end
       end
 
-      -- mark true, so we can drop dup packages.
-      incoming_object.done = true
-      incoming_object.donetime = gettime()
+      self._window_holes[output_index] = true
+      while self._window_holes[self._window] do
+        self._window_holes[self._window] = nil
 
-      if self.onread then
-        if count == 1 then
-          coroutine.wrap(self.onread)(incoming_object.items[1])
-        else
-          coroutine.wrap(self.onread)(table.concat(incoming_object.items))
+        self._window = self._window + 1
+        if self._window == MAX_OUTPUT_INDEX then
+          self._window = 1
         end
       end
 
+      if self.onread then
+        coroutine.wrap(self.onread)(table.concat(incoming_object.items))
+      end
+
       incoming_object.items = nil
+      self._incoming_map[output_index] = nil
     end
   else
-    print("receive buf size too small", #(buf), fan.data2hex(buf))
+    print("unsupported package", #(buf), fan.data2hex(buf))
   end
 end
 
@@ -257,6 +278,8 @@ function apt_mt:_send(buf, kind)
     self.conn:rebind()
   end
 
+  self.outgoing_bytes_total = self.outgoing_bytes_total + #(buf)
+  
   config.udp_send_total = config.udp_send_total + 1
 
   self:send_req()
@@ -264,11 +287,6 @@ function apt_mt:_send(buf, kind)
 end
 
 function apt_mt:_check_timeout()
-  for index,incoming_object in pairs(self._incoming_map) do
-    if incoming_object.done and gettime() - incoming_object.donetime > 60 then
-      self._incoming_map[index] = nil
-    end
-  end
   local has_timeout = false
   for k,map in pairs(self._output_wait_package_parts_map) do
     local last_output_time = self._output_wait_ack[k]
@@ -399,6 +417,9 @@ local function connect(host, port, path)
     _output_wait_count = 0,
     _output_ack_package = {},
     _incoming_map = {},
+    _window_holes = {},
+    incoming_bytes_total = 0,
+    outgoing_bytes_total = 0,
   }
   setmetatable(t, apt_mt)
 
@@ -468,6 +489,9 @@ local function connect(host, port, path)
           _output_ack_package = {},
           _incoming_map = {},
           _client_key = client_key,
+          _window_holes = {},
+          incoming_bytes_total = 0,
+          outgoing_bytes_total = 0,
         }
         setmetatable(apt, apt_mt)
         obj.clientmap[client_key] = apt
