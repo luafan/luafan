@@ -292,9 +292,11 @@ function apt_mt:_check_timeout()
     local last_output_time = self._output_wait_ack[k]
 
     if last_output_time then
-      local timeout = math.max(self.latency and self.latency * 3 or TIMEOUT, 0.1)
-      if gettime() - last_output_time >= timeout then
+      local timeout = math.min(math.max(self.latency and self.latency * 3 or TIMEOUT, 0.1), TIMEOUT)
+      local difftime = gettime() - last_output_time
+      if difftime >= timeout then
         has_timeout = true
+        self.latency = difftime
         local resend = true
         if self.ontimeout then
           resend = self.ontimeout(map[k])
@@ -468,6 +470,7 @@ local function connect(host, port, path)
     local weak_obj = utils.weakify(obj)
 
     obj.getapt = function(host, port, from, client_key)
+      local obj = weak_obj
       local apt = obj.clientmap[client_key]
       if not apt then
         if not host or not port then
@@ -480,7 +483,7 @@ local function connect(host, port, path)
           port = port,
           dest = from or udpd.make_dest(host, port),
           conn = obj.serv,
-          _parent = weak_obj,
+          _parent = obj,
           _output_index = math.random(MAX_OUTPUT_INDEX),
           _output_chain = {_head = nil, _tail = nil},
           _output_wait_ack = {},
@@ -508,18 +511,20 @@ local function connect(host, port, path)
     obj.serv = udpd.new{
       bind_port = port,
       onsendready = function()
-        weak_obj._pending_for_send = nil
+        local obj = weak_obj
+        obj._pending_for_send = nil
 
         -- TODO: schedule, otherwise some client with heavy traffic may block others.
-        for k,apt in pairs(weak_obj.clientmap) do
+        for k,apt in pairs(obj.clientmap) do
           if apt:_moretosend() and apt:_onsendready() then
             return
           end
         end
       end,
       onread = function(buf, from)
+        local obj = weak_obj
         config.udp_receive_total = config.udp_receive_total + 1
-        local apt = weak_obj.getapt(nil, nil, from, tostring(from))
+        local apt = obj.getapt(nil, nil, from, tostring(from))
 
         apt:_onread(buf)
       end
