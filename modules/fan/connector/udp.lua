@@ -37,6 +37,7 @@ math.randomseed(utils.gettime())
 -- preserve first 4 bit.
 local MAX_OUTPUT_INDEX = 0x0ffffff0
 local MULTI_ACK_OUTPUT_INDEX = 0x0fffffff
+local WINDOW_CTRL = 0x0ffffffe
 
 local CHECK_TIMEOUT_DURATION = config.udp_check_timeout_duration or 0.5
 
@@ -78,15 +79,17 @@ function apt_mt:send(buf)
     return nil
   end
 
-  local output_index = self._output_index + 1
-  if output_index >= MAX_OUTPUT_INDEX then
-    output_index = 1
+  local output_index = self._output_index
+
+  self._output_index = output_index + 1
+  
+  if self._output_index >= MAX_OUTPUT_INDEX then
+    self._output_index = 1
     if config.debug then
       print("reset output_index = 1")
-    end
+    end   
   end
-  self._output_index = output_index
-
+  
   local package_parts_map = {}
 
   if #(buf) > BODY_SIZE then
@@ -98,10 +101,15 @@ function apt_mt:send(buf)
     end
 
     for i=0,index_count do
-      local body = string.sub(buf, i * BODY_SIZE + 1, i * BODY_SIZE + BODY_SIZE)
       local head = string.pack("<I4I2I2", output_index, index_count + 1, package_index)
       -- print(string.format("pp: %d %d/%d", output_index, package_index, index_count + 1))
-      local package = head .. body
+      local package = {
+        head = head,
+        buf = buf,
+        output_index = output_index,
+        body_begin = i * BODY_SIZE + 1,
+        body_end = i * BODY_SIZE + BODY_SIZE
+      }
       package_parts_map[head] = package
       package_index = package_index + 1
 
@@ -110,7 +118,11 @@ function apt_mt:send(buf)
     end
   else
     local head = string.pack("<I4I2I2", output_index, 1, 1)
-    local package = head .. buf
+    local package = {
+      head = head,
+      body = buf,
+      output_index = output_index
+    }
     package_parts_map[head] = package
 
     self:_output_chain_push(head, package)
@@ -168,11 +180,23 @@ function apt_mt:_onack(buf)
   self:_mark_send_completed(buf)
 
   if map then
+    local package = map[buf]
     map[buf] = nil
-    if self.onsent then
-      if not next(map) then
-        local output_index = string.unpack("<I4", buf)
-        coroutine.wrap(self.onsent)(output_index)
+
+    if not next(map) then
+      self._send_window_holes[package.output_index] = true
+      
+      while self._send_window_holes[self._send_window] do
+        self._send_window_holes[self._send_window] = nil
+  
+        self._send_window = self._send_window + 1
+        if self._send_window == MAX_OUTPUT_INDEX then
+          self._send_window = 1
+        end
+      end
+
+      if self.onsent then
+        coroutine.wrap(self.onsent)(package.output_index)
       end
     end
   end
@@ -200,9 +224,20 @@ function apt_mt:_onread(buf)
         self:_onack(line)
         offset = offset + HEAD_SIZE
       end
+    elseif output_index == WINDOW_CTRL then
+      local window = string.unpack("<I4", body)
+      if window < MAX_OUTPUT_INDEX then
+        self._recv_window = window
+      end
     elseif output_index < MAX_OUTPUT_INDEX then
-      local window = self._window and self._window or output_index
-      if output_index - window > UDP_WINDOW_SIZE and output_index + MAX_OUTPUT_INDEX - window > UDP_WINDOW_SIZE then
+      if not self._recv_window then
+        if config.debug then
+          print(self, "window not set")
+        end
+        return
+      end
+      if output_index - self._recv_window > UDP_WINDOW_SIZE
+      and output_index + MAX_OUTPUT_INDEX - self._recv_window > UDP_WINDOW_SIZE then
         if config.debug then
           print(self, string.format("drop package outside window, win:%d pkg:%d", window, output_index))
         end
@@ -219,7 +254,7 @@ function apt_mt:_onread(buf)
         print(self, string.format("recv<data> %s:%d\t[%d] %d/%d (body=%d)", self.host, self.port, output_index, package_index, count, #(body)))
       end
 
-      if self._window_holes[output_index] then
+      if self._recv_window_holes[output_index] then
         if config.debug then
           print(self, "drop dup package.")
         end
@@ -244,13 +279,14 @@ function apt_mt:_onread(buf)
         end
       end
 
-      self._window_holes[output_index] = true
-      while self._window_holes[self._window] do
-        self._window_holes[self._window] = nil
+      self._recv_window_holes[output_index] = true
+      -- print("output_index", output_index, "self._recv_window", self._recv_window)
+      while self._recv_window_holes[self._recv_window] do
+        self._recv_window_holes[self._recv_window] = nil
 
-        self._window = self._window + 1
-        if self._window == MAX_OUTPUT_INDEX then
-          self._window = 1
+        self._recv_window = self._recv_window + 1
+        if self._recv_window == MAX_OUTPUT_INDEX then
+          self._recv_window = 1
         end
       end
 
@@ -332,8 +368,14 @@ end
 
 local max_ack_count = math.floor(BODY_SIZE / HEAD_SIZE)
 local multi_ack_head = string.pack("<I4I2I2", MULTI_ACK_OUTPUT_INDEX, 1, 1)
+local window_ctrl_head = string.pack("<I4I2I2", WINDOW_CTRL, 1, 1)
 
 function apt_mt:_onsendready()
+  if not self._window_sent then
+    self:_send(window_ctrl_head .. string.pack("<I4", self._send_window), "wind")
+    self._window_sent = true
+    return true
+  end
   if MULTI_ACK then
     if #(self._output_ack_package) > max_ack_count then
       local tmp = {}
@@ -363,14 +405,22 @@ function apt_mt:_onsendready()
 
   local head,package = self:_output_chain_pop()
   if head and package then
+    if package.output_index - self._send_window > UDP_WINDOW_SIZE
+    and package.output_index + MAX_OUTPUT_INDEX - self._send_window > UDP_WINDOW_SIZE then
+      return false
+    end
     if self._output_wait_package_parts_map[head] then
       if not self._output_wait_ack[head] then
         self._output_wait_count = self._output_wait_count + 1
       end
       self._output_wait_ack[head] = gettime()
       -- print("_output_wait_count", self._output_wait_count)
-
-      self:_send(package, "data")
+      if package.body then
+        self:_send(package.head .. package.body, "data")
+      else
+        local body = string.sub(package.buf, package.body_begin, package.body_end)
+        self:_send(package.head .. body, "data")
+      end
       return true
     end
   end
@@ -419,10 +469,14 @@ local function connect(host, port, path)
     _output_wait_count = 0,
     _output_ack_package = {},
     _incoming_map = {},
-    _window_holes = {},
+    _recv_window_holes = {},
+    _send_window_holes = {},
     incoming_bytes_total = 0,
     outgoing_bytes_total = 0,
   }
+
+  t._send_window = t._output_index
+  
   setmetatable(t, apt_mt)
 
   host = t.dest:getHost()
@@ -492,10 +546,14 @@ local function connect(host, port, path)
           _output_ack_package = {},
           _incoming_map = {},
           _client_key = client_key,
-          _window_holes = {},
+          _recv_window_holes = {},
+          _send_window_holes = {},
           incoming_bytes_total = 0,
           outgoing_bytes_total = 0,
         }
+
+        apt._send_window = apt._output_index
+
         setmetatable(apt, apt_mt)
         obj.clientmap[client_key] = apt
 
@@ -522,6 +580,9 @@ local function connect(host, port, path)
         end
       end,
       onread = function(buf, from)
+        -- if math.random(100) < 10 then
+        --   return
+        -- end
         local obj = weak_obj
         config.udp_receive_total = config.udp_receive_total + 1
         local apt = obj.getapt(nil, nil, from, tostring(from))
