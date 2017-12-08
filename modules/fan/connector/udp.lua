@@ -41,6 +41,11 @@ local WINDOW_CTRL = 0x0ffffffe
 
 local CHECK_TIMEOUT_DURATION = config.udp_check_timeout_duration or 0.5
 
+local max_ack_count = math.floor(BODY_SIZE / HEAD_SIZE)
+local multi_ack_head = string.pack("<I4I2I2", MULTI_ACK_OUTPUT_INDEX, 1, 1)
+local window_ctrl_head_set = string.pack("<I4I2I2", WINDOW_CTRL, 1, 1)
+local window_ctrl_head_req = string.pack("<I4I2I2", WINDOW_CTRL, 1, 2)
+
 local apt_mt = {}
 apt_mt.__index = apt_mt
 
@@ -225,15 +230,32 @@ function apt_mt:_onread(buf)
         offset = offset + HEAD_SIZE
       end
     elseif output_index == WINDOW_CTRL then
-      local window = string.unpack("<I4", body)
-      if window < MAX_OUTPUT_INDEX then
-        self._recv_window = window
+      if count == 1 and package_index == 1 then
+        local window = string.unpack("<I4", body)
+        if window < MAX_OUTPUT_INDEX then
+          if config.debug then
+            print(self, "set window", window)
+          end
+          self._recv_window = window
+        else
+          if config.debug then
+            print(self, "window size over limit", window, MAX_OUTPUT_INDEX)
+          end
+        end  
+      elseif count == 1 and package_index == 2 then
+        if config.debug then
+          print(self, "will resend window")
+        end
+
+        self._window_sent = nil
       end
     elseif output_index < MAX_OUTPUT_INDEX then
       if not self._recv_window then
         if config.debug then
           print(self, "window not set")
         end
+
+        self:_send(window_ctrl_head_req .. string.pack("<I4", self._send_window), "wind")        
         return
       end
       if output_index - self._recv_window > UDP_WINDOW_SIZE
@@ -366,13 +388,9 @@ function apt_mt:_check_timeout()
   return has_timeout
 end
 
-local max_ack_count = math.floor(BODY_SIZE / HEAD_SIZE)
-local multi_ack_head = string.pack("<I4I2I2", MULTI_ACK_OUTPUT_INDEX, 1, 1)
-local window_ctrl_head = string.pack("<I4I2I2", WINDOW_CTRL, 1, 1)
-
 function apt_mt:_onsendready()
   if not self._window_sent then
-    self:_send(window_ctrl_head .. string.pack("<I4", self._send_window), "wind")
+    self:_send(window_ctrl_head_set .. string.pack("<I4", self._send_window), "wind")
     self._window_sent = true
     return true
   end
