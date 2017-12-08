@@ -407,6 +407,7 @@ function apt_mt:_onsendready()
   if head and package then
     if package.output_index - self._send_window > UDP_WINDOW_SIZE
     and package.output_index + MAX_OUTPUT_INDEX - self._send_window > UDP_WINDOW_SIZE then
+      self:_output_chain_push(head, package)
       return false
     end
     if self._output_wait_package_parts_map[head] then
