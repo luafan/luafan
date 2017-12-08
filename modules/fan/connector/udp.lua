@@ -304,9 +304,12 @@ function apt_mt:_onread(buf)
       if math.abs(output_index - self._recv_window) > UDP_WINDOW_SIZE
       and math.abs(output_index + MAX_OUTPUT_INDEX - self._recv_window) > UDP_WINDOW_SIZE then
         if config.debug then
-          print(self, string.format("drop package outside window, win:%d pkg:%d", window, output_index))
+          print(self, string.format("package outside window, win:%d pkg:%d", self._recv_window, output_index))
         end
-        return
+
+        if config.drop_package_outside_window then
+          return
+        end
       end
       
       table.insert(self._output_ack_package, head)
