@@ -59,17 +59,43 @@ function apt_mt:_output_chain_push(head, package)
   end
 end
 
-function apt_mt:_output_chain_pop()
-  if self._output_chain._head then
-    local head = self._output_chain._head[1]
-    local package = self._output_chain._head[2]
+function apt_mt:_output_chain_insert(head, package)
+  if not self._output_chain._head then
+    self._output_chain._head = {head, package}
+    self._output_chain._tail = self._output_chain._head
+  else
+    local _head = {head, package}
+    _head._next = self._output_chain._head
+    self._output_chain._head = _head
+  end
+end
 
-    self._output_chain._head = self._output_chain._head._next
-    if not self._output_chain._head then
-      self._output_chain._tail = nil
+function apt_mt:_output_chain_pop()
+  local _head = self._output_chain._head
+  local _head_previous = nil
+
+  if _head then
+    while _head and math.abs( _head[2].output_index - self._send_window) > UDP_WINDOW_SIZE
+    and math.abs( _head[2].output_index + MAX_OUTPUT_INDEX - self._send_window) > UDP_WINDOW_SIZE do
+      _head_previous = _head
+      _head = _head._next
     end
 
-    return head, package
+    if _head then
+      if _head_previous then
+        _head_previous._next = _head._next
+        if not _head._next then
+          self._output_chain._tail = _head_previous
+        end
+      else
+        self._output_chain._head = _head._next
+        if not _head._next then
+          self._output_chain._tail = nil
+        end
+      end
+  
+      return _head[1], _head[2]
+    end
   end
 end
 
@@ -170,6 +196,32 @@ function apt_mt:_mark_send_completed(head)
   end
 end
 
+function apt_mt:_apply_send_window(output_index)
+  self._send_window_holes[output_index] = true
+  
+  while self._send_window_holes[self._send_window] do
+    self._send_window_holes[self._send_window] = nil
+
+    self._send_window = self._send_window + 1
+    if self._send_window == MAX_OUTPUT_INDEX then
+      self._send_window = 1
+    end
+  end
+end
+
+function apt_mt:_apply_recv_window(output_index)
+  self._recv_window_holes[output_index] = true
+  -- print("output_index", output_index, "self._recv_window", self._recv_window)
+  while self._recv_window_holes[self._recv_window] do
+    self._recv_window_holes[self._recv_window] = nil
+
+    self._recv_window = self._recv_window + 1
+    if self._recv_window == MAX_OUTPUT_INDEX then
+      self._recv_window = 1
+    end
+  end
+end
+
 function apt_mt:_onack(buf)
   if config.debug then
     local output_index,count,package_index = string.unpack("<I4I2I2", buf)
@@ -189,19 +241,10 @@ function apt_mt:_onack(buf)
     map[buf] = nil
 
     if not next(map) then
-      self._send_window_holes[package.output_index] = true
-      
-      while self._send_window_holes[self._send_window] do
-        self._send_window_holes[self._send_window] = nil
-  
-        self._send_window = self._send_window + 1
-        if self._send_window == MAX_OUTPUT_INDEX then
-          self._send_window = 1
-        end
-      end
+      self:_apply_send_window(package.output_index)
 
       if self.onsent then
-        coroutine.wrap(self.onsent)(package.output_index)
+        coroutine.wrap(self.onsent)(self, package)
       end
     end
   end
@@ -258,8 +301,8 @@ function apt_mt:_onread(buf)
         self:_send(window_ctrl_head_req .. string.pack("<I4", self._send_window), "wind")        
         return
       end
-      if output_index - self._recv_window > UDP_WINDOW_SIZE
-      and output_index + MAX_OUTPUT_INDEX - self._recv_window > UDP_WINDOW_SIZE then
+      if math.abs(output_index - self._recv_window) > UDP_WINDOW_SIZE
+      and math.abs(output_index + MAX_OUTPUT_INDEX - self._recv_window) > UDP_WINDOW_SIZE then
         if config.debug then
           print(self, string.format("drop package outside window, win:%d pkg:%d", window, output_index))
         end
@@ -301,19 +344,10 @@ function apt_mt:_onread(buf)
         end
       end
 
-      self._recv_window_holes[output_index] = true
-      -- print("output_index", output_index, "self._recv_window", self._recv_window)
-      while self._recv_window_holes[self._recv_window] do
-        self._recv_window_holes[self._recv_window] = nil
-
-        self._recv_window = self._recv_window + 1
-        if self._recv_window == MAX_OUTPUT_INDEX then
-          self._recv_window = 1
-        end
-      end
+      self:_apply_recv_window(output_index)
 
       if self.onread then
-        coroutine.wrap(self.onread)(table.concat(incoming_object.items))
+        coroutine.wrap(self.onread)(self, table.concat(incoming_object.items))
       end
 
       incoming_object.items = nil
@@ -350,6 +384,7 @@ function apt_mt:_check_timeout()
     local last_output_time = self._output_wait_ack[k]
 
     if last_output_time then
+      local package = map[k]
       local timeout = math.min(math.max(self.latency and self.latency * 3 or TIMEOUT, 0.1), TIMEOUT)
       local difftime = gettime() - last_output_time
       if difftime >= timeout then
@@ -357,19 +392,21 @@ function apt_mt:_check_timeout()
         self.latency = difftime
         local resend = true
         if self.ontimeout then
-          resend = self.ontimeout(map[k])
+          resend = self.ontimeout(self, package)
         end
 
         if resend and self._output_wait_ack[k] then
           self._output_wait_count = self._output_wait_count - 1
           config.udp_resend_total = config.udp_resend_total + 1
-          self:_output_chain_push(k, map[k])
+          self:_output_chain_insert(k, package)
           self._output_wait_ack[k] = nil
         else
           for k,v in pairs(map) do
             map[k] = nil
             self:_mark_send_completed(k)
           end
+
+          self:_apply_send_window(package.output_index)
         end
       end
     end
@@ -423,11 +460,6 @@ function apt_mt:_onsendready()
 
   local head,package = self:_output_chain_pop()
   if head and package then
-    if package.output_index - self._send_window > UDP_WINDOW_SIZE
-    and package.output_index + MAX_OUTPUT_INDEX - self._send_window > UDP_WINDOW_SIZE then
-      self:_output_chain_push(head, package)
-      return false
-    end
     if self._output_wait_package_parts_map[head] then
       if not self._output_wait_ack[head] then
         self._output_wait_count = self._output_wait_count + 1
