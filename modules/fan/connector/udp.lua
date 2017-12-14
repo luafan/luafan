@@ -301,6 +301,13 @@ function apt_mt:_onread(buf)
         self:_send(window_ctrl_head_req .. string.pack("<I4", self._send_window), "wind")        
         return
       end
+
+      table.insert(self._output_ack_package, head)
+      if config.debug then
+        print(self, "sending ack", #(self._output_ack_package), self._pending_for_send)
+      end
+      self:send_req()
+      
       if math.abs(output_index - self._recv_window) > UDP_WINDOW_SIZE
       and math.abs(output_index + MAX_OUTPUT_INDEX - self._recv_window) > UDP_WINDOW_SIZE then
         if config.debug then
@@ -311,12 +318,6 @@ function apt_mt:_onread(buf)
           return
         end
       end
-      
-      table.insert(self._output_ack_package, head)
-      if config.debug then
-        print(self, "sending ack", #(self._output_ack_package), self._pending_for_send)
-      end
-      self:send_req()
 
       if config.debug then
         print(self, string.format("recv<data> %s:%d\t[%d] %d/%d (body=%d)", self.host, self.port, output_index, package_index, count, #(body)))
