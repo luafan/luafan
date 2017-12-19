@@ -75,8 +75,19 @@ function apt_mt:_output_chain_pop()
   local _head_previous = nil
 
   if _head then
-    while _head and math.abs( _head[2].output_index - self._send_window) > UDP_WINDOW_SIZE
-    and math.abs( _head[2].output_index + MAX_OUTPUT_INDEX - self._send_window) > UDP_WINDOW_SIZE do
+    while _head do
+      local package_outside = false
+      local output_index = _head[2].output_index
+      if output_index >= self._send_window then
+        package_outside = output_index - self._send_window > UDP_WINDOW_SIZE
+      else
+        package_outside = output_index + MAX_OUTPUT_INDEX - self._send_window > UDP_WINDOW_SIZE
+      end
+
+      if not package_outside then
+        break
+      end
+
       _head_previous = _head
       _head = _head._next
     end
@@ -97,6 +108,11 @@ function apt_mt:_output_chain_pop()
       return _head[1], _head[2]
     end
   end
+end
+
+function apt_mt:send_package(package, package_parts_map)
+  self:_output_chain_push(package.head, package)
+  self._output_wait_package_parts_map[package.head] = package_parts_map
 end
 
 function apt_mt:send(buf)
@@ -144,8 +160,7 @@ function apt_mt:send(buf)
       package_parts_map[head] = package
       package_index = package_index + 1
 
-      self:_output_chain_push(head, package)
-      self._output_wait_package_parts_map[head] = package_parts_map
+      self:send_package(package, package_parts_map)
     end
   else
     local head = string.pack("<I4I2I2", output_index, 1, 1)
@@ -156,8 +171,7 @@ function apt_mt:send(buf)
     }
     package_parts_map[head] = package
 
-    self:_output_chain_push(head, package)
-    self._output_wait_package_parts_map[head] = package_parts_map
+    self:send_package(package, package_parts_map)
   end
 
   -- print("send_req")
@@ -307,9 +321,15 @@ function apt_mt:_onread(buf)
         print(self, "sending ack", #(self._output_ack_package), self._pending_for_send)
       end
       self:send_req()
+
+      local package_outside = false
+      if output_index >= self._recv_window then
+        package_outside = output_index - self._recv_window > UDP_WINDOW_SIZE
+      else
+        package_outside = output_index + MAX_OUTPUT_INDEX - self._recv_window > UDP_WINDOW_SIZE
+      end
       
-      if math.abs(output_index - self._recv_window) > UDP_WINDOW_SIZE
-      and math.abs(output_index + MAX_OUTPUT_INDEX - self._recv_window) > UDP_WINDOW_SIZE then
+      if package_outside then
         if config.debug then
           print(self, string.format("package outside window, win:%d pkg:%d", self._recv_window, output_index))
         end
@@ -321,6 +341,13 @@ function apt_mt:_onread(buf)
 
       if config.debug then
         print(self, string.format("recv<data> %s:%d\t[%d] %d/%d (body=%d)", self.host, self.port, output_index, package_index, count, #(body)))
+      end
+
+      -- cancel package.
+      if count == 0 and package_index == 0 then
+        self._incoming_map[output_index] = nil
+        self:_apply_recv_window(output_index)        
+        return
       end
 
       if self._recv_window_holes[output_index] then
@@ -384,18 +411,20 @@ end
 
 function apt_mt:_check_timeout()
   local has_timeout = false
+  local timeout = math.min(math.max(self.latency and self.latency * 3 or TIMEOUT, 0.1), TIMEOUT)
+
   for k,map in pairs(self._output_wait_package_parts_map) do
     local last_output_time = self._output_wait_ack[k]
 
     if last_output_time then
       local package = map[k]
-      local timeout = math.min(math.max(self.latency and self.latency * 3 or TIMEOUT, 0.1), TIMEOUT)
-      local difftime = gettime() - last_output_time
-      if difftime >= timeout then
+      if package.completed then
+        self:_mark_send_completed(k)
+      elseif gettime() - last_output_time >= timeout then
         has_timeout = true
         self.latency = difftime
         local resend = true
-        if self.ontimeout then
+        if self.ontimeout and not package.ignore_timeout_check then
           resend = self.ontimeout(self, package)
         end
 
@@ -406,11 +435,17 @@ function apt_mt:_check_timeout()
           self._output_wait_ack[k] = nil
         else
           for k,v in pairs(map) do
-            map[k] = nil
-            self:_mark_send_completed(k)
+            map[k].completed = true -- don't change other k in order not to break pairs
           end
 
-          self:_apply_send_window(package.output_index)
+          self:_mark_send_completed(k)
+
+          -- cancel package
+          package.head = string.pack("<I4I2I2", package.output_index, 0, 0)
+          package.body = "N/A"
+          package.ignore_timeout_check = true
+
+          self:send_package(package, {[package.head] = package})
         end
       end
     end
@@ -635,9 +670,6 @@ local function connect(host, port, path)
         end
       end,
       onread = function(buf, from)
-        -- if math.random(100) < 10 then
-        --   return
-        -- end
         local obj = weak_obj
         config.udp_receive_total = config.udp_receive_total + 1
         local apt = obj.getapt(nil, nil, from, tostring(from))
