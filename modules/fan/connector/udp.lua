@@ -32,6 +32,8 @@ local MULTI_ACK = config.multi_ack
 
 local UDP_WINDOW_SIZE = config.udp_window_size or 10
 
+local session_cache = config.session_cache or {}
+
 math.randomseed(utils.gettime())
 
 -- preserve first 4 bit.
@@ -75,21 +77,23 @@ function apt_mt:_output_chain_pop()
   local _head_previous = nil
 
   if _head then
-    while _head do
-      local package_outside = false
-      local output_index = _head[2].output_index
-      if output_index >= self._send_window then
-        package_outside = output_index - self._send_window > UDP_WINDOW_SIZE
-      else
-        package_outside = output_index + MAX_OUTPUT_INDEX - self._send_window > UDP_WINDOW_SIZE
+    if config.drop_package_outside_window then
+      while _head do
+        local package_outside = false
+        local output_index = _head[2].output_index
+        if output_index >= self._send_window then
+          package_outside = output_index - self._send_window > UDP_WINDOW_SIZE
+        else
+          package_outside = output_index + MAX_OUTPUT_INDEX - self._send_window > UDP_WINDOW_SIZE
+        end
+  
+        if not package_outside then
+          break
+        end
+  
+        _head_previous = _head
+        _head = _head._next
       end
-
-      if not package_outside then
-        break
-      end
-
-      _head_previous = _head
-      _head = _head._next
     end
 
     if _head then
@@ -288,17 +292,23 @@ function apt_mt:_onread(buf)
       end
     elseif output_index == WINDOW_CTRL then
       if count == 1 and package_index == 1 then
-        local window = string.unpack("<I4", body)
-        if window < MAX_OUTPUT_INDEX then
-          if config.debug then
-            print(self, "set window", window)
+        if not self._recv_window then
+          local window = string.unpack("<I4", body)
+          if window < MAX_OUTPUT_INDEX then
+            if config.debug then
+              print(self, "set window", window)
+            end
+            self._recv_window = window
+          else
+            if config.debug then
+              print(self, "window size over limit", window, MAX_OUTPUT_INDEX)
+            end
           end
-          self._recv_window = window
         else
           if config.debug then
-            print(self, "window size over limit", window, MAX_OUTPUT_INDEX)
+            print(self, "window has been set already.", window)
           end
-        end  
+        end
       elseif count == 1 and package_index == 2 then
         if config.debug then
           print(self, "will resend window")
@@ -393,13 +403,20 @@ function apt_mt:_send(buf, kind)
   -- print("send", #(buf))
   if config.debug then
     local output_index,count,package_index = string.unpack("<I4I2I2", buf)
-    print(self, string.format("send<%s> %s\t[%d] %d/%d", kind, self.dest, output_index, package_index, count))
+    if output_index == WINDOW_CTRL then
+      local _,_,value = string.unpack("<I4I4I4", buf)
+      print(self, string.format("send<%s> %s\t[%d] %d/%d", kind, self.dest, value, package_index, count))
+    else
+      print(self, string.format("send<%s> %s\t[%d] %d/%d", kind, self.dest, output_index, package_index, count))
+    end
   end
 
   local result = self.conn:send(buf, self.dest)
   if result < 0 then
     self.conn:rebind()
   end
+
+  self.last_outgoing_time = gettime()
 
   self.outgoing_bytes_total = self.outgoing_bytes_total + #(buf)
   
@@ -441,11 +458,14 @@ function apt_mt:_check_timeout()
           self:_mark_send_completed(k)
 
           -- cancel package
-          package.head = string.pack("<I4I2I2", package.output_index, 0, 0)
-          package.body = "N/A"
-          package.ignore_timeout_check = true
+          local newpackage = {
+            head = string.pack("<I4I2I2", package.output_index, 0, 0),
+            body = "N/A",
+            output_index = package.output_index,
+            ignore_timeout_check = true
+          }
 
-          self:send_package(package, {[package.head] = package})
+          self:send_package(newpackage, {[newpackage.head] = newpackage})
         end
       end
     end
@@ -525,9 +545,9 @@ function apt_mt:cleanup()
     self._parent = nil
   end
 
-  for k,v in pairs(self) do
-    self[k] = nil
-  end
+  -- for k,v in pairs(self) do
+  --   self[k] = nil
+  -- end
 end
 
 function apt_mt:close()
@@ -548,29 +568,35 @@ end
 local function connect(host, port, path)
   port = tonumber(port)
 
-  local t = {
-    host = host,
-    port = port,
-    dest = udpd.make_dest(host, port),
-    _output_index = math.random(MAX_OUTPUT_INDEX),
-    _output_chain = {_head = nil, _tail = nil},
-    _output_wait_ack = {},
-    _output_wait_package_parts_map = {},
-    _output_wait_count = 0,
-    _output_ack_package = {},
-    _incoming_map = {},
-    _recv_window_holes = {},
-    _send_window_holes = {},
-    incoming_bytes_total = 0,
-    outgoing_bytes_total = 0,
-  }
+  local dest = udpd.make_dest(host, port)
+  host = dest:getHost()
+  port = dest:getPort()
+  local session_cache_key = string.format("%s:%d", host, port)
 
-  t._send_window = t._output_index
+  local t = session_cache[session_cache_key]
+  if not t then
+    t = {
+      host = host,
+      port = port,
+      dest = dest,
+      _output_index = math.random(MAX_OUTPUT_INDEX),
+      _output_chain = {_head = nil, _tail = nil},
+      _output_wait_ack = {},
+      _output_wait_package_parts_map = {},
+      _output_wait_count = 0,
+      _output_ack_package = {},
+      _incoming_map = {},
+      _recv_window_holes = {},
+      _send_window_holes = {},
+      incoming_bytes_total = 0,
+      outgoing_bytes_total = 0,
+    }
   
-  setmetatable(t, apt_mt)
+    t._send_window = t._output_index
+    setmetatable(t, apt_mt)
 
-  host = t.dest:getHost()
-  port = t.dest:getPort()
+    session_cache[session_cache_key] = t
+  end
 
   local weak_t = utils.weakify(t)
 
@@ -617,34 +643,45 @@ local function connect(host, port, path)
       local obj = weak_obj
       local apt = obj.clientmap[client_key]
       if not apt then
-        if not host or not port then
-          host = from:getHost()
-          port = from:getPort()
+        if not from then
+          from = udpd.make_dest(host, port)
         end
 
-        apt = {
-          host = host,
-          port = port,
-          dest = from or udpd.make_dest(host, port),
-          conn = obj.serv,
-          _parent = obj,
-          _output_index = math.random(MAX_OUTPUT_INDEX),
-          _output_chain = {_head = nil, _tail = nil},
-          _output_wait_ack = {},
-          _output_wait_package_parts_map = {},
-          _output_wait_count = 0,
-          _output_ack_package = {},
-          _incoming_map = {},
-          _client_key = client_key,
-          _recv_window_holes = {},
-          _send_window_holes = {},
-          incoming_bytes_total = 0,
-          outgoing_bytes_total = 0,
-        }
+        host = from:getHost()
+        port = from:getPort()
 
-        apt._send_window = apt._output_index
+        local session_cache_key = string.format("%s:%d", host, port)
 
-        setmetatable(apt, apt_mt)
+        apt = session_cache[session_cache_key]
+      
+        if not apt then
+          apt = {
+            host = host,
+            port = port,
+            dest = from,
+            conn = obj.serv,
+            _parent = obj,
+            _output_index = math.random(MAX_OUTPUT_INDEX),
+            _output_chain = {_head = nil, _tail = nil},
+            _output_wait_ack = {},
+            _output_wait_package_parts_map = {},
+            _output_wait_count = 0,
+            _output_ack_package = {},
+            _incoming_map = {},
+            _client_key = client_key,
+            _recv_window_holes = {},
+            _send_window_holes = {},
+            incoming_bytes_total = 0,
+            outgoing_bytes_total = 0,
+          }
+  
+          apt.last_outgoing_time = 0
+          apt._send_window = apt._output_index
+  
+          setmetatable(apt, apt_mt)
+
+          session_cache[session_cache_key] = apt
+        end
         obj.clientmap[client_key] = apt
 
         if obj.onaccept then
@@ -653,6 +690,8 @@ local function connect(host, port, path)
       elseif not apt.dest then
         apt.dest = from
       end
+
+      apt.last_incoming_time = gettime()
 
       return apt
     end
