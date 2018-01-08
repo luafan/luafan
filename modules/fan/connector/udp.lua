@@ -545,6 +545,8 @@ function apt_mt:cleanup()
     self._parent = nil
   end
 
+  self._recv_window = nil
+
   -- for k,v in pairs(self) do
   --   self[k] = nil
   -- end
