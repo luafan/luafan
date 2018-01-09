@@ -678,6 +678,7 @@ local function connect(host, port, path)
           }
   
           apt.last_outgoing_time = 0
+          apt.last_incoming_time = 0
           apt._send_window = apt._output_index
   
           setmetatable(apt, apt_mt)
@@ -692,9 +693,6 @@ local function connect(host, port, path)
       elseif not apt.dest then
         apt.dest = from
       end
-
-      apt.last_incoming_time = 0
-
       return apt
     end
     obj.serv = udpd.new{
@@ -715,7 +713,7 @@ local function connect(host, port, path)
         config.udp_receive_total = config.udp_receive_total + 1
         local apt = obj.getapt(nil, nil, from, tostring(from))
         apt.last_incoming_time = gettime()
-        
+
         apt:_onread(buf)
       end
     }
