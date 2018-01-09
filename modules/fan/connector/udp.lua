@@ -421,6 +421,7 @@ function apt_mt:_send(buf, kind)
   self.outgoing_bytes_total = self.outgoing_bytes_total + #(buf)
   
   config.udp_send_total = config.udp_send_total + 1
+  self.udp_send_total = self.udp_send_total + 1
 
   self:send_req()
   -- print("send_req")
@@ -448,6 +449,7 @@ function apt_mt:_check_timeout()
         if resend and self._output_wait_ack[k] then
           self._output_wait_count = self._output_wait_count - 1
           config.udp_resend_total = config.udp_resend_total + 1
+          self.udp_resend_total = self.udp_resend_total + 1
           self:_output_chain_insert(k, package)
           self._output_wait_ack[k] = nil
         else
@@ -542,7 +544,10 @@ end
 function apt_mt:cleanup()
   if self._parent then
     self._parent.clientmap[self._client_key] = nil
-    self._parent = nil
+    self._parent.clientlist = {}
+    for k,v in pairs(self._parent.clientmap) do
+      table.insert(self._parent.clientlist, v)
+    end
   end
 
   self._recv_window = nil
@@ -638,7 +643,7 @@ local function connect(host, port, path)
   end
 
   local function bind(host, port, path)
-    local obj = {clientmap = {}}
+    local obj = {clientmap = {}, clientlist = {}}
     local weak_obj = utils.weakify(obj)
 
     obj.getapt = function(host, port, from, client_key)
@@ -675,17 +680,29 @@ local function connect(host, port, path)
             _send_window_holes = {},
             incoming_bytes_total = 0,
             outgoing_bytes_total = 0,
+            reuse = 1,
+            udp_send_total = 0,
+            udp_receive_total = 0,
+            udp_resend_total = 0,            
           }
   
-          apt.last_outgoing_time = 0
-          apt.last_incoming_time = 0
           apt._send_window = apt._output_index
   
           setmetatable(apt, apt_mt)
 
           session_cache[session_cache_key] = apt
+        else
+          apt.reuse = apt.reuse + 1
         end
+
+        apt.last_outgoing_time = 0
+        apt.last_incoming_time = gettime()
+
         obj.clientmap[client_key] = apt
+        obj.clientlist = {}
+        for k,v in pairs(obj.clientmap) do
+          table.insert(obj.clientlist, v)
+        end
 
         if obj.onaccept then
           coroutine.wrap(obj.onaccept)(apt)
@@ -699,11 +716,13 @@ local function connect(host, port, path)
       bind_port = port,
       onsendready = function()
         local obj = weak_obj
-        obj._pending_for_send = nil
+        obj._pending_for_send = nil        
 
         -- TODO: schedule, otherwise some client with heavy traffic may block others.
-        for k,apt in pairs(obj.clientmap) do
+        for i,apt in ipairs(obj.clientlist) do
           if apt:_moretosend() and apt:_onsendready() then
+            table.remove(obj.clientlist, i)
+            table.insert(obj.clientlist, apt)
             return
           end
         end
@@ -713,6 +732,7 @@ local function connect(host, port, path)
         config.udp_receive_total = config.udp_receive_total + 1
         local apt = obj.getapt(nil, nil, from, tostring(from))
         apt.last_incoming_time = gettime()
+        apt.udp_receive_total = apt.udp_receive_total + 1
 
         apt:_onread(buf)
       end
