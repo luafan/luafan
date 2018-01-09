@@ -693,7 +693,7 @@ local function connect(host, port, path)
         apt.dest = from
       end
 
-      apt.last_incoming_time = gettime()
+      apt.last_incoming_time = 0
 
       return apt
     end
@@ -714,7 +714,8 @@ local function connect(host, port, path)
         local obj = weak_obj
         config.udp_receive_total = config.udp_receive_total + 1
         local apt = obj.getapt(nil, nil, from, tostring(from))
-
+        apt.last_incoming_time = gettime()
+        
         apt:_onread(buf)
       end
     }
