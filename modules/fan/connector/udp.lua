@@ -450,7 +450,7 @@ function apt_mt:_check_timeout()
           self._output_wait_count = self._output_wait_count - 1
           config.udp_resend_total = config.udp_resend_total + 1
           self.udp_resend_total = self.udp_resend_total + 1
-          self:_output_chain_insert(k, package)
+          self:_output_chain_push(k, package)
           self._output_wait_ack[k] = nil
         else
           for k,v in pairs(map) do
