@@ -59,9 +59,11 @@ function apt_mt:_output_chain_push(head, package)
     self._output_chain._tail._next = {head, package}
     self._output_chain._tail = self._output_chain._tail._next
   end
+
+  self._output_chain.size = self._output_chain.size + 1
 end
 
-function apt_mt:_output_chain_insert(head, package)
+function apt_mt:_output_chain_inserthead(head, package)
   if not self._output_chain._head then
     self._output_chain._head = {head, package}
     self._output_chain._tail = self._output_chain._head
@@ -70,6 +72,7 @@ function apt_mt:_output_chain_insert(head, package)
     _head._next = self._output_chain._head
     self._output_chain._head = _head
   end
+  self._output_chain.size = self._output_chain.size + 1
 end
 
 function apt_mt:_output_chain_pop()
@@ -109,6 +112,7 @@ function apt_mt:_output_chain_pop()
         end
       end
   
+      self._output_chain.size = self._output_chain.size - 1
       return _head[1], _head[2]
     end
   end
@@ -587,7 +591,7 @@ local function connect(host, port, path)
       port = port,
       dest = dest,
       _output_index = math.random(MAX_OUTPUT_INDEX),
-      _output_chain = {_head = nil, _tail = nil},
+      _output_chain = {_head = nil, _tail = nil, size = 0},
       _output_wait_ack = {},
       _output_wait_package_parts_map = {},
       _output_wait_count = 0,
@@ -669,7 +673,7 @@ local function connect(host, port, path)
             conn = obj.serv,
             _parent = obj,
             _output_index = math.random(MAX_OUTPUT_INDEX),
-            _output_chain = {_head = nil, _tail = nil},
+            _output_chain = {_head = nil, _tail = nil, size = 0},
             _output_wait_ack = {},
             _output_wait_package_parts_map = {},
             _output_wait_count = 0,
