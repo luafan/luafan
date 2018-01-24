@@ -38,6 +38,7 @@ math.randomseed(utils.gettime())
 
 -- preserve first 4 bit.
 local MAX_OUTPUT_INDEX = 0x0ffffff0
+local MAX_OUTPUT_INDEX_HALF = MAX_OUTPUT_INDEX / 2
 local MULTI_ACK_OUTPUT_INDEX = 0x0fffffff
 local WINDOW_CTRL = 0x0ffffffe
 
@@ -333,17 +334,23 @@ function apt_mt:_onread(buf)
                 return
             end
 
-            table.insert(self._output_ack_package, head)
-            if config.debug then
-                print(self, "sending ack", #(self._output_ack_package), self._pending_for_send)
-            end
-            self:send_req()
-
             local package_outside = false
+            local future_package = false
             if output_index >= self._recv_window then
                 package_outside = output_index - self._recv_window > UDP_WINDOW_SIZE
+                future_package = output_index - self._recv_window < MAX_OUTPUT_INDEX_HALF
             else
                 package_outside = output_index + MAX_OUTPUT_INDEX - self._recv_window > UDP_WINDOW_SIZE
+                future_package = output_index + MAX_OUTPUT_INDEX - self._recv_window < MAX_OUTPUT_INDEX_HALF
+            end
+
+            -- don't send ack for future outside package.
+            if not package_outside or not future_package then
+                table.insert(self._output_ack_package, head)
+                if config.debug then
+                    print(self, "sending ack", #(self._output_ack_package), self._pending_for_send)
+                end
+                self:send_req()
             end
 
             if package_outside then
@@ -352,6 +359,7 @@ function apt_mt:_onread(buf)
                 end
 
                 if config.drop_package_outside_window then
+                    self.udp_drop_total = self.udp_drop_total + 1
                     return
                 end
             end
@@ -472,7 +480,7 @@ function apt_mt:_check_timeout()
                     self._output_wait_ack[k] = nil
                 else
                     for k, v in pairs(map) do
-                        map[k].completed = true -- don't change other k in order not to break pairs
+                        v.completed = true -- don't change other k in order not to break pairs
                     end
 
                     self:_mark_send_completed(k)
@@ -590,6 +598,33 @@ function apt_mt:close()
     end
 end
 
+local function init_conn(t)
+    t._output_index = math.random(MAX_OUTPUT_INDEX)
+    t._send_window = t._output_index
+
+    t._output_chain = {_head = nil, _tail = nil, size = 0}
+    t._output_wait_ack = {}
+    t._output_wait_package_parts_map = {}
+    t._output_wait_count = 0
+    t._output_ack_package = {}
+
+    t._incoming_map = {}
+
+    t._recv_window_holes = {}
+    t._send_window_holes = {}
+    t.incoming_bytes_total = 0
+    t.outgoing_bytes_total = 0
+
+    t.reuse = 1
+
+    t.udp_send_total = 0
+    t.udp_receive_total = 0
+    t.udp_resend_total = 0
+    t.udp_drop_total = 0
+
+    setmetatable(t, apt_mt)
+end
+
 local function connect(host, port, path)
     port = tonumber(port)
 
@@ -603,23 +638,10 @@ local function connect(host, port, path)
         t = {
             host = host,
             port = port,
-            dest = dest,
-            _output_index = math.random(MAX_OUTPUT_INDEX),
-            _output_chain = {_head = nil, _tail = nil, size = 0},
-            _output_wait_ack = {},
-            _output_wait_package_parts_map = {},
-            _output_wait_count = 0,
-            _output_ack_package = {},
-            _incoming_map = {},
-            _recv_window_holes = {},
-            _send_window_holes = {},
-            incoming_bytes_total = 0,
-            outgoing_bytes_total = 0
+            dest = dest
         }
 
-        t._send_window = t._output_index
-        setmetatable(t, apt_mt)
-
+        init_conn(t)
         session_cache[session_cache_key] = t
     end
 
@@ -690,28 +712,10 @@ local function bind(host, port, path)
                     dest = from,
                     conn = obj.serv,
                     _parent = obj,
-                    _output_index = math.random(MAX_OUTPUT_INDEX),
-                    _output_chain = {_head = nil, _tail = nil, size = 0},
-                    _output_wait_ack = {},
-                    _output_wait_package_parts_map = {},
-                    _output_wait_count = 0,
-                    _output_ack_package = {},
-                    _incoming_map = {},
-                    _client_key = client_key,
-                    _recv_window_holes = {},
-                    _send_window_holes = {},
-                    incoming_bytes_total = 0,
-                    outgoing_bytes_total = 0,
-                    reuse = 1,
-                    udp_send_total = 0,
-                    udp_receive_total = 0,
-                    udp_resend_total = 0
+                    _client_key = client_key
                 }
 
-                apt._send_window = apt._output_index
-
-                setmetatable(apt, apt_mt)
-
+                init_conn(apt)
                 session_cache[session_cache_key] = apt
             else
                 apt.reuse = apt.reuse + 1
