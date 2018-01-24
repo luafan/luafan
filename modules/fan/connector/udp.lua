@@ -457,6 +457,8 @@ function apt_mt:_check_timeout()
     local has_timeout = false
     local timeout = math.min(math.max(self.latency and self.latency * 3 or TIMEOUT, 0.1), TIMEOUT)
 
+    local newpackage_list = {}
+
     for k, map in pairs(self._output_wait_package_parts_map) do
         local last_output_time = self._output_wait_ack[k]
 
@@ -493,10 +495,14 @@ function apt_mt:_check_timeout()
                         ignore_timeout_check = true
                     }
 
-                    self:send_package(newpackage, {[newpackage.head] = newpackage})
+                    table.insert(newpackage_list, newpackage)
                 end
             end
         end
+    end
+
+    for i,newpackage in ipairs(newpackage_list) do
+        self:send_package(newpackage, {[newpackage.head] = newpackage})
     end
 
     if has_timeout then
