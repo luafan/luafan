@@ -32,8 +32,6 @@ local function gettime()
     return sec + usec/1000000.0
 end
 
-math.randomseed((fan.gettime()))
-
 local weak_mt = {}
 weak_mt.__index = function(self, key)
     local target = self[weak_mt].target

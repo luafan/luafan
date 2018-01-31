@@ -28,67 +28,75 @@ local MAX_PAYLOAD_SIZE = BODY_SIZE * 65535
 
 local TIMEOUT = config.udp_package_timeout or 2
 local WAITING_COUNT = config.udp_waiting_count or 100
-local MULTI_ACK = config.multi_ack
 
 local UDP_WINDOW_SIZE = config.udp_window_size or 10
 
 local session_cache = config.session_cache or {}
 
-math.randomseed(utils.gettime())
-
 -- preserve first 4 bit.
 local MAX_OUTPUT_INDEX = 0x0ffffff0
 local MAX_OUTPUT_INDEX_HALF = MAX_OUTPUT_INDEX / 2
-local MULTI_ACK_OUTPUT_INDEX = 0x0fffffff
 local WINDOW_CTRL = 0x0ffffffe
 
 local CHECK_TIMEOUT_DURATION = config.udp_check_timeout_duration or 0.5
 
 local max_ack_count = math.floor(BODY_SIZE / HEAD_SIZE)
-local multi_ack_head = string.pack("<I4I2I2", MULTI_ACK_OUTPUT_INDEX, 1, 1)
 local window_ctrl_head_set = string.pack("<I4I2I2", WINDOW_CTRL, 1, 1)
 local window_ctrl_head_req = string.pack("<I4I2I2", WINDOW_CTRL, 1, 2)
 
 local apt_mt = {}
 apt_mt.__index = apt_mt
 
-function apt_mt:_output_chain_push(head, package)
-    if not self._output_chain._head then
-        self._output_chain._head = {head, package}
-        self._output_chain._tail = self._output_chain._head
-    else
-        self._output_chain._tail._next = {head, package}
-        self._output_chain._tail = self._output_chain._tail._next
-    end
+local chain_mt = {}
+chain_mt.__index = chain_mt
 
-    self._output_chain.size = self._output_chain.size + 1
+function chain_mt:hasmore()
+    return self._head and true or false
 end
 
-function apt_mt:_output_chain_inserthead(head, package)
-    if not self._output_chain._head then
-        self._output_chain._head = {head, package}
-        self._output_chain._tail = self._output_chain._head
+function chain_mt:push(head, package)
+    if not self._head then
+        self._head = {head, package}
+        self._tail = self._head
+    else
+        self._tail._next = {head, package}
+        self._tail = self._tail._next
+    end
+
+    self.size = self.size + 1
+end
+
+function chain_mt:inserthead(head, package)
+    if not self._head then
+        self._head = {head, package}
+        self._tail = self._head
     else
         local _head = {head, package}
-        _head._next = self._output_chain._head
-        self._output_chain._head = _head
+        _head._next = self._head
+        self._head = _head
     end
-    self._output_chain.size = self._output_chain.size + 1
+    self.size = self.size + 1
 end
 
-function apt_mt:_output_chain_pop()
-    local _head = self._output_chain._head
+function chain_mt:pop()
+    local _head = self._head
     local _head_previous = nil
 
     if _head then
         if config.drop_package_outside_window then
             while _head do
                 local package_outside = false
-                local output_index = _head[2].output_index
-                if output_index >= self._send_window then
-                    package_outside = output_index - self._send_window > UDP_WINDOW_SIZE
+                local package = _head[2]
+
+                if package.ack then
+                    break
+                end
+
+                local output_index = package.output_index
+                if output_index >= package.apt._send_window then
+                    package_outside = output_index - package.apt._send_window > UDP_WINDOW_SIZE
                 else
-                    package_outside = output_index + MAX_OUTPUT_INDEX - self._send_window > UDP_WINDOW_SIZE
+                    package_outside = output_index + MAX_OUTPUT_INDEX - package.apt._send_window > UDP_WINDOW_SIZE
                 end
 
                 if not package_outside then
@@ -104,24 +112,46 @@ function apt_mt:_output_chain_pop()
             if _head_previous then
                 _head_previous._next = _head._next
                 if not _head._next then
-                    self._output_chain._tail = _head_previous
+                    self._tail = _head_previous
                 end
             else
-                self._output_chain._head = _head._next
+                self._head = _head._next
                 if not _head._next then
-                    self._output_chain._tail = nil
+                    self._tail = nil
                 end
             end
 
-            self._output_chain.size = self._output_chain.size - 1
+            self.size = self.size - 1
             return _head[1], _head[2]
         end
     end
 end
 
 function apt_mt:send_package(package, package_parts_map)
-    self:_output_chain_push(package.head, package)
-    self._output_wait_package_parts_map[package.head] = package_parts_map
+    self._output_chain:push(package.head, package)
+    if not package.ack then
+        self._output_wait_package_parts_map[package.head] = package_parts_map
+    end
+end
+
+function apt_mt:_send_package(package)
+    if package.ack then
+        self:_send(package.head, "ack")
+    else
+        if self._output_wait_package_parts_map[package.head] then
+            if not self._output_wait_ack[package.head] then
+                self._output_wait_count = self._output_wait_count + 1
+            end
+            self._output_wait_ack[package.head] = gettime()
+            -- print("_output_wait_count", self._output_wait_count)
+            if package.body then
+                self:_send(package.head .. package.body, "data")
+            else
+                local body = string.sub(package.buf, package.body_begin, package.body_end)
+                self:_send(package.head .. body, "data")
+            end
+        end
+    end
 end
 
 function apt_mt:send(buf)
@@ -160,6 +190,7 @@ function apt_mt:send(buf)
             local head = string.pack("<I4I2I2", output_index, index_count + 1, package_index)
             -- print(string.format("pp: %d %d/%d", output_index, package_index, index_count + 1))
             local package = {
+                apt = self,
                 head = head,
                 buf = buf,
                 output_index = output_index,
@@ -174,6 +205,7 @@ function apt_mt:send(buf)
     else
         local head = string.pack("<I4I2I2", output_index, 1, 1)
         local package = {
+            apt = self,
             head = head,
             body = buf,
             output_index = output_index
@@ -199,11 +231,7 @@ function apt_mt:send_req()
 end
 
 function apt_mt:_moretosend()
-    if #(self._output_ack_package) > 0 then
-        return true
-    end
-
-    if self._output_chain._head then
+    if self._output_chain:hasmore() then
         return true
     end
 end
@@ -279,7 +307,6 @@ end
 function apt_mt:_onread(buf)
     self.incoming_bytes_total = self.incoming_bytes_total + #(buf)
 
-    -- print("read", self.dest, #(buf))
     if #(buf) == HEAD_SIZE then
         -- single ack.
         self:_onack(buf)
@@ -290,15 +317,7 @@ function apt_mt:_onread(buf)
         local body = string.sub(buf, HEAD_SIZE + 1)
         local output_index, count, package_index = string.unpack("<I4I2I2", head)
 
-        if output_index == MULTI_ACK_OUTPUT_INDEX and #(body) % HEAD_SIZE == 0 then
-            -- multi-ack
-            local offset = 1
-            while offset < #(body) do
-                local line = string.sub(body, offset, offset + HEAD_SIZE - 1)
-                self:_onack(line)
-                offset = offset + HEAD_SIZE
-            end
-        elseif output_index == WINDOW_CTRL then
+        if output_index == WINDOW_CTRL then
             if count == 1 and package_index == 1 then
                 if not self._recv_window then
                     local window = string.unpack("<I4", body)
@@ -346,9 +365,16 @@ function apt_mt:_onread(buf)
 
             -- don't send ack for future outside package.
             if not package_outside or not future_package then
-                table.insert(self._output_ack_package, head)
+                local newpackage = {
+                    apt = self,
+                    head = head,
+                    output_index = output_index,
+                    ack = true
+                }
+
+                self:send_package(newpackage)
                 if config.debug then
-                    print(self, "sending ack", #(self._output_ack_package), self._pending_for_send)
+                    print(self, "sending ack", output_index)
                 end
                 self:send_req()
             end
@@ -478,7 +504,7 @@ function apt_mt:_check_timeout()
                     self._output_wait_count = self._output_wait_count - 1
                     config.udp_resend_total = config.udp_resend_total + 1
                     self.udp_resend_total = self.udp_resend_total + 1
-                    self:_output_chain_push(k, package)
+                    self._output_chain:push(k, package)
                     self._output_wait_ack[k] = nil
                 else
                     for k, v in pairs(map) do
@@ -492,7 +518,8 @@ function apt_mt:_check_timeout()
                         head = string.pack("<I4I2I2", package.output_index, 0, 0),
                         body = "N/A",
                         output_index = package.output_index,
-                        ignore_timeout_check = true
+                        ignore_timeout_check = true,
+                        apt = package.apt
                     }
 
                     table.insert(newpackage_list, newpackage)
@@ -501,7 +528,7 @@ function apt_mt:_check_timeout()
         end
     end
 
-    for i,newpackage in ipairs(newpackage_list) do
+    for i, newpackage in ipairs(newpackage_list) do
         self:send_package(newpackage, {[newpackage.head] = newpackage})
     end
 
@@ -516,60 +543,6 @@ function apt_mt:_check_timeout()
     end
 
     return has_timeout
-end
-
-function apt_mt:_onsendready()
-    if not self._window_sent then
-        self:_send(window_ctrl_head_set .. string.pack("<I4", self._send_window), "wind")
-        self._window_sent = true
-        return true
-    end
-    if MULTI_ACK then
-        if #(self._output_ack_package) > max_ack_count then
-            local tmp = {}
-            local package = table.concat(self._output_ack_package, nil, 1, max_ack_count)
-            -- print("multi ack sub:", #package)
-            table.move(self._output_ack_package, max_ack_count + 1, #(self._output_ack_package), 1, tmp)
-            self._output_ack_package = tmp
-            self:_send(multi_ack_head .. package, "mack")
-            return true
-        elseif #(self._output_ack_package) > 1 then
-            -- print("multi_ack_head", #(self._output_ack_package))
-            local package = table.concat(self._output_ack_package)
-            self._output_ack_package = {}
-            self:_send(multi_ack_head .. package, "mack")
-            return true
-        end
-    elseif #(self._output_ack_package) > 0 then
-        local package = table.remove(self._output_ack_package)
-        self:_send(package, "ack")
-        return true
-    end
-
-    if self._output_wait_count >= WAITING_COUNT then
-        -- print("waiting ...")
-        return false
-    end
-
-    local head, package = self:_output_chain_pop()
-    if head and package then
-        if self._output_wait_package_parts_map[head] then
-            if not self._output_wait_ack[head] then
-                self._output_wait_count = self._output_wait_count + 1
-            end
-            self._output_wait_ack[head] = gettime()
-            -- print("_output_wait_count", self._output_wait_count)
-            if package.body then
-                self:_send(package.head .. package.body, "data")
-            else
-                local body = string.sub(package.buf, package.body_begin, package.body_end)
-                self:_send(package.head .. body, "data")
-            end
-            return true
-        end
-    end
-
-    return false
 end
 
 -- cleanup packages(ack not include) related with host,port
@@ -608,11 +581,16 @@ local function init_conn(t)
     t._output_index = math.random(MAX_OUTPUT_INDEX)
     t._send_window = t._output_index
 
-    t._output_chain = {_head = nil, _tail = nil, size = 0}
+    if t._parent then
+        t._output_chain = t._parent._main_output_chain
+    else
+        t._output_chain = {_head = nil, _tail = nil, size = 0}
+        setmetatable(t._output_chain, chain_mt)
+    end
+
     t._output_wait_ack = {}
     t._output_wait_package_parts_map = {}
     t._output_wait_count = 0
-    t._output_ack_package = {}
 
     t._incoming_map = {}
 
@@ -651,7 +629,7 @@ local function connect(host, port, path)
         session_cache[session_cache_key] = t
     end
 
-    local weak_t = utils.weakify(t)
+    local weak_apt = utils.weakify(t)
 
     t.conn =
         udpd.new {
@@ -663,16 +641,22 @@ local function connect(host, port, path)
 
             -- connect() protection, only accept connected host/port.
             if from:getHost() == host and from:getPort() == port then
-                weak_t:_onread(buf)
+                weak_apt:_onread(buf)
             end
         end,
         onsendready = function()
-            weak_t._pending_for_send = nil
+            weak_apt._pending_for_send = nil
 
-            if not weak_t:_onsendready() then
-            -- fan.sleep(1)
-            -- print("send_req", t.conn, "conn.onsendready")
-            -- t.conn:send_req()
+            if not weak_apt._window_sent then
+                weak_apt._window_sent = true
+                weak_apt:_send(window_ctrl_head_set .. string.pack("<I4", weak_apt._send_window), "wind")
+                return
+            end
+
+            local head, package = weak_apt._output_chain:pop()
+            if head and package then
+                local apt = package.apt
+                apt:_send_package(package)
             end
         end
     }
@@ -693,6 +677,9 @@ end
 
 local function bind(host, port, path)
     local obj = {clientmap = {}, clientlist = {}}
+    obj._main_output_chain = {_head = nil, _tail = nil, size = 0}
+    setmetatable(obj._main_output_chain, chain_mt)
+
     local weak_obj = utils.weakify(obj)
 
     obj.getapt =
@@ -753,11 +740,17 @@ local function bind(host, port, path)
 
             -- TODO: schedule, otherwise some client with heavy traffic may block others.
             for i, apt in ipairs(obj.clientlist) do
-                if apt:_moretosend() and apt:_onsendready() then
-                    table.remove(obj.clientlist, i)
-                    table.insert(obj.clientlist, apt)
+                if not apt._window_sent then
+                    apt:_send(window_ctrl_head_set .. string.pack("<I4", apt._send_window), "wind")
+                    apt._window_sent = true
                     return
                 end
+            end
+
+            local head, package = obj._main_output_chain:pop()
+            if head and package then
+                local apt = package.apt
+                apt:_send_package(package)
             end
         end,
         onread = function(buf, from)
