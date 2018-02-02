@@ -83,7 +83,7 @@ function chain_mt:pop()
     local _head_previous = nil
 
     if _head then
-        if config.drop_package_outside_window then
+        if not config.keep_package_outside_window then
             while _head do
                 local package_outside = false
                 local package = _head[2]
@@ -384,11 +384,13 @@ function apt_mt:_onread(buf)
                     print(self, string.format("package outside window, win:%d pkg:%d", self._recv_window, output_index))
                 end
 
-                if config.drop_package_outside_window then
+                if not config.keep_package_outside_window then
                     self.udp_drop_total = self.udp_drop_total + 1
                     return
                 end
             end
+
+            self.last_incoming_time = utils.gettime()
 
             if config.debug then
                 print(
@@ -549,10 +551,6 @@ end
 function apt_mt:cleanup()
     if self._parent then
         self._parent.clientmap[self._client_key] = nil
-        self._parent.clientlist = {}
-        for k, v in pairs(self._parent.clientmap) do
-            table.insert(self._parent.clientlist, v)
-        end
     end
 
     self._recv_window = nil
@@ -676,7 +674,7 @@ local function connect(host, port, path)
 end
 
 local function bind(host, port, path)
-    local obj = {clientmap = {}, clientlist = {}}
+    local obj = {clientmap = {}}
     obj._main_output_chain = {_head = nil, _tail = nil, size = 0}
     setmetatable(obj._main_output_chain, chain_mt)
 
@@ -715,13 +713,10 @@ local function bind(host, port, path)
             end
 
             apt.last_outgoing_time = 0
+            apt.udp_incoming_time = gettime()
             apt.last_incoming_time = gettime()
 
             obj.clientmap[client_key] = apt
-            obj.clientlist = {}
-            for k, v in pairs(obj.clientmap) do
-                table.insert(obj.clientlist, v)
-            end
 
             if obj.onaccept then
                 coroutine.wrap(obj.onaccept)(apt)
@@ -739,7 +734,7 @@ local function bind(host, port, path)
             obj._pending_for_send = nil
 
             -- TODO: schedule, otherwise some client with heavy traffic may block others.
-            for i, apt in ipairs(obj.clientlist) do
+            for key, apt in pairs(obj.clientmap) do
                 if not apt._window_sent then
                     apt:_send(window_ctrl_head_set .. string.pack("<I4", apt._send_window), "wind")
                     apt._window_sent = true
@@ -757,7 +752,7 @@ local function bind(host, port, path)
             local obj = weak_obj
             config.udp_receive_total = config.udp_receive_total + 1
             local apt = obj.getapt(nil, nil, from, tostring(from))
-            apt.last_incoming_time = gettime()
+            apt.udp_incoming_time = gettime()
             apt.udp_receive_total = apt.udp_receive_total + 1
 
             apt:_onread(buf)
