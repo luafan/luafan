@@ -100,7 +100,9 @@ function chain_mt:pop()
                 end
 
                 if not package_outside then
-                    break
+                    if package.apt._output_wait_count < WAITING_COUNT then
+                        break
+                    end
                 end
 
                 _head_previous = _head
@@ -129,8 +131,9 @@ end
 
 function apt_mt:send_package(package, package_parts_map)
     self._output_chain:push(package.head, package)
+    self.output_chain_count = self.output_chain_count + 1
     if not package.ack then
-        self._output_wait_package_parts_map[package.head] = package_parts_map
+        self._output_package_parts_map[package.head] = package_parts_map
     end
 end
 
@@ -138,7 +141,7 @@ function apt_mt:_send_package(package)
     if package.ack then
         self:_send(package.head, "ack")
     else
-        if self._output_wait_package_parts_map[package.head] then
+        if self._output_package_parts_map[package.head] then
             if not self._output_wait_ack[package.head] then
                 self._output_wait_count = self._output_wait_count + 1
             end
@@ -237,8 +240,8 @@ function apt_mt:_moretosend()
 end
 
 function apt_mt:_mark_send_completed(head)
-    if self._output_wait_package_parts_map[head] then
-        self._output_wait_package_parts_map[head] = nil
+    if self._output_package_parts_map[head] then
+        self._output_package_parts_map[head] = nil
         if self._output_wait_ack[head] then
             self._output_wait_count = self._output_wait_count - 1
             self._output_wait_ack[head] = nil
@@ -287,7 +290,7 @@ function apt_mt:_onack(buf)
         self.latency = gettime() - last_output_time
     end
 
-    local map = self._output_wait_package_parts_map[buf]
+    local map = self._output_package_parts_map[buf]
     self:_mark_send_completed(buf)
 
     if map then
@@ -487,7 +490,7 @@ function apt_mt:_check_timeout()
 
     local newpackage_list = {}
 
-    for k, map in pairs(self._output_wait_package_parts_map) do
+    for k, map in pairs(self._output_package_parts_map) do
         local last_output_time = self._output_wait_ack[k]
 
         if last_output_time then
@@ -507,6 +510,7 @@ function apt_mt:_check_timeout()
                     config.udp_resend_total = config.udp_resend_total + 1
                     self.udp_resend_total = self.udp_resend_total + 1
                     self._output_chain:push(k, package)
+                    self.output_chain_count = self.output_chain_count + 1
                     self._output_wait_ack[k] = nil
                 else
                     for k, v in pairs(map) do
@@ -581,13 +585,16 @@ local function init_conn(t)
 
     if t._parent then
         t._output_chain = t._parent._main_output_chain
+        t._suspend_chain = {_head = nil, _tail = nil, size = 0}
+        setmetatable(t._suspend_chain, chain_mt)
     else
         t._output_chain = {_head = nil, _tail = nil, size = 0}
         setmetatable(t._output_chain, chain_mt)
     end
 
+    t.output_chain_count = 0
     t._output_wait_ack = {}
-    t._output_wait_package_parts_map = {}
+    t._output_package_parts_map = {}
     t._output_wait_count = 0
 
     t._incoming_map = {}
@@ -654,6 +661,7 @@ local function connect(host, port, path)
             local head, package = weak_apt._output_chain:pop()
             if head and package then
                 local apt = package.apt
+                apt.output_chain_count = apt.output_chain_count - 1
                 apt:_send_package(package)
             end
         end
@@ -710,6 +718,16 @@ local function bind(host, port, path)
                 session_cache[session_cache_key] = apt
             else
                 apt.reuse = apt.reuse + 1
+
+                -- move package back.
+                while true do
+                    local head,package = apt._suspend_chain:pop()
+                    if head and package then
+                        obj._main_output_chain:push(head, package)
+                    else
+                        break
+                    end
+                end
             end
 
             apt.last_outgoing_time = 0
@@ -733,7 +751,6 @@ local function bind(host, port, path)
             local obj = weak_obj
             obj._pending_for_send = nil
 
-            -- TODO: schedule, otherwise some client with heavy traffic may block others.
             for key, apt in pairs(obj.clientmap) do
                 if not apt._window_sent then
                     apt:_send(window_ctrl_head_set .. string.pack("<I4", apt._send_window), "wind")
@@ -742,10 +759,23 @@ local function bind(host, port, path)
                 end
             end
 
-            local head, package = obj._main_output_chain:pop()
-            if head and package then
-                local apt = package.apt
-                apt:_send_package(package)
+            while true do
+                local head, package = obj._main_output_chain:pop()
+                if head and package then
+                    local apt = package.apt
+                    if obj.clientmap[apt._client_key] then
+                        apt.output_chain_count = apt.output_chain_count - 1
+
+                        apt:_send_package(package)
+                        break
+                    else
+                        -- archive package with disconnected client.
+                        print("archive package with disconnected client.")
+                        apt._suspend_chain:push(head, package)
+                    end
+                else
+                    break
+                end
             end
         end,
         onread = function(buf, from)
