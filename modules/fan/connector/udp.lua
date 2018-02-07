@@ -54,24 +54,24 @@ function chain_mt:hasmore()
     return self._head and true or false
 end
 
-function chain_mt:push(head, package)
+function chain_mt:push(package)
     if not self._head then
-        self._head = {head, package}
+        self._head = {payload = package}
         self._tail = self._head
     else
-        self._tail._next = {head, package}
+        self._tail._next = {payload = package}
         self._tail = self._tail._next
     end
 
     self.size = self.size + 1
 end
 
-function chain_mt:inserthead(head, package)
+function chain_mt:inserthead(package)
     if not self._head then
-        self._head = {head, package}
+        self._head = {payload = package}
         self._tail = self._head
     else
-        local _head = {head, package}
+        local _head = {payload = package}
         _head._next = self._head
         self._head = _head
     end
@@ -86,9 +86,9 @@ function chain_mt:pop()
         if not config.keep_package_outside_window then
             while _head do
                 local package_outside = false
-                local package = _head[2]
+                local package = _head.payload
 
-                if package.ack then
+                if package.ack or package.apt._suspended then
                     break
                 end
 
@@ -124,13 +124,13 @@ function chain_mt:pop()
             end
 
             self.size = self.size - 1
-            return _head[1], _head[2]
+            return _head.payload
         end
     end
 end
 
 function apt_mt:send_package(package, package_parts_map)
-    self._output_chain:push(package.head, package)
+    self._output_chain:push(package)
     self.output_chain_count = self.output_chain_count + 1
     if not package.ack then
         self._output_package_parts_map[package.head] = package_parts_map
@@ -509,7 +509,7 @@ function apt_mt:_check_timeout()
                     self._output_wait_count = self._output_wait_count - 1
                     config.udp_resend_total = config.udp_resend_total + 1
                     self.udp_resend_total = self.udp_resend_total + 1
-                    self._output_chain:push(k, package)
+                    self._output_chain:push(package)
                     self.output_chain_count = self.output_chain_count + 1
                     self._output_wait_ack[k] = nil
                 else
@@ -558,6 +558,7 @@ function apt_mt:cleanup()
     end
 
     self._recv_window = nil
+    self._suspended = true
 
     -- for k,v in pairs(self) do
     --   self[k] = nil
@@ -585,8 +586,7 @@ local function init_conn(t)
 
     if t._parent then
         t._output_chain = t._parent._main_output_chain
-        t._suspend_chain = {_head = nil, _tail = nil, size = 0}
-        setmetatable(t._suspend_chain, chain_mt)
+        t._suspend_list = {}
     else
         t._output_chain = {_head = nil, _tail = nil, size = 0}
         setmetatable(t._output_chain, chain_mt)
@@ -627,12 +627,13 @@ local function connect(host, port, path)
         t = {
             host = host,
             port = port,
-            dest = dest
+            dest = dest,
         }
 
         init_conn(t)
         session_cache[session_cache_key] = t
     end
+    t._suspended = false
 
     local weak_apt = utils.weakify(t)
 
@@ -658,8 +659,8 @@ local function connect(host, port, path)
                 return
             end
 
-            local head, package = weak_apt._output_chain:pop()
-            if head and package then
+            local package = weak_apt._output_chain:pop()
+            if package then
                 local apt = package.apt
                 apt.output_chain_count = apt.output_chain_count - 1
                 apt:_send_package(package)
@@ -711,7 +712,7 @@ local function bind(host, port, path)
                     dest = from,
                     conn = obj.serv,
                     _parent = obj,
-                    _client_key = client_key
+                    _client_key = client_key,
                 }
 
                 init_conn(apt)
@@ -720,16 +721,14 @@ local function bind(host, port, path)
                 apt.reuse = apt.reuse + 1
 
                 -- move package back.
-                while true do
-                    local head,package = apt._suspend_chain:pop()
-                    if head and package then
-                        obj._main_output_chain:push(head, package)
-                    else
-                        break
-                    end
+                for i,package in ipairs(apt._suspend_list) do
+                    obj._main_output_chain:push(package)
                 end
+
+                apt._suspend_list = {}
             end
 
+            apt._suspended = false
             apt.last_outgoing_time = 0
             apt.udp_incoming_time = gettime()
             apt.last_incoming_time = gettime()
@@ -760,10 +759,10 @@ local function bind(host, port, path)
             end
 
             while true do
-                local head, package = obj._main_output_chain:pop()
-                if head and package then
+                local package = obj._main_output_chain:pop()
+                if package then
                     local apt = package.apt
-                    if obj.clientmap[apt._client_key] then
+                    if not apt._suspended then
                         apt.output_chain_count = apt.output_chain_count - 1
 
                         apt:_send_package(package)
@@ -771,7 +770,7 @@ local function bind(host, port, path)
                     else
                         -- archive package with disconnected client.
                         print("archive package with disconnected client.")
-                        apt._suspend_chain:push(head, package)
+                        table.insert(apt._suspend_list, package)
                     end
                 else
                     break
