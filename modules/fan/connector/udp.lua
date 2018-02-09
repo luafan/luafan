@@ -86,6 +86,7 @@ function chain_mt:pop()
         if not config.keep_package_outside_window then
             while _head do
                 local package_outside = false
+                local old_package = false
                 local package = _head.payload
 
                 if package.ack or package.apt._suspended then
@@ -95,8 +96,14 @@ function chain_mt:pop()
                 local output_index = package.output_index
                 if output_index >= package.apt._send_window then
                     package_outside = output_index - package.apt._send_window > UDP_WINDOW_SIZE
+                    old_package = package.apt._send_window + MAX_OUTPUT_INDEX - output_index < MAX_OUTPUT_INDEX_HALF
                 else
                     package_outside = output_index + MAX_OUTPUT_INDEX - package.apt._send_window > UDP_WINDOW_SIZE
+                    old_package = package.apt._send_window - output_index < MAX_OUTPUT_INDEX_HALF
+                end
+
+                if old_package then
+                    break
                 end
 
                 if not package_outside then
@@ -769,7 +776,9 @@ local function bind(host, port, path)
                         break
                     else
                         -- archive package with disconnected client.
-                        print("archive package with disconnected client.")
+                        if config.debug then
+                            print("archive package with disconnected client.")
+                        end
                         table.insert(apt._suspend_list, package)
                     end
                 else
