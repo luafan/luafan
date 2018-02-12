@@ -27,7 +27,8 @@ local BODY_SIZE = MTU - HEAD_SIZE
 local MAX_PAYLOAD_SIZE = BODY_SIZE * 65535
 
 local TIMEOUT = config.udp_package_timeout or 2
-local WAITING_COUNT = config.udp_waiting_count or 100
+local WAITING_COUNT = config.udp_waiting_count or 10
+local NONE_PAIRED_WAITING_COUNT = config.udp_none_paired_waiting_count or 1
 
 local UDP_WINDOW_SIZE = config.udp_window_size or 10
 
@@ -107,7 +108,7 @@ function chain_mt:pop()
                 end
 
                 if not package_outside then
-                    if package.apt._output_wait_count < WAITING_COUNT then
+                    if package.apt._output_wait_count < package.apt._WAITING_COUNT then
                         break
                     end
                 end
@@ -618,6 +619,8 @@ local function init_conn(t)
     t.udp_resend_total = 0
     t.udp_drop_total = 0
 
+    t._WAITING_COUNT = NONE_PAIRED_WAITING_COUNT
+
     setmetatable(t, apt_mt)
 end
 
@@ -651,6 +654,7 @@ local function connect(host, port, path)
         onread = function(buf, from)
             -- print("onread", #(buf), from, host, port, type(from:getPort()), type(port))
             config.udp_receive_total = config.udp_receive_total + 1
+            weak_apt._WAITING_COUNT = WAITING_COUNT
 
             -- connect() protection, only accept connected host/port.
             if from:getHost() == host and from:getPort() == port then
@@ -792,6 +796,7 @@ local function bind(host, port, path)
             local apt = obj.getapt(nil, nil, from, tostring(from))
             apt.udp_incoming_time = gettime()
             apt.udp_receive_total = apt.udp_receive_total + 1
+            apt._WAITING_COUNT = WAITING_COUNT
 
             apt:_onread(buf)
         end
