@@ -38,7 +38,7 @@ LUA_API int luafan_getdtablesize(lua_State *L)
 #ifndef __ANDROID__
   lua_pushinteger(L, getdtablesize());
 #else
-  lua_pushinteger(L, -1);
+  lua_pushinteger(L, sysconf(_SC_OPEN_MAX));
 #endif
   return 1;
 }
@@ -136,11 +136,8 @@ int sched_getaffinity(pid_t pid, size_t cpu_size, cpu_set_t *cpu_set)
   return 0;
 }
 #else
-#define __USE_GNU
 #include <sched.h>
 #endif
-
-#ifndef __ANDROID__
 
 static int get_cpu_count()
 {
@@ -215,7 +212,6 @@ LUA_API int luafan_getcpucount(lua_State *L)
   lua_pushinteger(L, get_cpu_count());
   return 1;
 }
-#endif
 #endif
 
 LUA_API int luafan_kill(lua_State *L)

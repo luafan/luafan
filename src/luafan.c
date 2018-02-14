@@ -199,12 +199,10 @@ LUA_API int luafan_setsid(lua_State *L);
 LUA_API int luafan_setprogname(lua_State *L);
 LUA_API int luafan_getpgid(lua_State *L);
 
-#ifndef __ANDROID__
 LUA_API int luafan_getaffinity(lua_State *L);
 LUA_API int luafan_setaffinity(lua_State *L);
 LUA_API int luafan_getcpucount(lua_State *L);
 LUA_API int luafan_getinterfaces(lua_State *L);
-#endif
 
 LUA_API int luafan_kill(lua_State *L);
 LUA_API int luafan_waitpid(lua_State *L);
@@ -237,14 +235,12 @@ static const struct luaL_Reg fanlib[] = {
     {"open", luafan_open},
     {"close", luafan_close},
     {"setprogname", luafan_setprogname},
-#ifndef __ANDROID__
 #ifndef DISABLE_AFFINIY
     {"setaffinity", luafan_setaffinity},
     {"getaffinity", luafan_getaffinity},
     {"getcpucount", luafan_getcpucount},
 #endif
     {"getinterfaces", luafan_getinterfaces},
-#endif
 
     {NULL, NULL},
 };

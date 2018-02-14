@@ -55,7 +55,7 @@ build = {
             "src/luasql.c",
             "src/luamariadb.c",
          },
-         defines = {"FAN_HAS_OPENSSL=1", "FAN_HAS_LUAJIT=1"},
+         defines = { "FAN_HAS_OPENSSL=1", "FAN_HAS_LUAJIT=1", "_GNU_SOURCE=1" },
          libraries = { "event", "event_openssl", "ssl", "crypto", "curl", "resolv", "mysqlclient" },
          incdirs = { "$(CURL_INCDIR)", "$(LIBEVENT_INCDIR)", "$(OPENSSL_INCDIR)", "$(MARIADB_INCDIR)" },
          libdirs = { "$(CURL_LIBDIR)", "$(LIBEVENT_LIBDIR)", "$(OPENSSL_LIBDIR)", "$(MARIADB_LIBDIR)" }

@@ -41,7 +41,7 @@ build = {
             "src/fifo.c",
             "src/httpd.c",
          },
-         defines = { "FAN_HAS_OPENSSL=0", "FAN_HAS_LUAJIT=1" },
+         defines = { "FAN_HAS_OPENSSL=0", "FAN_HAS_LUAJIT=1", "_GNU_SOURCE=1" },
          libraries = { "event" },
          incdirs = { "$(LIBEVENT_INCDIR)" },
          libdirs = { "$(LIBEVENT_LIBDIR)" }
