@@ -21,7 +21,7 @@ config.udp_receive_total = 0
 config.udp_resend_total = 0
 
 -- impl waiting pool
-local MTU = (config.udp_mtu or 576) - 8 - 20
+local MTU = (config.udp_mtu or 1500) - 8 - 20
 local HEAD_SIZE = 4 + 2 + 2
 local BODY_SIZE = MTU - HEAD_SIZE
 local MAX_PAYLOAD_SIZE = BODY_SIZE * 65535
