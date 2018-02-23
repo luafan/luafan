@@ -271,13 +271,15 @@ LUA_API int luafan_getinterfaces(lua_State *L)
   for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
   {
     lua_newtable(L);
+    if (ifa->ifa_name) {
+        lua_pushstring(L, ifa->ifa_name);
+        lua_setfield(L, -2, "name");
+    }
     if (ifa->ifa_addr)
     {
       if (ifa->ifa_addr->sa_family == AF_INET ||
           ifa->ifa_addr->sa_family == AF_INET6)
       {
-        lua_pushstring(L, ifa->ifa_name);
-        lua_setfield(L, -2, "name");
         if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), host,
                         NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0)
         {
