@@ -69,6 +69,8 @@ build = {
       ["fan.objectbuf.init"] = "modules/fan/objectbuf/init.lua",
       ["fan.upnp"] = "modules/fan/upnp.lua",
       ["fan.utils"] = "modules/fan/utils.lua",
+      ["fan.http.init"] = "modules/fan/http/init.lua",
+      ["fan.http.http"] = "modules/fan/http/http.lua",
       ["config"] = "modules/config.lua",
       ["sqlite3.orm"] = "modules/sqlite3/orm.lua"
    }

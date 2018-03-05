@@ -496,11 +496,12 @@ LUA_API int tcpd_bind(lua_State *L)
   DUP_STR_FROM_TABLE(L, serv->host, 1, "host")
   SET_INT_FROM_TABLE(L, serv->port, 1, "port")
 
-#if FAN_HAS_OPENSSL
-
   lua_getfield(L, 1, "ssl");
-  serv->ssl = lua_toboolean(L, -1);
+  int ssl = lua_toboolean(L, -1);
   lua_pop(L, 1);
+
+#if FAN_HAS_OPENSSL
+  serv->ssl = ssl;
 
   if (serv->ssl)
   {
@@ -534,6 +535,10 @@ LUA_API int tcpd_bind(lua_State *L)
     }
 
     lua_pop(L, 2);
+  }
+#else
+  if (ssl) {
+    luaL_error(L, "ssl is not supported on micro version.");
   }
 #endif
 
@@ -894,6 +899,10 @@ LUA_API int tcpd_connect(lua_State *L)
   DUP_STR_FROM_TABLE(L, conn->host, 1, "host")
   SET_INT_FROM_TABLE(L, conn->port, 1, "port")
 
+  lua_getfield(L, 1, "ssl");
+  int ssl = lua_toboolean(L, -1);
+  lua_pop(L, 1);
+
 #if FAN_HAS_OPENSSL
   lua_getfield(L, 1, "ssl_verifyhost");
   conn->ssl_verifyhost = (int)luaL_optinteger(L, -1, 1);
@@ -904,10 +913,6 @@ LUA_API int tcpd_connect(lua_State *L)
   lua_pop(L, 1);
 
   DUP_STR_FROM_TABLE(L, conn->ssl_host, 1, "ssl_host")
-
-  lua_getfield(L, 1, "ssl");
-  int ssl = lua_toboolean(L, -1);
-  lua_pop(L, 1);
 
   lua_getfield(L, 1, "ipv6");
   conn->ipv6 = lua_toboolean(L, -1);
@@ -1039,6 +1044,10 @@ LUA_API int tcpd_connect(lua_State *L)
     lua_pop(L, 1);
 
     bytearray_dealloc(&ba);
+  }
+#else
+  if (ssl) {
+    luaL_error(L, "ssl is not supported on micro version.");
   }
 #endif
 

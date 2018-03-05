@@ -86,7 +86,9 @@ function apt_mt:close()
   self:_onread(nil)
 
   if self.conn then
-    self.connection_map[self.conn] = nil
+    if self.connection_map then
+      self.connection_map[self.conn] = nil
+    end
     self.conn:close()
     self.conn = nil
   end
@@ -106,6 +108,11 @@ local function connect(host, port, path, args)
     end,
     onread = function(buf)
       local t = weak_t[1]
+
+      if not t then
+        return
+      end
+      
       t._readstream:prepare_add()
       t._readstream:AddBytes(buf)
       t._readstream:prepare_get()
@@ -129,8 +136,12 @@ local function connect(host, port, path, args)
         print("client ondisconnected", msg)
       end
       local t = weak_t[1]
-      t.disconnected_message = msg
-      t:close()
+
+      if t then
+        t.disconnected_message = msg
+        t:close()
+      end
+
 
       if running then
         coroutine.resume(running)

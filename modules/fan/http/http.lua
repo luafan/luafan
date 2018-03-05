@@ -28,6 +28,10 @@ local function request(method, check_body, args)
         end
     end
 
+    if not args.headers then
+        args.headers = {}
+    end
+
     if not args.headers["Host"] then
         args.headers["Host"] = host
     end
@@ -75,10 +79,8 @@ local function request(method, check_body, args)
             end
         end
     end
-    if args.headers then
-        for k, v in pairs(args.headers) do
-            table.insert(t, string.format("%s: %s\r\n", k, v))
-        end
+    for k, v in pairs(args.headers) do
+        table.insert(t, string.format("%s: %s\r\n", k, v))
     end
     table.insert(t, "\r\n")
     

@@ -76,6 +76,8 @@ build = {
       ["fan.utils"] = "modules/fan/utils.lua",
       ["mariadb.orm"] = "modules/mariadb/orm.lua",
       ["mariadb.pool"] = "modules/mariadb/pool.lua",
+      ["fan.http.init"] = "modules/fan/http/init.lua",
+      ["fan.http.http"] = "modules/fan/http/http.lua",
       ["config"] = "modules/config.lua",
       ["sqlite3.orm"] = "modules/sqlite3/orm.lua"
    }

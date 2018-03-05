@@ -1812,7 +1812,7 @@ extern void reset_dns_servers()
 
 #endif
 
-LUA_API int luaopen_fan_http(lua_State *L)
+LUA_API int luaopen_fan_http_core(lua_State *L)
 {
     curl_global_init(CURL_GLOBAL_ALL);
 
