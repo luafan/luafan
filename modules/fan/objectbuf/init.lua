@@ -28,6 +28,72 @@ end
 return {
   encode = encode,
   decode = decode,
+  sample = function(obj, optional_result_count)
+    local count_map = {}
+    local count_list = {}
+    if type(optional_result_count) ~= "number" then
+      optional_result_count = 127
+    end
+    
+    local function add_count(v)
+        local m = count_map[v]
+        if not m then
+            m = {key = v, count = 1}
+            table.insert(count_list, m)
+            count_map[v] = m
+        else
+            m.count = m.count + 1
+        end
+    end
+
+    local count_table
+    
+    local function count_object(v)
+        if type(v) == "table" then
+            count_table(v)
+        else
+            add_count(v)
+        end
+    end
+    
+    count_table = function(t)
+        local total = 0
+        while true do
+            local v = t[total + 1]
+            if not v then
+                break
+            end
+            total = total + 1
+    
+            count_object(v)
+        end
+    
+        for k,v in pairs(t) do
+            if type(k) ~= "number" or k > total or k <= 0 then
+                count_object(k)
+                count_object(v)
+            end
+        end
+    end
+    
+    count_object(obj)
+    
+    table.sort(count_list, function(a, b)
+        return a.count > b.count
+    end)
+    
+    local sym_map = {}
+    
+    for i,v in ipairs(count_list) do
+        if i > optional_result_count then
+            break
+        end
+    
+        table.insert(sym_map, v.key)
+    end
+
+    return sym_map
+  end,
   symbol = function(obj)
     local ctx = core.symbol(obj)
 
