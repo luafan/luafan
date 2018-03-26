@@ -141,7 +141,7 @@ local function request(method, check_body, args)
                     else
                         version, code, message = string.match(line, "HTTP/([0-9.]+) (%d+) (.+)")
                         first_line_completed = true
-                        ret.responseCode = code
+                        ret.responseCode = tonumber(code)
                         ret.responseMessage = message
                     end
                 end
