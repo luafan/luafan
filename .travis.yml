@@ -24,7 +24,7 @@ before_install:
   - cd $TRAVIS_BUILD_DIR
 
 install:
-  - luarocks make luafan-0.6-1.rockspec MARIADB_DIR=/usr/local/mysql
+  - luarocks make luafan-0.7-1.rockspec MARIADB_DIR=/usr/local/mysql
 
 script:
   - cd

@@ -9,7 +9,7 @@ dependencies:
         - wget https://github.com/MariaDB/server/archive/mariadb-5.5.48.tar.gz
         - tar xzf mariadb-5.5.48.tar.gz && cd server-mariadb-5.5.48 && cmake . && cd libmysql && sudo make install && cd ../include && sudo make install
     post:
-        - luarocks make luafan-0.6-1.rockspec MARIADB_DIR=/usr/local/mysql --local 
+        - luarocks make luafan-0.7-1.rockspec MARIADB_DIR=/usr/local/mysql --local 
 
 test:
     override:
