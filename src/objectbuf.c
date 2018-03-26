@@ -475,12 +475,12 @@ LUA_API int luafan_objectbuf_encode(lua_State *L)
         int value_idx = lua_gettop(L);
         int key_idx = lua_gettop(L) - 1;
 
-        if(lua_isinteger(L, -2)) {
-          int value = lua_tointeger(L, -2);
-          if (value <= tb_count && value > 0) {
-            lua_pop(L, 1);
-            continue;
-          }
+        // ignore previously added array part.
+        lua_Number value = lua_tonumber(L, -2);
+        // suppose index no more than max int.
+        if (value == (int)value && value <= tb_count && value > 0) {
+          lua_pop(L, 1);
+          continue;
         }
 
         // d:AddU30(sym_map[k] or index_map[k])
