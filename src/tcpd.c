@@ -295,6 +295,7 @@ void connlistener_cb(struct evconnlistener *listener, evutil_socket_t fd,
     accept->selfRef = LUA_NOREF;
     accept->onReadRef = LUA_NOREF;
     accept->onSendReadyRef = LUA_NOREF;
+    accept->onDisconnectedRef = LUA_NOREF;
 
     luaL_getmetatable(co, LUA_TCPD_ACCEPT_TYPE);
     lua_setmetatable(co, -2);
@@ -1163,7 +1164,44 @@ LUA_API int tcpd_accept_original_dst(lua_State *L)
   lua_pushinteger(L, port);
   return 2;
 }
+
 #endif
+
+LUA_API int tcpd_accept_getsockname(lua_State *L)
+{
+  ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
+  evutil_socket_t fd = bufferevent_getfd(accept->buf);
+
+  struct sockaddr_storage ss;
+  socklen_t len = sizeof(struct sockaddr_storage);
+  if (getsockname(fd, (struct sockaddr*)&ss, &len))
+  {
+    lua_pushnil(L);
+    lua_pushfstring(L, "getsockname: %s", strerror(errno));
+    return 2;
+  }
+
+  char host[INET6_ADDRSTRLEN];
+  int port = 0;
+  if (ss.ss_family == AF_INET)
+  {
+    struct sockaddr_in *addr_in = (struct sockaddr_in *)&ss;
+    port = ntohs(((struct sockaddr_in *)&ss)->sin_port);
+    inet_ntop(addr_in->sin_family, (void *)&(addr_in->sin_addr), host,
+              INET_ADDRSTRLEN);
+  }
+  else if (ss.ss_family == AF_INET6)
+  {
+    struct sockaddr_in6 *addr_in = (struct sockaddr_in6 *)&ss;
+    port = ntohs(((struct sockaddr_in6 *)&ss)->sin6_port);
+    inet_ntop(addr_in->sin6_family, (void *)&(addr_in->sin6_addr), host,
+              INET6_ADDRSTRLEN);
+  }
+
+  lua_pushstring(L, host);
+  lua_pushinteger(L, port);
+  return 2;
+}
 
 LUA_API int tcpd_accept_close(lua_State *L)
 {
@@ -1332,6 +1370,9 @@ LUA_API int luaopen_fan_tcpd(lua_State *L)
 
   lua_pushcfunction(L, &tcpd_accept_remote);
   lua_setfield(L, -2, "remoteinfo");
+
+  lua_pushcfunction(L, &tcpd_accept_getsockname);
+  lua_setfield(L, -2, "getsockname");
 
 #ifdef __linux__
   lua_pushcfunction(L, &tcpd_accept_original_dst);
