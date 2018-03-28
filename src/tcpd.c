@@ -1163,12 +1163,6 @@ LUA_API int tcpd_accept_original_dst(lua_State *L)
   lua_pushinteger(L, port);
   return 2;
 }
-#else
-LUA_API int tcpd_accept_original_dst(lua_State *L)
-{
-  luaL_error(L, "not support.");
-  return 0;
-}
 #endif
 
 LUA_API int tcpd_accept_close(lua_State *L)
@@ -1339,8 +1333,10 @@ LUA_API int luaopen_fan_tcpd(lua_State *L)
   lua_pushcfunction(L, &tcpd_accept_remote);
   lua_setfield(L, -2, "remoteinfo");
 
+#ifdef __linux__
   lua_pushcfunction(L, &tcpd_accept_original_dst);
   lua_setfield(L, -2, "original_dst");
+#endif
 
   lua_pushstring(L, "__index");
   lua_pushvalue(L, -2);
