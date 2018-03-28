@@ -285,7 +285,7 @@ if fan.fork() > 0 then
       --     end
       -- end)()
 
-      cli.onread = function(body)
+      cli.onread = function(apt, body)
         count = count + 1
         -- print("cli onread", #(body))
         -- assert(body == longstr)
@@ -301,7 +301,7 @@ else
       serv = connector.bind("udp://127.0.0.1:10000")
       serv.onaccept = function(apt)
         print("onaccept")
-        apt.onread = function(body)
+        apt.onread = function(apt, body)
           -- print("apt onread", #(body))
           apt:send(body)
         end

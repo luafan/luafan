@@ -1147,14 +1147,14 @@ LUA_API int tcpd_accept_original_dst(lua_State *L)
   if (ss.ss_family == AF_INET)
   {
     struct sockaddr_in *addr_in = (struct sockaddr_in *)&ss;
-    ntohs(((struct sockaddr_in *)&ss)->sin_port);
+    port = ntohs(((struct sockaddr_in *)&ss)->sin_port);
     inet_ntop(addr_in->sin_family, (void *)&(addr_in->sin_addr), host,
               INET_ADDRSTRLEN);
   }
   else if (ss.ss_family == AF_INET6)
   {
     struct sockaddr_in6 *addr_in = (struct sockaddr_in6 *)&ss;
-    ntohs(((struct sockaddr_in6 *)&ss)->sin6_port);
+    port = ntohs(((struct sockaddr_in6 *)&ss)->sin6_port);
     inet_ntop(addr_in->sin6_family, (void *)&(addr_in->sin6_addr), host,
               INET6_ADDRSTRLEN);
   }
