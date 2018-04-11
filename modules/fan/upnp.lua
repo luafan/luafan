@@ -5,13 +5,15 @@ local udpd = require "fan.udpd"
 local upnp_mt = {}
 upnp_mt.__index = upnp_mt
 
+local WANIPConnectionType = "urn:schemas-upnp-org:service:WANIPConnection:1"
+
 function upnp_mt:AddPortMapping(ip, port, extport, protocol, description)
   assert(ip and port and extport and protocol)
   if not description then
     description = "fan.upnp"
   end
   for i,v in ipairs(self.devices) do
-    if v.st == "urn:schemas-upnp-org:service:WANIPConnection:1" then
+    if v.st == WANIPConnectionType then
       local ret = http.post{
         url = v.url,
         -- verbose = 1,
@@ -23,7 +25,7 @@ function upnp_mt:AddPortMapping(ip, port, extport, protocol, description)
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
   <s:Body>
     <u:AddPortMapping xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">
-      <NewRemoteHost/>
+      <NewRemoteHost></NewRemoteHost>
       <NewExternalPort>]] .. extport .. [[</NewExternalPort>
       <NewProtocol>]] .. protocol:upper() .. [[</NewProtocol>
       <NewInternalPort>]] .. port .. [[</NewInternalPort>
@@ -64,15 +66,15 @@ local function new(timeout_sec)
   local t = {
     "M-SEARCH * HTTP/1.1",
     "Host:239.255.255.250:1900",
-    -- "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1",
-    "ST: ssdp:all",
-    "Man: ssdp:discover",
+    "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+    -- "ST: ssdp:all",
+    "Man: \"ssdp:discover\"",
     string.format("MX:%d", timeout_sec),
     "",
     "",
   }
   cli:send(table.concat(t, "\r\n"))
-  cli:send(table.concat(t, "\n"))
+  -- cli:send(table.concat(t, "\n"))
 
   coroutine.wrap(timeout)(task, timeout_sec)
 
@@ -88,22 +90,20 @@ local function new(timeout_sec)
     local _,_,st = string.find(v, "ST: ([^\r\n]+)")
     local _,_,server = string.find(v, "SERVER: ([^\r\n]+)")
     if location and st then
-      local body = file_cache[location]
-      if not body then
-        local ret = http.get(location)
-        if ret.responseCode == 200 then
-          body = ret.body
-          file_cache[location] = ret.body
-        end
+      local ret = file_cache[location]
+      if not ret then
+        ret = http.get(location)
+        file_cache[location] = ret
       end
 
-      if body then
-        local _,ed = string.find(body, "<serviceType>" .. st .. "</serviceType>", 1, true)
+      if ret.responseCode == 200 and not ret.error and ret.body then
+        local _,ed = string.find(ret.body,
+        "<serviceType>" .. WANIPConnectionType .. "</serviceType>", 1, true)
         if ed then
-          local _,_,path = string.find(body, "<controlURL>([^><]+)</controlURL>", ed)
+          local _,_,path = string.find(ret.body, "<controlURL>([^><]+)</controlURL>", ed)
           local _,_,url = string.find(location, "([^:]+:[^:]+:%d+)")
           if url and path then
-            table.insert(obj.devices, {st = st, server = server, url = url .. path})
+            table.insert(obj.devices, {st = WANIPConnectionType, server = server, url = url .. path})
           end
         end
       end

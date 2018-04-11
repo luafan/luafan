@@ -36,8 +36,6 @@ local function request(method, check_body, args)
         args.headers["Host"] = host
     end
 
-    print(host, port)
-
     if #path == 0 then
         path = "/"
     end
