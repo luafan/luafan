@@ -74,7 +74,7 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg)
     }
 
     // if (fifo->read_ev) {
-    //   event_del(fifo->read_ev);
+    //   event_free(fifo->read_ev);
     //   fifo->read_ev = NULL;
     // }
     return;
@@ -287,7 +287,7 @@ LUA_API int luafan_fifo_send(lua_State *L)
 
       if (fifo->write_ev)
       {
-        event_del(fifo->write_ev);
+        event_free(fifo->write_ev);
         fifo->write_ev = NULL;
       }
     }
@@ -312,13 +312,13 @@ LUA_API int luafan_fifo_close(lua_State *L)
 
   if (event_mgr_base() && fifo->read_ev)
   {
-    event_del(fifo->read_ev);
+    event_free(fifo->read_ev);
     fifo->read_ev = NULL;
   }
 
   if (event_mgr_base() && fifo->write_ev)
   {
-    event_del(fifo->write_ev);
+    event_free(fifo->write_ev);
     fifo->write_ev = NULL;
   }
 

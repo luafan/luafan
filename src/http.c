@@ -1792,7 +1792,6 @@ static void reset_dns_servers_timercb(int fd, short kind, void *userp)
 
     dns_servers = strdup(buf);
 
-    event_del(reset_timer_event);
     event_free(reset_timer_event);
     reset_timer_event = NULL;
 }

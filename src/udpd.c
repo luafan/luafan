@@ -53,13 +53,13 @@ LUA_API int lua_udpd_conn_gc(lua_State *L)
 
   if (event_mgr_base() && conn->read_ev)
   {
-    event_del(conn->read_ev);
+    event_free(conn->read_ev);
     conn->read_ev = NULL;
   }
 
   if (event_mgr_base() && conn->write_ev)
   {
-    event_del(conn->write_ev);
+    event_free(conn->write_ev);
     conn->write_ev = NULL;
   }
 
@@ -151,12 +151,12 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
   }
 
   if (conn->write_ev) {
-    event_del(conn->write_ev);    
+    event_free(conn->write_ev);
     conn->write_ev = NULL;
   }
 
   if (conn->read_ev) {
-    event_del(conn->read_ev);    
+    event_free(conn->read_ev);
     conn->read_ev = NULL;
   }
 

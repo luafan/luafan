@@ -143,6 +143,10 @@ int event_mgr_loop()
 
     evdns_base_free(dnsbase, 0);
     dnsbase = NULL;
+
+    event_base_free(base);
+    base = NULL;
+
     looping = 0;
     initialized = 0;
     return 0;
