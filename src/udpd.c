@@ -295,6 +295,8 @@ void udpd_conn_new_callback(int errcode, struct evutil_addrinfo *addr,
     memcpy(&conn->addr, addr->ai_addr, addr->ai_addrlen);
     conn->addrlen = addr->ai_addrlen;
 
+    evutil_freeaddrinfo(addr);
+
     luaudpd_reconnect(conn, L);
 
     if (conn->selfRef)
@@ -396,7 +398,12 @@ void udpd_conn_make_dest_callback(int errcode, struct evutil_addrinfo *addr,
     memcpy(&dest->si_client, addr->ai_addr, addr->ai_addrlen);
     dest->client_len = addr->ai_addrlen;
 
-    if (data->yielded)
+    bool yielded = data->yielded;
+
+    evutil_freeaddrinfo(addr);
+    free(data);
+
+    if (yielded)
     {
       FAN_RESUME(L, NULL, 1);
     }
