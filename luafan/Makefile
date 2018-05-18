@@ -9,7 +9,7 @@ PKG_MAINTAINER:=Sam Chang <sam.chang@me.com>
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=git://github.com/luafan/luafan.git
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
-PKG_SOURCE_VERSION:=07871c7
+PKG_SOURCE_VERSION:=abaca33
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION)-$(PKG_SOURCE_VERSION).tar.gz
 
 include $(INCLUDE_DIR)/package.mk
