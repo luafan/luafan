@@ -20,7 +20,7 @@ function apt_mt:send(buf)
   -- print("write", #(buf))
   if #(buf) > MAX_LINE_SIZE then
     local count = math.floor(#(buf) / MAX_LINE_SIZE)
-    for i=0,count do
+    for i = 0, count do
       table.insert(self._output_queue, string.sub(buf, i * MAX_LINE_SIZE + 1, i * MAX_LINE_SIZE + MAX_LINE_SIZE))
     end
   else
@@ -103,7 +103,7 @@ function apt_mt:_onread(input)
     self.receiving = nil
     self.receiving_expect = 0
 
-    local st,msg = coroutine.resume(receiving, input)
+    local st, msg = coroutine.resume(receiving, input)
     if not st then
       print(msg)
     end
@@ -137,7 +137,8 @@ function apt_mt:close()
 end
 
 local function connect(host, port, path)
-  local conn, err = fifo.connect{
+  local conn, err =
+    fifo.connect {
     name = path,
     rwmode = "w"
   }
@@ -153,7 +154,7 @@ local function connect(host, port, path)
     _readstream = stream.new(),
     _output_queue = {},
     _sender_queue = {},
-    simulate_send_block = true,
+    simulate_send_block = true
   }
   setmetatable(obj, apt_mt)
 
@@ -164,7 +165,8 @@ local function connect(host, port, path)
 
   local running = coroutine.running()
 
-  obj._fifo_read = fifo.connect{
+  obj._fifo_read =
+    fifo.connect {
     name = obj._fifo_read_name,
     delete_on_close = true,
     rwmode = "r",
@@ -175,7 +177,8 @@ local function connect(host, port, path)
       if not obj._fifo_write then
         obj._fifo_write_name = obj._readstream:GetString()
         -- print("connect for write", fifo_name)
-        obj._fifo_write = fifo.connect{
+        obj._fifo_write =
+          fifo.connect {
           name = obj._fifo_write_name,
           delete_on_close = true,
           rwmode = "w",
@@ -192,7 +195,7 @@ local function connect(host, port, path)
           obj.onread(obj._readstream)
         end
       end
-    end,
+    end
     -- ondisconnected = function(msg)
     -- print("ondisconnected", msg)
     -- end
@@ -209,7 +212,8 @@ end
 
 local function bind(host, port, path)
   local obj = {conn = nil, onaccept = nil, _readstream = stream.new()}
-  obj.conn = fifo.connect{
+  obj.conn =
+    fifo.connect {
     name = path,
     delete_on_close = true,
     rwmode = "r",
@@ -226,13 +230,14 @@ local function bind(host, port, path)
           _output_queue = {},
           _sender_queue = {},
           receiving = nil,
-          simulate_send_block = true,
+          simulate_send_block = true
         }
         setmetatable(apt, apt_mt)
 
         apt._fifo_write_name = obj._readstream:GetString()
 
-        apt._fifo_write = fifo.connect{
+        apt._fifo_write =
+          fifo.connect {
           name = apt._fifo_write_name,
           delete_on_close = true,
           rwmode = "w",
@@ -249,7 +254,8 @@ local function bind(host, port, path)
 
         -- print("waiting for write pipe", fifo_read_name)
 
-        apt._fifo_read = fifo.connect{
+        apt._fifo_read =
+          fifo.connect {
           name = apt._fifo_read_name,
           delete_on_close = true,
           rwmode = "r",
@@ -263,7 +269,7 @@ local function bind(host, port, path)
             end
           end,
           ondisconnected = function(msg)
-          apt:_ondisconnected(msg)
+            apt:_ondisconnected(msg)
           end
         }
 
@@ -272,7 +278,7 @@ local function bind(host, port, path)
         apt:send(output:package())
 
         if obj.onaccept then
-          local st,msg = coroutine.resume(coroutine.create(obj.onaccept), apt)
+          local st, msg = coroutine.resume(coroutine.create(obj.onaccept), apt)
           if not st then
             print(msg)
           end

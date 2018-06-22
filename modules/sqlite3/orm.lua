@@ -1,7 +1,6 @@
 --[[
 luarocks install lsqlite3
 ]]
-
 local setmetatable = setmetatable
 local getmetatable = getmetatable
 local pairs = pairs
@@ -23,14 +22,14 @@ local KEY_NAME = "^name"
 local FIELD_ID = "id"
 
 local function maxn(t)
-    local n = 0
-    for k,v in pairs(t) do
-        if k > n then
-            n = k
-        end
-    end
+	local n = 0
+	for k, v in pairs(t) do
+		if k > n then
+			n = k
+		end
+	end
 
-    return n
+	return n
 end
 
 local function prepare(db, sql)
@@ -105,7 +104,7 @@ local function make_row_mt(t)
 						local list = {}
 						local keys = {}
 						local values = {}
-						for k,v in pairs(t[KEY_MODEL]) do
+						for k, v in pairs(t[KEY_MODEL]) do
 							if type(v) ~= "function" and r[k] ~= attr[k] then
 								if not r[k] then
 									table.insert(list, string.format("%s=null", k))
@@ -120,13 +119,14 @@ local function make_row_mt(t)
 
 						if #(list) > 0 then
 							local db = getmetatable(ctx).db
-							local stmt = prepare(db, "update " .. t[KEY_NAME] .. " set " .. table.concat(list, ",") .. " where " .. FIELD_ID .. "=?")
+							local stmt =
+								prepare(db, "update " .. t[KEY_NAME] .. " set " .. table.concat(list, ",") .. " where " .. FIELD_ID .. "=?")
 
 							table.insert(values, attr[FIELD_ID])
 							bind_values(stmt, table.unpack(values, 1, maxn(values)))
 
 							if stmt:step() == sqlite3.DONE then
-								for i,k in ipairs(keys) do
+								for i, k in ipairs(keys) do
 									attr[k] = r[k]
 								end
 							end
@@ -163,7 +163,7 @@ local function make_rows(t, stmt)
 
 		setmetatable(r, make_row_mt(t))
 
-		for k,v in pairs(row) do
+		for k, v in pairs(row) do
 			r[k] = v
 		end
 
@@ -182,7 +182,7 @@ local function each_rows(t, stmt, eachfunc)
 
 		setmetatable(r, make_row_mt(t))
 
-		for k,v in pairs(row) do
+		for k, v in pairs(row) do
 			r[k] = v
 		end
 
@@ -192,11 +192,8 @@ local function each_rows(t, stmt, eachfunc)
 	end
 end
 
-
-
 local field_mt = {
 	__index = function(f, key)
-
 	end,
 	__call = function(f, fmt, ...)
 		local t = f[KEY_TABLE]
@@ -295,7 +292,7 @@ local table_mt = {
 			local places = {}
 			local values = {}
 
-			for k,v in pairs(model) do
+			for k, v in pairs(model) do
 				if map[k] then
 					table.insert(keys, k)
 					table.insert(places, "?")
@@ -309,7 +306,11 @@ local table_mt = {
 
 			local db = getmetatable(t[KEY_CONTEXT]).db
 
-			local stmt = prepare(db, "insert into " .. t[KEY_NAME] .. " (" .. table.concat(keys, ",") .. ") values(" .. table.concat(places, ",") .. ")")
+			local stmt =
+				prepare(
+				db,
+				"insert into " .. t[KEY_NAME] .. " (" .. table.concat(keys, ",") .. ") values(" .. table.concat(places, ",") .. ")"
+			)
 			bind_values(stmt, table.unpack(values, 1, maxn(values)))
 
 			local last_insert_rowid
@@ -322,7 +323,7 @@ local table_mt = {
 			if last_insert_rowid then
 				local attr = {}
 				local r = {}
-				for i,v in ipairs(keys) do
+				for i, v in ipairs(keys) do
 					r[v] = values[i]
 					attr[v] = values[i]
 				end
@@ -341,40 +342,40 @@ local table_mt = {
 }
 
 local function update_schema(db, tablename, model)
-    local currColnames = {}
-    for row in db:nrows("PRAGMA table_info(" .. tablename .. ")") do
-        table.insert(currColnames, row.name)
-    end
+	local currColnames = {}
+	for row in db:nrows("PRAGMA table_info(" .. tablename .. ")") do
+		table.insert(currColnames, row.name)
+	end
 
-    if next(currColnames) ~= nil then
-    	for k,v in pairs(model) do
-    		if type(v) == "string" then
-	    		local found = false
-	    		for i,name in ipairs(currColnames) do
-	    			if name == k then
-	    				found = true
-	    				break
-	    			end
-	    		end
+	if next(currColnames) ~= nil then
+		for k, v in pairs(model) do
+			if type(v) == "string" then
+				local found = false
+				for i, name in ipairs(currColnames) do
+					if name == k then
+						found = true
+						break
+					end
+				end
 
-	    		if not found then
-	    			execute(db, string.format("ALTER TABLE %s ADD `%s` %s", tablename, k, v))
-	    		end
-	    	end
-    	end
-    else
-        local items = {}
+				if not found then
+					execute(db, string.format("ALTER TABLE %s ADD `%s` %s", tablename, k, v))
+				end
+			end
+		end
+	else
+		local items = {}
 
-        model[FIELD_ID] = "integer primary key"
+		model[FIELD_ID] = "integer primary key"
 
-        for k,v in pairs(model) do
-        	if type(v) == "string" then
-        		table.insert(items, string.format("`%s` %s", k, v))
-        	end
-        end
+		for k, v in pairs(model) do
+			if type(v) == "string" then
+				table.insert(items, string.format("`%s` %s", k, v))
+			end
+		end
 
 		execute(db, string.format("CREATE TABLE IF NOT EXISTS `%s` (%s);", tablename, table.concat(items, ", ")))
-    end
+	end
 end
 
 local function new(db, models)
@@ -383,7 +384,6 @@ local function new(db, models)
 		db = db,
 		models = models,
 		row_mt_map = {},
-
 		__index = function(ctx, key)
 			if key == "select" then
 				return function(ctx, fmt, ...)
@@ -414,7 +414,7 @@ local function new(db, models)
 	}
 	setmetatable(ctx, mt)
 
-	for k,v in pairs(models) do
+	for k, v in pairs(models) do
 		local t = {
 			[KEY_NAME] = k,
 			[KEY_MODEL] = v,

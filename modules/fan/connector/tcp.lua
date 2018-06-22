@@ -43,7 +43,7 @@ function apt_mt:receive(expect)
     self.receiving = coroutine.running()
 
     local input = coroutine.yield()
-    
+
     self.receiving_expect = 0
     self.receiving = nil
 
@@ -67,7 +67,7 @@ end
 
 function apt_mt:_onread(input)
   if self.receiving and (not input or input:available() >= self.receiving_expect) then
-    local st,msg = coroutine.resume(self.receiving, input)
+    local st, msg = coroutine.resume(self.receiving, input)
     if not st then
       print(msg)
     end
@@ -112,7 +112,7 @@ local function connect(host, port, path, args)
       if not t then
         return
       end
-      
+
       t._readstream:prepare_add()
       t._readstream:AddBytes(buf)
       t._readstream:prepare_get()
@@ -120,7 +120,7 @@ local function connect(host, port, path, args)
       if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
         t.conn:pause_read()
       end
-      
+
       t:_onread(t._readstream)
 
       if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
@@ -142,7 +142,6 @@ local function connect(host, port, path, args)
         t:close()
       end
 
-
       if running then
         coroutine.resume(running)
       end
@@ -150,7 +149,7 @@ local function connect(host, port, path, args)
   }
 
   if args and type(args) == "table" then
-    for k,v in pairs(args) do
+    for k, v in pairs(args) do
       params[k] = v
     end
   end
@@ -161,7 +160,7 @@ local function connect(host, port, path, args)
 
   coroutine.yield()
   running = nil
-  
+
   return t
 end
 
@@ -174,7 +173,13 @@ local function bind(host, port, path, args)
     host = host,
     port = port,
     onaccept = function(apt)
-      local t = {connection_map = weak_connection_map, conn = apt, _readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
+      local t = {
+        connection_map = weak_connection_map,
+        conn = apt,
+        _readstream = stream.new(),
+        _sender_queue = {},
+        simulate_send_block = true
+      }
       t._pack = {t}
       setmetatable(t, apt_mt)
 
@@ -182,7 +187,7 @@ local function bind(host, port, path, args)
 
       local weak_obj = utils.weakify_object(t._pack)
 
-      apt:bind{
+      apt:bind {
         onread = function(buf)
           local t = weak_obj[1]
           t._readstream:prepare_add()
@@ -194,7 +199,7 @@ local function bind(host, port, path, args)
           end
 
           if not t:_onread(t._readstream) and t.onread then
-            local status,msg = pcall(t.onread, t._readstream)
+            local status, msg = pcall(t.onread, t._readstream)
             if not status then
               print(msg)
             end
@@ -221,9 +226,9 @@ local function bind(host, port, path, args)
       end
     end
   }
-  
+
   if args and type(args) == "table" then
-    for k,v in pairs(args) do
+    for k, v in pairs(args) do
       params[k] = v
     end
   end

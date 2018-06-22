@@ -18,7 +18,7 @@ local pool = {idle = {}, yielding = {head = nil, tail = nil}, count = config.mar
 
 local function maxn(t)
     local n = 0
-    for k,v in pairs(t) do
+    for k, v in pairs(t) do
         if k > n then
             n = k
         end
@@ -35,7 +35,16 @@ function pool_mt:pop()
             conn = table.remove(pool.idle)
             break
         elseif pool.count > 0 then
-            conn = assert(mariadb.connect(config.maria_database, config.maria_user, config.maria_passwd, config.maria_host, config.maria_port))
+            conn =
+                assert(
+                mariadb.connect(
+                    config.maria_database,
+                    config.maria_user,
+                    config.maria_passwd,
+                    config.maria_host,
+                    config.maria_port
+                )
+            )
             assert(conn:setcharset(config.maria_charset))
             pool.count = pool.count - 1
             break
@@ -77,7 +86,7 @@ end
 
 local function _safe(self, func, ...)
     local ctx = self:pop()
-    local st,msg = pcall(func, ctx, ...)
+    local st, msg = pcall(func, ctx, ...)
     self:push(ctx)
 
     if not st then
@@ -88,7 +97,7 @@ local function _safe(self, func, ...)
 end
 
 function pool_mt:safe(func, ...)
-    local st,msg = pcall(_safe, self, func, ...)
+    local st, msg = pcall(_safe, self, func, ...)
 
     if not st then
         error(msg)

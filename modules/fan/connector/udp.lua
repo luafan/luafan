@@ -637,7 +637,7 @@ local function connect(host, port, path)
         t = {
             host = host,
             port = port,
-            dest = dest,
+            dest = dest
         }
 
         init_conn(t)
@@ -700,8 +700,7 @@ local function bind(host, port, path)
 
     local weak_obj = utils.weakify(obj)
 
-    obj.getapt =
-        function(host, port, from, client_key)
+    obj.getapt = function(host, port, from, client_key)
         local obj = weak_obj
         local apt = obj.clientmap[client_key]
         if not apt then
@@ -723,7 +722,7 @@ local function bind(host, port, path)
                     dest = from,
                     conn = obj.serv,
                     _parent = obj,
-                    _client_key = client_key,
+                    _client_key = client_key
                 }
 
                 init_conn(apt)
@@ -732,7 +731,7 @@ local function bind(host, port, path)
                 apt.reuse = apt.reuse + 1
 
                 -- move package back.
-                for i,package in ipairs(apt._suspend_list) do
+                for i, package in ipairs(apt._suspend_list) do
                     obj._main_output_chain:push(package)
                 end
 

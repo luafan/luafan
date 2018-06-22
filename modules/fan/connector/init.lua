@@ -11,12 +11,12 @@ local function extract_url(url)
     return
   end
 
-  local _,_,scheme,twoslash,others = string.find(url, "^(%w+):([/]?[/]?)(.*)")
-  local path,server,host,port
+  local _, _, scheme, twoslash, others = string.find(url, "^(%w+):([/]?[/]?)(.*)")
+  local path, server, host, port
   if twoslash and #(twoslash) == 2 then
-    _,_,server,path = string.find(others, "([^/]*)(.*)")
+    _, _, server, path = string.find(others, "([^/]*)(.*)")
     if #(server) > 0 then
-      _,_,host,port = string.find(server, "^([^:]+):(%d+)$")
+      _, _, host, port = string.find(server, "^([^:]+):(%d+)$")
     end
   else
     path = twoslash .. others
@@ -64,5 +64,5 @@ end
 return {
   connect = connect,
   bind = bind,
-  tmpfifoname = tmpfifoname,
+  tmpfifoname = tmpfifoname
 }

@@ -9,17 +9,17 @@ local function random_string(letters, count, join, joingroupcount)
     local tb = {}
 
     if type(joingroupcount) == "number" then
-        for i=1,count/joingroupcount do
+        for i = 1, count / joingroupcount do
             local group = {}
-            for i=1,joingroupcount do
-                local ri = math.random(1,#(letters))
+            for i = 1, joingroupcount do
+                local ri = math.random(1, #(letters))
                 table.insert(group, letters:sub(ri, ri))
             end
             table.insert(tb, table.concat(group))
         end
     else
-        for i=1,count do
-            local ri = math.random(1,#(letters))
+        for i = 1, count do
+            local ri = math.random(1, #(letters))
             table.insert(tb, letters:sub(ri, ri))
         end
     end
@@ -28,8 +28,8 @@ local function random_string(letters, count, join, joingroupcount)
 end
 
 local function gettime()
-    local sec,usec = fan.gettime()
-    return sec + usec/1000000.0
+    local sec, usec = fan.gettime()
+    return sec + usec / 1000000.0
 end
 
 local weak_mt = {}
@@ -57,7 +57,7 @@ local function weakify(...)
     local t = {...}
     if #t > 1 then
         local out = {}
-        for i,v in ipairs(t) do
+        for i, v in ipairs(t) do
             table.insert(out, weakify_object(v))
         end
 
@@ -72,13 +72,13 @@ local m = {
     gettime = gettime,
     LETTERS_W = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
     weakify = weakify,
-    weakify_object = weakify_object,
+    weakify_object = weakify_object
 }
 
 if jit then
-  local ffi = require("ffi")
+    local ffi = require("ffi")
 
-  ffi.cdef[[
+    ffi.cdef [[
     typedef long time_t;
     typedef struct timeval {
       time_t tv_sec;
@@ -88,11 +88,11 @@ if jit then
     int gettimeofday(struct timeval* t, void* tzp);
   ]]
 
-  local t = ffi.new("timeval")
-  function m.gettime()
-    ffi.C.gettimeofday(t, nil)
-    return tonumber(t.tv_sec) + tonumber(t.tv_usec)/1000000.0
-  end
+    local t = ffi.new("timeval")
+    function m.gettime()
+        ffi.C.gettimeofday(t, nil)
+        return tonumber(t.tv_sec) + tonumber(t.tv_usec) / 1000000.0
+    end
 end
 
 return m

@@ -8,7 +8,7 @@ require "compat53"
 
 local function maxn(t)
   local n = 0
-  for k,v in pairs(t) do
+  for k, v in pairs(t) do
     if k > n then
       n = k
     end
@@ -30,7 +30,7 @@ function loadbalance_mt:_assign(slave)
   if self.yielding.head then
     local co = self.yielding.head.value
     self.yielding.head = self.yielding.head.next
-    local st,msg = coroutine.resume(co, slave)
+    local st, msg = coroutine.resume(co, slave)
     if not st then
       print(msg)
     end
@@ -120,12 +120,12 @@ local function new(funcmap, slavecount, max_job_count, url)
   local cpu_count = fan.getcpucount()
   local cpu_masks = {}
   if cpu_count > 1 then
-    for i=1,cpu_count-1 do
-      table.insert(cpu_masks, 2^(i - 1))
+    for i = 1, cpu_count - 1 do
+      table.insert(cpu_masks, 2 ^ (i - 1))
     end
   end
 
-  for i=1,slavecount do
+  for i = 1, slavecount do
     local pid = assert(fan.fork())
     master = pid > 0
 
@@ -146,16 +146,24 @@ local function new(funcmap, slavecount, max_job_count, url)
     if cpu_count > 1 then
       fan.setaffinity(2 ^ (cpu_count - 1))
     end
-    fan.setprogname(string.format("fan: master-%d U(%X/%d)", master_pid, slavecount, fan.getaffinity(), fan.getcpucount()))
-    local obj = {slave_pool = pool.new(), loadbalance = loadbalance_mt.new(max_job_count), slave_pids = slave_pids, slaves = {}, func_names = {}}
-    for k,v in pairs(funcmap) do
+    fan.setprogname(
+      string.format("fan: master-%d U(%X/%d)", master_pid, slavecount, fan.getaffinity(), fan.getcpucount())
+    )
+    local obj = {
+      slave_pool = pool.new(),
+      loadbalance = loadbalance_mt.new(max_job_count),
+      slave_pids = slave_pids,
+      slaves = {},
+      func_names = {}
+    }
+    for k, v in pairs(funcmap) do
       obj.func_names[k] = k
     end
 
     setmetatable(obj, master_mt)
 
     obj.terminate = function(self)
-      for k,v in pairs(self.slave_pids) do
+      for k, v in pairs(self.slave_pids) do
         fan.kill(v)
         self.slave_pids[k] = nil
       end
@@ -167,7 +175,7 @@ local function new(funcmap, slavecount, max_job_count, url)
       end
 
       obj.serv = connector.bind(url)
-      
+
       obj.serv.onaccept = function(apt)
         -- print("onaccept", apt)
         apt.task_map = {}
@@ -175,10 +183,10 @@ local function new(funcmap, slavecount, max_job_count, url)
         apt.jobcount = 0
         apt.status = "running"
         apt.max_job_count = max_job_count
-  
+
         table.insert(obj.slaves, apt)
         obj.loadbalance:add(apt)
-  
+
         if #(obj.slaves) == #(slave_pids) then
           if obj._wait_all_slaves_running then
             local running = obj._wait_all_slaves_running
@@ -186,47 +194,46 @@ local function new(funcmap, slavecount, max_job_count, url)
             coroutine.resume(running, obj)
           end
         end
-  
+
         local last_expect = 1
-  
+
         while true do
           local input = apt:receive(last_expect)
           if not input then
             break
           end
-  
-          local str,expect = input:GetString()
+
+          local str, expect = input:GetString()
           if str then
             last_expect = 1
             local args = objectbuf.decode(str)
-  
+
             if apt.task_map[args[1]] then
               local running = apt.task_map[args[1]]
               apt.task_map[args[1]] = nil
-              local st,msg = coroutine.resume(running, true, table.unpack(args, 2, maxn(args)))
+              local st, msg = coroutine.resume(running, true, table.unpack(args, 2, maxn(args)))
               if not st then
                 print(msg)
               end
             else
               apt.task_map[args[1]] = {true, table.unpack(args, 2, maxn(args))}
             end
-  
+
             obj.loadbalance:telldone(apt)
           else
             -- print(pid, "not enough, expect", expect)
             last_expect = expect
           end
         end
-  
-        for task_key,co in pairs(apt.task_map) do
+
+        for task_key, co in pairs(apt.task_map) do
           if coroutine.status(co) == "suspended" then
             apt.status = "dead"
             assert(coroutine.resume(co, false, "slave dead."))
           end
         end
-  
       end
-      
+
       obj._wait_all_slaves_running = coroutine.running()
       return coroutine.yield()
     end
@@ -237,15 +244,17 @@ local function new(funcmap, slavecount, max_job_count, url)
       local st = fan.setaffinity(cpu_masks[(slave_index - 1) % #(cpu_masks) + 1])
       if not st then
         local mask = 0
-        for i=1,cpu_count-1 do
-          mask = mask + 2 ^ (i-1)
+        for i = 1, cpu_count - 1 do
+          mask = mask + 2 ^ (i - 1)
         end
         fan.setaffinity(mask)
       end
     end
 
     local pid = fan.getpid()
-    fan.setprogname(string.format("fan: slave-%d-%d U(%X/%d)", master_pid, slave_index, fan.getaffinity(), fan.getcpucount()))
+    fan.setprogname(
+      string.format("fan: slave-%d-%d U(%X/%d)", master_pid, slave_index, fan.getaffinity(), fan.getcpucount())
+    )
 
     -- assert(fan.setpgid())
 
@@ -257,7 +266,8 @@ local function new(funcmap, slavecount, max_job_count, url)
     -- local f1 = fan.open("/dev/null")
     -- local f2 = fan.open("/dev/null")
 
-    fan.loop(function()
+    fan.loop(
+      function()
         while true do
           while not cli do
             fan.sleep(0.1)
@@ -273,7 +283,7 @@ local function new(funcmap, slavecount, max_job_count, url)
             end
             -- print(pid, "receive", input:available())
 
-            local str,expect = input:GetString()
+            local str, expect = input:GetString()
             if str then
               last_expect = 1
               -- print(pid, "onread slave", str)
@@ -287,10 +297,13 @@ local function new(funcmap, slavecount, max_job_count, url)
 
               local ret = ""
               if func then
-                local st,msg = pcall(function()
-                    local results = {task_key, func(table.unpack(args, 3, maxn(args))) }
+                local st, msg =
+                  pcall(
+                  function()
+                    local results = {task_key, func(table.unpack(args, 3, maxn(args)))}
                     return objectbuf.encode(results)
-                  end)
+                  end
+                )
                 if not st then
                   print(msg)
                 else
@@ -314,7 +327,8 @@ local function new(funcmap, slavecount, max_job_count, url)
 
           fan.sleep(1)
         end
-      end)
+      end
+    )
 
     if cli then
       cli:close()

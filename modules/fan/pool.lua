@@ -15,7 +15,7 @@ local pool = {idle = {}, yielding = {head = nil, tail = nil}, count = config.poo
 
 local function maxn(t)
   local n = 0
-  for k,v in pairs(t) do
+  for k, v in pairs(t) do
     if k > n then
       n = k
     end
@@ -64,7 +64,7 @@ function pool_mt:push(ctx)
     if not pool.yielding.head then
       self.pool.yielding.tail = nil
     end
-    local st,msg = coroutine.resume(co, pool_item)
+    local st, msg = coroutine.resume(co, pool_item)
     if not st then
       print(msg)
     end
@@ -75,7 +75,7 @@ end
 
 local function _safe(self, func, ...)
   local ctx = self:pop()
-  local st,msg = pcall(func, ctx, ...)
+  local st, msg = pcall(func, ctx, ...)
   self:push(ctx)
 
   if not st then
@@ -86,7 +86,7 @@ local function _safe(self, func, ...)
 end
 
 function pool_mt:safe(func, ...)
-  local st,msg = pcall(_safe, self, func, ...)
+  local st, msg = pcall(_safe, self, func, ...)
 
   if not st then
     error(msg)

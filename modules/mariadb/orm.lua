@@ -28,7 +28,7 @@ local FIELD_ID_KEY = {}
 
 local function maxn(t)
   local n = 0
-  for k,v in pairs(t) do
+  for k, v in pairs(t) do
     if k > n then
       n = k
     end
@@ -46,6 +46,16 @@ end
 
 local function stmt_close(stmt)
   stmt:close()
+end
+
+local function stmt_execute(stmt)
+  local result, msg = stmt:execute()
+  if not result then
+    stmt_close(stmt)
+    error(msg)
+  else
+    return result
+  end
 end
 
 local function bind_values(stmt, ...)
@@ -81,7 +91,7 @@ local function delete(ctx, db, tablename, fmt, ...)
   else
     stmt = prepare(ctx, db, string.format("delete from %s", tablename))
   end
-  local st = stmt:execute()
+  local st = stmt_execute(stmt)
   stmt_close(stmt)
   return st
 end
@@ -115,7 +125,7 @@ local function make_row_mt(t)
             local list = {}
             local keys = {}
             local values = {}
-            for k,v in pairs(t[KEY_MODEL]) do
+            for k, v in pairs(t[KEY_MODEL]) do
               if type(v) ~= "function" and r[k] ~= attr[k] then
                 if not r[k] then
                   table.insert(list, string.format("%s=null", k))
@@ -130,15 +140,20 @@ local function make_row_mt(t)
 
             if #(list) > 0 then
               local db = getmetatable(ctx).db
-              local stmt = prepare(ctx, db, "update " .. t[KEY_NAME] .. " set " .. table.concat(list, ",") .. " where " .. FIELD_ID .. "=?")
+              local stmt =
+                prepare(
+                ctx,
+                db,
+                "update " .. t[KEY_NAME] .. " set " .. table.concat(list, ",") .. " where " .. FIELD_ID .. "=?"
+              )
 
               table.insert(values, attr[FIELD_ID])
               bind_values(stmt, table.unpack(values, 1, maxn(values)))
 
-              stmt:execute()
+              stmt_execute(stmt)
               stmt_close(stmt)
 
-              for i,k in ipairs(keys) do
+              for i, k in ipairs(keys) do
                 attr[k] = r[k]
               end
             end
@@ -174,7 +189,7 @@ local function make_rows(t, stmt)
 
     if not t[KEY_CONTEXT]._readonly then
       local attr = {}
-      for k,v in pairs(row) do
+      for k, v in pairs(row) do
         attr[k] = v
       end
 
@@ -199,7 +214,7 @@ local function each_rows(t, stmt, eachfunc)
 
     if not t[KEY_CONTEXT]._readonly then
       local attr = {}
-      for k,v in pairs(row) do
+      for k, v in pairs(row) do
         attr[k] = v
       end
 
@@ -215,7 +230,6 @@ end
 
 local field_mt = {
   __index = function(f, key)
-
   end,
   __call = function(f, fmt, ...)
     local t = f[KEY_TABLE]
@@ -229,7 +243,7 @@ local field_mt = {
       stmt = prepare(ctx, db, "select * from " .. t[KEY_NAME])
     end
 
-    stmt:execute()
+    stmt_execute(stmt)
     local lines = make_rows(t, stmt)
     stmt_close(stmt)
 
@@ -272,7 +286,7 @@ local table_mt = {
       else
         stmt = prepare(ctx, db, "select * from " .. t[KEY_NAME] .. suffix)
       end
-      stmt:execute()
+      stmt_execute(stmt)
       local lines = make_rows(t, stmt)
       stmt_close(stmt)
       if key == "one" then
@@ -295,7 +309,7 @@ local table_mt = {
       else
         stmt = prepare(ctx, db, "select * from " .. t[KEY_NAME])
       end
-      stmt:execute()
+      stmt_execute(stmt)
       each_rows(t, stmt, key)
       stmt_close(stmt)
     elseif key == "delete" or key == "remove" then
@@ -319,7 +333,7 @@ local table_mt = {
 
       local handles = {}
 
-      for k,v in pairs(model) do
+      for k, v in pairs(model) do
         local vv = map[k]
         if vv then
           table.insert(keys, k)
@@ -343,15 +357,21 @@ local table_mt = {
       local ctx = t[KEY_CONTEXT]
       local db = getmetatable(ctx).db
 
-      local stmt = prepare(ctx, db, "insert into " .. t[KEY_NAME] .. " (" .. table.concat(keys, ",") .. ") values(" .. table.concat(places, ",") .. ")")
+      local stmt =
+        prepare(
+        ctx,
+        db,
+        "insert into " ..
+          t[KEY_NAME] .. " (" .. table.concat(keys, ",") .. ") values(" .. table.concat(places, ",") .. ")"
+      )
       bind_values(stmt, table.unpack(values, 1, maxn(values)))
-      for vv,idx in pairs(handles) do
-        local st,msg = pcall(vv, stmt, idx)
+      for vv, idx in pairs(handles) do
+        local st, msg = pcall(vv, stmt, idx)
         if not st then
           print(msg)
         end
       end
-      stmt:execute()
+      stmt_execute(stmt)
       stmt_close(stmt)
 
       local last_insert_rowid = db:getlastautoid()
@@ -362,7 +382,7 @@ local table_mt = {
       if last_insert_rowid then
         local attr = {}
         local r = {}
-        for i,v in ipairs(keys) do
+        for i, v in ipairs(keys) do
           r[v] = values[i]
           attr[v] = values[i]
         end
@@ -390,7 +410,7 @@ local function update_schema(ctx, db, tablename, model)
     if not row or table_exist then
       break
     else
-      for k,v in pairs(row) do
+      for k, v in pairs(row) do
         if v == tablename then
           table_exist = true
           break
@@ -418,10 +438,10 @@ local function update_schema(ctx, db, tablename, model)
   end
 
   if #(currColnames) > 0 then
-    for k,v in pairs(model) do
+    for k, v in pairs(model) do
       if type(k) == "string" and type(v) == "string" then
         local found = false
-        for i,name in ipairs(currColnames) do
+        for i, name in ipairs(currColnames) do
           if name == k then
             found = true
             break
@@ -442,39 +462,45 @@ local function update_schema(ctx, db, tablename, model)
       model[FIELD_ID] = "bigint primary key auto_increment not null"
     end
 
-    for k,v in pairs(model) do
+    for k, v in pairs(model) do
       if type(v) == "string" and type(k) == "string" then
         table.insert(items, string.format("`%s` %s", k, v))
       end
     end
 
-    for i,v in ipairs(model) do
+    for i, v in ipairs(model) do
       if type(v) == "string" then
         table.insert(items, v)
       end
     end
 
-    execute(db, string.format("CREATE TABLE IF NOT EXISTS `%s` (%s) ENGINE=MyISAM DEFAULT CHARSET=utf8;", tablename, table.concat(items, ", ")))
+    execute(
+      db,
+      string.format(
+        "CREATE TABLE IF NOT EXISTS `%s` (%s) ENGINE=MyISAM DEFAULT CHARSET=utf8;",
+        tablename,
+        table.concat(items, ", ")
+      )
+    )
   end
 end
 
 local function new(db, models)
   local ctx = {
-    _readonly = false,
+    _readonly = false
   }
 
   local mt = {
     db = db,
     models = models,
     row_mt_map = {},
-
     __index = function(ctx, key)
       if key == "select" then
         return function(ctx, fmt, ...)
           local db = getmetatable(ctx).db
           local stmt = prepare(ctx, db, fmt)
           bind_values(stmt, ...)
-          stmt:execute()
+          stmt_execute(stmt)
 
           local lines = {}
           while true do
@@ -494,7 +520,7 @@ local function new(db, models)
           local db = getmetatable(ctx).db
           local stmt = prepare(ctx, db, fmt)
           bind_values(stmt, ...)
-          stmt:execute()
+          stmt_execute(stmt)
           stmt_close(stmt)
 
           if config.debug and key == "insert" then
@@ -508,7 +534,7 @@ local function new(db, models)
   }
   setmetatable(ctx, mt)
 
-  for k,v in pairs(models) do
+  for k, v in pairs(models) do
     local order = {}
     local t = {
       [KEY_NAME] = k,
