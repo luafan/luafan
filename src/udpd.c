@@ -51,13 +51,13 @@ LUA_API int lua_udpd_conn_gc(lua_State *L)
   CLEAR_REF(L, conn->onReadRef)
   CLEAR_REF(L, conn->onSendReadyRef)
 
-  if (event_mgr_base() && conn->read_ev)
+  if (event_mgr_base_current() && conn->read_ev)
   {
     event_free(conn->read_ev);
     conn->read_ev = NULL;
   }
 
-  if (event_mgr_base() && conn->write_ev)
+  if (event_mgr_base_current() && conn->write_ev)
   {
     event_free(conn->write_ev);
     conn->write_ev = NULL;

@@ -9,6 +9,8 @@
 #include <stdio.h>
 
 struct event_base *event_mgr_base();
+struct event_base *event_mgr_base_current();
+
 struct evdns_base *event_mgr_dnsbase();
 void event_mgr_break();
 int event_mgr_init();

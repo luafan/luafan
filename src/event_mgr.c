@@ -27,6 +27,11 @@ struct event_base *event_mgr_base()
   return base;
 }
 
+struct event_base *event_mgr_base_current()
+{
+  return base;
+}
+
 struct evdns_base *event_mgr_dnsbase()
 {
   return dnsbase;
@@ -102,11 +107,11 @@ int event_mgr_init()
     signal(SIGQUIT, signal_handler);
     signal(SIGPIPE, signal_handler);
 
-    event_assign(&signal_int, event_mgr_base(), SIGINT, EV_SIGNAL | EV_PERSIST,
+    event_assign(&signal_int, event_mgr_base_current(), SIGINT, EV_SIGNAL | EV_PERSIST,
                  signal_cb, &signal_int);
     event_add(&signal_int, NULL);
 
-    event_assign(&signal_pipe, event_mgr_base(), SIGPIPE,
+    event_assign(&signal_pipe, event_mgr_base_current(), SIGPIPE,
                  EV_SIGNAL | EV_PERSIST, signal_cb, &signal_pipe);
     event_add(&signal_pipe, NULL);
     return 0;

@@ -310,13 +310,13 @@ LUA_API int luafan_fifo_close(lua_State *L)
   CLEAR_REF(L, fifo->onSendReadyRef)
   CLEAR_REF(L, fifo->onDisconnectedRef)
 
-  if (event_mgr_base() && fifo->read_ev)
+  if (event_mgr_base_current() && fifo->read_ev)
   {
     event_free(fifo->read_ev);
     fifo->read_ev = NULL;
   }
 
-  if (event_mgr_base() && fifo->write_ev)
+  if (event_mgr_base_current() && fifo->write_ev)
   {
     event_free(fifo->write_ev);
     fifo->write_ev = NULL;

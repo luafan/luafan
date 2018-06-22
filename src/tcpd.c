@@ -111,7 +111,7 @@ LUA_API int lua_tcpd_server_close(lua_State *L)
     serv->host = NULL;
   }
 
-  if (event_mgr_base() && serv->listener)
+  if (event_mgr_base_current() && serv->listener)
   {
     evconnlistener_free(serv->listener);
     serv->listener = NULL;
@@ -1080,7 +1080,7 @@ static const luaL_Reg tcpdlib[] = {
 LUA_API int tcpd_conn_close(lua_State *L)
 {
   Conn *conn = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
-  if (event_mgr_base() && conn->buf)
+  if (event_mgr_base_current() && conn->buf)
   {
     bufferevent_free(conn->buf);
     conn->buf = NULL;
@@ -1206,7 +1206,7 @@ LUA_API int tcpd_accept_getsockname(lua_State *L)
 LUA_API int tcpd_accept_close(lua_State *L)
 {
   ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
-  if (event_mgr_base() && accept->buf)
+  if (event_mgr_base_current() && accept->buf)
   {
     bufferevent_free(accept->buf);
     accept->buf = NULL;

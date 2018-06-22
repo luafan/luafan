@@ -154,6 +154,13 @@ local function new(funcmap, slavecount, max_job_count, url)
 
     setmetatable(obj, master_mt)
 
+    obj.terminate = function(self)
+      for k,v in pairs(self.slave_pids) do
+        fan.kill(v)
+        self.slave_pids[k] = nil
+      end
+    end
+
     obj.wait_all_slaves = function()
       if #(obj.slaves) == #(slave_pids) then
         return

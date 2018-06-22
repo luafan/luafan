@@ -327,7 +327,7 @@ LUA_API int lua_evhttp_server_gc(lua_State *L)
     server->onServiceRef = LUA_NOREF;
   }
 
-  if (event_mgr_base() && server->httpd)
+  if (event_mgr_base_current() && server->httpd)
   {
     if (server->boundsocket)
     {
