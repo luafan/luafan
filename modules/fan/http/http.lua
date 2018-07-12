@@ -11,6 +11,7 @@ local function request(method, check_body, args)
     if type(args) == "string" then
         args = {url = args}
     end
+    local verbose = args.verbose == 1
     local _, _, schema, host, port, path = string.find(args.url, "([^:]+)://([^:]+):(%d+)(.*)")
     if not host then
         _, _, schema, host, path = string.find(args.url, "([^:]+)://([^:/]+)(.*)")
@@ -60,10 +61,12 @@ local function request(method, check_body, args)
 
     conn = connector.connect(string.format("tcp://%s:%d", host, port), args)
 
-    local t = {string.format("%s %s HTTP/1.0\r\n", method:upper(), path)}
+    local t = {string.format("%s %s HTTP/1.1\r\n", method:upper(), path)}
     if not args.headers or type(args.headers) ~= "table" then
         args.headers = {}
     end
+
+    args.headers["Connection"] = "close"
 
     if check_body then
         if
@@ -105,6 +108,9 @@ local function request(method, check_body, args)
             elseif not line then
                 break
             else
+                if verbose then
+                    print("[HEADER]", line)
+                end
                 if #(line) == 0 then
                     header_complete = true
                     if args.onheader then
@@ -157,21 +163,34 @@ local function request(method, check_body, args)
             local line_total = 0
             repeat
                 if line_total > 0 then
+                    local available = input:available()
                     local buff = input:GetBytes(line_total)
                     if buff then
+                        if verbose then
+                            print(string.format("[CHUNKED](%d)", #buff), buff)
+                        end
                         table.insert(t, buff)
+                        line_total = line_total - #buff
+
                         input = conn:receive(2)
                         if input then
-                            local line, breakflag = input:readline()
-                            if breakflag ~= "\r\n" then
-                                ret.error = "checked error 1."
-                                break
+                            if line_total == 0 then
+                                local line, breakflag = input:readline()
+                                if breakflag ~= "\r\n" then
+                                    ret.error = "chunked error 1."
+                                    break
+                                end
                             end
+                        else
+                            ret.error = "chunked error 4."
+                            break
                         end
-                        line_total = 0
                     end
                 else
                     local line, breakflag = input:readline()
+                    if verbose then
+                        print("[CHUNKED][SIZE]", line)
+                    end
                     if line and breakflag == "\r\n" then
                         line_total = tonumber(line, 16)
                         if line_total == 0 then

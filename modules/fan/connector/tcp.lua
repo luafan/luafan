@@ -95,6 +95,7 @@ function apt_mt:close()
 end
 
 local function connect(host, port, path, args)
+  local verbose = args.verbose == 1
   local running = coroutine.running()
 
   local t = {_readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
@@ -111,6 +112,10 @@ local function connect(host, port, path, args)
 
       if not t then
         return
+      end
+
+      if verbose then
+        print("[CONNECTOR][READ]", buf)
       end
 
       t._readstream:prepare_add()
