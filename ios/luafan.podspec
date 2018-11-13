@@ -13,7 +13,7 @@ Pod::Spec.new do |s|
   
   s.source_files  = "src/*.{h,c}", "src/utlua.c"
   s.exclude_files = "src/luamariadb.c"
-  s.compiler_flags = '-DTARGET_OS_IPHONE=1'
+  s.compiler_flags = '-DTARGET_OS_IPHONE=1 -DFAN_HAS_OPENSSL'
 
   s.dependency 'CAPKit-lua53', '~> 0.1.0'
   s.dependency 'CAPKit-3rdparty-libs', '~> 0.1.0'
