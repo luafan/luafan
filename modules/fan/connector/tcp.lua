@@ -9,7 +9,7 @@ local apt_mt = {}
 apt_mt.__index = apt_mt
 
 function apt_mt:send(buf)
-  if self.disconnected or not self.conn then
+  if self.disconnected or not self.conn or not buf or #(buf) == 0 then
     return nil
   end
 
