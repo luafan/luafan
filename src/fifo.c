@@ -9,7 +9,8 @@
 typedef struct
 {
   int socket;
-  char *name; // name for delete
+  char *name;
+  int delete_on_close;
   int onReadRef;
 
   int onSendReadyRef;
@@ -44,7 +45,7 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg)
   FIFO *fifo = (FIFO *)arg;
 
   char buf[READ_BUFF_LEN];
-  int len = read(fd, buf, READ_BUFF_LEN);
+  size_t len = read(fd, buf, READ_BUFF_LEN);
 
   if (len <= 0)
   {
@@ -137,6 +138,8 @@ LUA_API int luafan_fifo_connect(lua_State *L)
   FIFO *fifo = (FIFO *)lua_newuserdata(L, sizeof(FIFO));
   memset(fifo, 0, sizeof(FIFO));
 
+  fifo->name = strdup(fifoname);
+
   luaL_getmetatable(L, LUA_FIFO_CONNECTION_TYPE);
   lua_setmetatable(L, -2);
   fifo->mainthread = utlua_mainthread(L);
@@ -145,10 +148,7 @@ LUA_API int luafan_fifo_connect(lua_State *L)
   // fifo->name = NULL;
 
   lua_getfield(L, 1, "delete_on_close");
-  if (lua_toboolean(L, -1))
-  {
-    fifo->name = strdup(fifoname);
-  }
+  fifo->delete_on_close = lua_toboolean(L, -1);
   lua_pop(L, 1);
 
   lua_getfield(L, 1, "rwmode");
@@ -255,7 +255,7 @@ LUA_API int luafan_fifo_send(lua_State *L)
   const char *data = luaL_optlstring(L, 2, NULL, &data_len);
   if (data && data_len > 0)
   {
-    int len = write(fifo->socket, data, data_len);
+    size_t len = write(fifo->socket, data, data_len);
     if (len <= 0)
     {
       if (len < 0 && (errno == EAGAIN || errno == EINTR))
@@ -328,7 +328,7 @@ LUA_API int luafan_fifo_close(lua_State *L)
     fifo->socket = 0;
   }
 
-  if (fifo->name)
+  if (fifo->delete_on_close)
   {
     if (unlink(fifo->name))
     {
@@ -341,9 +341,10 @@ LUA_API int luafan_fifo_close(lua_State *L)
     {
       // printf("unlinked %s\n", fifo->name);
     }
-    free(fifo->name);
-    fifo->name = NULL;
   }
+
+  free(fifo->name);
+  fifo->name = NULL;
 
   return 0;
 }

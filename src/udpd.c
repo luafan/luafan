@@ -1,5 +1,6 @@
 
 #include "utlua.h"
+#include <net/if.h>
 
 #define LUA_UDPD_CONNECTION_TYPE "UDPD_CONNECTION_TYPE"
 #define LUA_UDPD_DEST_TYPE "LUA_UDPD_DEST_TYPE"
@@ -23,6 +24,8 @@ typedef struct
   int socket_fd;
   struct sockaddr addr;
   socklen_t addrlen;
+
+    int interface;
 
   struct event *read_ev;
   struct event *write_ev;
@@ -178,6 +181,10 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
   {
     return 0;
   }
+    
+    if (conn->interface) {
+        setsockopt(socket_fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
+    }
 
   if (conn->bind_host)
   {
@@ -326,6 +333,13 @@ LUA_API int udpd_new(lua_State *L)
 
   Conn *conn = lua_newuserdata(L, sizeof(Conn));
   memset(conn, 0, sizeof(Conn));
+    
+    lua_getfield(L, 1, "interface");
+    if (lua_type(L, -1) == LUA_TSTRING) {
+        const char *interface = lua_tostring(L, -1);
+        conn->interface = if_nametoindex(interface);
+    }
+    lua_pop(L, 1);
 
   SET_FUNC_REF_FROM_TABLE(L, conn->onReadRef, 1, "onread")
   SET_FUNC_REF_FROM_TABLE(L, conn->onSendReadyRef, 1, "onsendready")

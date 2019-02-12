@@ -77,8 +77,6 @@ static void clock_handler(const int fd, const short which, void *arg)
   int threadRef = args->threadRef;
   evtimer_del(&args->clockevent);
 
-  free(args);
-
   lua_lock(L);
   lua_rawgeti(L, LUA_REGISTRYINDEX, threadRef);
   lua_State *co = lua_tothread(L, -1);
@@ -95,7 +93,7 @@ LUA_API int luafan_sleep(lua_State *L)
   lua_Number sec = luaL_checknumber(L, 1);
   struct event_base *base = event_mgr_base();
 
-  struct sleep_args *args = malloc(sizeof(struct sleep_args));
+  struct sleep_args *args = lua_newuserdata(L, sizeof(struct sleep_args));
   memset(args, 0, sizeof(struct sleep_args));
 
   args->L = utlua_mainthread(L);

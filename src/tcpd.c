@@ -5,6 +5,8 @@
 #include <linux/netfilter_ipv4.h>
 #endif
 
+#include <net/if.h>
+
 #define LUA_TCPD_CONNECTION_TYPE "<tcpd.connect>"
 #define LUA_TCPD_SERVER_TYPE "<tcpd.bind %s %d>"
 #define LUA_TCPD_ACCEPT_TYPE "<tcpd.accept %s %d>"
@@ -41,10 +43,10 @@ typedef struct
   char *ssl_host;
   int port;
 
-  int ipv6;
-
   int send_buffer_size;
   int receive_buffer_size;
+    
+    int interface;
 
   lua_Number read_timeout;
   lua_Number write_timeout;
@@ -764,7 +766,7 @@ static void luatcpd_reconnect(Conn *conn)
 #endif
 
   int rc = bufferevent_socket_connect_hostname(conn->buf, event_mgr_dnsbase(),
-                                               conn->ipv6 ? AF_INET6 : AF_INET,
+                                               AF_UNSPEC,
                                                conn->host, conn->port);
 
   evutil_socket_t fd = bufferevent_getfd(conn->buf);
@@ -778,6 +780,10 @@ static void luatcpd_reconnect(Conn *conn)
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &conn->receive_buffer_size,
                sizeof(conn->receive_buffer_size));
   }
+    
+    if (conn->interface) {
+        setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
+    }
 
   if (rc < 0)
   {
@@ -914,10 +920,6 @@ LUA_API int tcpd_connect(lua_State *L)
   lua_pop(L, 1);
 
   DUP_STR_FROM_TABLE(L, conn->ssl_host, 1, "ssl_host")
-
-  lua_getfield(L, 1, "ipv6");
-  conn->ipv6 = lua_toboolean(L, -1);
-  lua_pop(L, 1);
 
   if (ssl)
   {
@@ -1064,6 +1066,13 @@ LUA_API int tcpd_connect(lua_State *L)
   lua_Number write_timeout = (int)luaL_optnumber(L, -1, 0);
   conn->write_timeout = write_timeout;
   lua_pop(L, 1);
+    
+    lua_getfield(L, 1, "interface");
+    if (lua_type(L, -1) == LUA_TSTRING) {
+        const char *interface = lua_tostring(L, -1);
+        conn->interface = if_nametoindex(interface);
+    }
+    lua_pop(L, 1);
 
   luaL_getmetatable(L, LUA_TCPD_CONNECTION_TYPE);
   lua_setmetatable(L, -2);

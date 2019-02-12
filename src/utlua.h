@@ -67,7 +67,7 @@
 #include "bytearray.h"
 #include "event_mgr.h"
 
-#define READ_BUFF_LEN 1024 * 1024
+#define READ_BUFF_LEN 64 * 1024
 
 #ifdef __ANDROID__
 
