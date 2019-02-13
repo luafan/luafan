@@ -45,8 +45,8 @@ typedef struct
 
   int send_buffer_size;
   int receive_buffer_size;
-    
-    int interface;
+
+  int interface;
 
   lua_Number read_timeout;
   lua_Number write_timeout;
@@ -69,7 +69,7 @@ typedef struct
   int port;
 
   int ipv6;
-  
+
 #if FAN_HAS_OPENSSL
   int ssl;
   SSL_CTX *ctx;
@@ -415,7 +415,8 @@ static int ssl_servername_cb(SSL *s, int *ad, void *arg)
 
 static void tcpd_server_rebind(lua_State *L, SERVER *serv)
 {
-  if (serv->listener) {
+  if (serv->listener)
+  {
     evconnlistener_free(serv->listener);
     serv->listener = NULL;
   }
@@ -540,7 +541,8 @@ LUA_API int tcpd_bind(lua_State *L)
     lua_pop(L, 2);
   }
 #else
-  if (ssl) {
+  if (ssl)
+  {
     luaL_error(L, "ssl is not supported on micro version.");
   }
 #endif
@@ -780,10 +782,13 @@ static void luatcpd_reconnect(Conn *conn)
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &conn->receive_buffer_size,
                sizeof(conn->receive_buffer_size));
   }
-    
-    if (conn->interface) {
-        setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
-    }
+
+#ifdef IP_BOUND_IF
+  if (conn->interface)
+  {
+    setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
+  }
+#endif
 
   if (rc < 0)
   {
@@ -1049,7 +1054,8 @@ LUA_API int tcpd_connect(lua_State *L)
     bytearray_dealloc(&ba);
   }
 #else
-  if (ssl) {
+  if (ssl)
+  {
     luaL_error(L, "ssl is not supported on micro version.");
   }
 #endif
@@ -1066,13 +1072,14 @@ LUA_API int tcpd_connect(lua_State *L)
   lua_Number write_timeout = (int)luaL_optnumber(L, -1, 0);
   conn->write_timeout = write_timeout;
   lua_pop(L, 1);
-    
-    lua_getfield(L, 1, "interface");
-    if (lua_type(L, -1) == LUA_TSTRING) {
-        const char *interface = lua_tostring(L, -1);
-        conn->interface = if_nametoindex(interface);
-    }
-    lua_pop(L, 1);
+
+  lua_getfield(L, 1, "interface");
+  if (lua_type(L, -1) == LUA_TSTRING)
+  {
+    const char *interface = lua_tostring(L, -1);
+    conn->interface = if_nametoindex(interface);
+  }
+  lua_pop(L, 1);
 
   luaL_getmetatable(L, LUA_TCPD_CONNECTION_TYPE);
   lua_setmetatable(L, -2);
@@ -1183,7 +1190,7 @@ LUA_API int tcpd_accept_getsockname(lua_State *L)
 
   struct sockaddr_storage ss;
   socklen_t len = sizeof(struct sockaddr_storage);
-  if (getsockname(fd, (struct sockaddr*)&ss, &len))
+  if (getsockname(fd, (struct sockaddr *)&ss, &len))
   {
     lua_pushnil(L);
     lua_pushfstring(L, "getsockname: %s", strerror(errno));

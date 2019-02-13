@@ -352,7 +352,8 @@ LUA_API int luafan_fifo_close(lua_State *L)
 LUA_API int luafan_fifo_gc(lua_State *L) { return luafan_fifo_close(L); }
 
 static const struct luaL_Reg fifolib[] = {
-    {"connect", luafan_fifo_connect}, {NULL, NULL},
+    {"connect", luafan_fifo_connect},
+    {NULL, NULL},
 };
 
 LUA_API int luaopen_fan_fifo(lua_State *L)

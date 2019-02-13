@@ -645,7 +645,7 @@ LUA_API int luaopen_fan_httpd_core(lua_State *L)
   lua_pushstring(L, "__index");
   lua_pushvalue(L, -2);
   lua_rawset(L, -3);
-  
+
   lua_pop(L, 1);
 
   lua_newtable(L);
