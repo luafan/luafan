@@ -2,7 +2,7 @@
 [![CircleCI](https://circleci.com/gh/luafan/luafan.svg?style=svg)](https://circleci.com/gh/luafan/luafan)
 [GitHub](https://github.com/luafan/luafan)
 
-# LUAFAN
+# LUAFAN (Powered by: LUAFAN LAB LTD)
 
 luafan is a non-blocking/single-process module collection to lua, full supported lua coroutine.
 luafan simulated blocking code style over non-blocking implementation.
