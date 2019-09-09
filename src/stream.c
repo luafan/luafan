@@ -207,13 +207,10 @@ LUA_API int luafan_stream_get_string(lua_State *L)
 LUA_API int luafan_stream_mark(lua_State *L)
 {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  if (ffi_stream_mark(ba))
-  {
+  if (ffi_stream_mark(ba)) {
     lua_pushboolean(L, true);
     return 1;
-  }
-  else
-  {
+  } else {
     return 0;
   }
 }
@@ -221,13 +218,10 @@ LUA_API int luafan_stream_mark(lua_State *L)
 LUA_API int luafan_stream_reset(lua_State *L)
 {
   BYTEARRAY *ba = (BYTEARRAY *)luaL_checkudata(L, 1, LUA_STREAM_TYPE);
-  if (ffi_stream_reset(ba))
-  {
+  if (ffi_stream_reset(ba)) {
     lua_pushboolean(L, true);
     return 1;
-  }
-  else
-  {
+  } else {
     return 0;
   }
 }
@@ -319,8 +313,7 @@ LUA_API int luafan_stream_tostring(lua_State *L)
 }
 
 static const struct luaL_Reg streamlib[] = {
-    {"new", luafan_stream_new},
-    {NULL, NULL},
+    {"new", luafan_stream_new}, {NULL, NULL},
 };
 
 static const struct luaL_Reg streammtlib[] = {

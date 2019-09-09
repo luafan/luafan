@@ -446,11 +446,9 @@ LUA_API int luafan_objectbuf_encode(lua_State *L)
       bytearray_alloc(&d, 0);
 
       int tb_count = 0;
-      while (true)
-      {
+      while (true) {
         lua_rawgeti(L, tb_idx, tb_count + 1);
-        if (lua_isnil(L, -1))
-        {
+        if(lua_isnil(L, -1)) {
           lua_pop(L, 1);
           break;
         }
@@ -480,8 +478,7 @@ LUA_API int luafan_objectbuf_encode(lua_State *L)
         // ignore previously added array part.
         lua_Number value = lua_tonumber(L, -2);
         // suppose index no more than max int.
-        if (value == (int)value && value <= tb_count && value > 0)
-        {
+        if (value == (int)value && value <= tb_count && value > 0) {
           lua_pop(L, 1);
           continue;
         }
@@ -717,8 +714,7 @@ LUA_API int luafan_objectbuf_decode(lua_State *L)
       }
 
       int j = 1;
-      for (; j <= count; j++)
-      {
+      for(; j <= count; j++) {
         uint32_t vi = 0;
         if (!ffi_stream_get_u30(&d, &vi))
         {

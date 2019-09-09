@@ -70,9 +70,8 @@ int _utlua_resume(lua_State *co, lua_State *from, int count)
 
 FAN_RESUME_TPYE FAN_RESUME = &_utlua_resume;
 
-void utlua_set_resume(FAN_RESUME_TPYE resume)
-{
-  FAN_RESUME = resume;
+void utlua_set_resume(FAN_RESUME_TPYE resume){
+    FAN_RESUME = resume;
 }
 
 void d2tv(double x, struct timeval *tv)

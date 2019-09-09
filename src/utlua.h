@@ -35,6 +35,9 @@
 #include <stdbool.h>
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #if TARGET_OS_IPHONE
 #include <lua53/lauxlib.h>
 #include <lua53/lua.h>
@@ -43,6 +46,9 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
+#endif
+#ifdef __cplusplus
+}
 #endif
 
 #include <event.h>

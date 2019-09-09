@@ -191,43 +191,37 @@ static void http_getpost_complete(ConnInfo *conn)
     curl_easy_getinfo(conn->easy, CURLINFO_RESPONSE_CODE, &responseCode);
 
     double dns_time = 0;
-    if (curl_easy_getinfo(conn->easy, CURLINFO_NAMELOOKUP_TIME, &dns_time) == CURLE_OK)
-    {
+    if (curl_easy_getinfo(conn->easy, CURLINFO_NAMELOOKUP_TIME, &dns_time) == CURLE_OK) {
         lua_pushnumber(L, dns_time);
         lua_setfield(L, -2, "dns_time");
     }
 
     double connect_time = 0;
-    if (curl_easy_getinfo(conn->easy, CURLINFO_CONNECT_TIME, &connect_time) == CURLE_OK)
-    {
+    if (curl_easy_getinfo(conn->easy, CURLINFO_CONNECT_TIME, &connect_time) == CURLE_OK) {
         lua_pushnumber(L, connect_time);
         lua_setfield(L, -2, "connect_time");
     }
 
     double appconnect_time = 0;
-    if (curl_easy_getinfo(conn->easy, CURLINFO_APPCONNECT_TIME, &appconnect_time) == CURLE_OK)
-    {
+    if (curl_easy_getinfo(conn->easy, CURLINFO_APPCONNECT_TIME, &appconnect_time) == CURLE_OK) {
         lua_pushnumber(L, appconnect_time);
         lua_setfield(L, -2, "appconnect_time");
     }
 
     double pretransfer_time = 0;
-    if (curl_easy_getinfo(conn->easy, CURLINFO_PRETRANSFER_TIME, &pretransfer_time) == CURLE_OK)
-    {
+    if (curl_easy_getinfo(conn->easy, CURLINFO_PRETRANSFER_TIME, &pretransfer_time) == CURLE_OK) {
         lua_pushnumber(L, pretransfer_time);
         lua_setfield(L, -2, "pretransfer_time");
     }
 
     double starttransfer_time = 0;
-    if (curl_easy_getinfo(conn->easy, CURLINFO_STARTTRANSFER_TIME, &starttransfer_time) == CURLE_OK)
-    {
+    if (curl_easy_getinfo(conn->easy, CURLINFO_STARTTRANSFER_TIME, &starttransfer_time) == CURLE_OK) {
         lua_pushnumber(L, starttransfer_time);
         lua_setfield(L, -2, "starttransfer_time");
     }
 
     double total_time = 0;
-    if (curl_easy_getinfo(conn->easy, CURLINFO_TOTAL_TIME, &total_time) == CURLE_OK)
-    {
+    if (curl_easy_getinfo(conn->easy, CURLINFO_TOTAL_TIME, &total_time) == CURLE_OK) {
         lua_pushnumber(L, total_time);
         lua_setfield(L, -2, "total_time");
     }

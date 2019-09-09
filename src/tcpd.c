@@ -45,8 +45,8 @@ typedef struct
 
   int send_buffer_size;
   int receive_buffer_size;
-
-  int interface;
+    
+    int interface;
 
   lua_Number read_timeout;
   lua_Number write_timeout;
@@ -69,10 +69,11 @@ typedef struct
   int port;
 
   int ipv6;
-
+  
 #if FAN_HAS_OPENSSL
   int ssl;
   SSL_CTX *ctx;
+  EC_KEY *ecdh;
 #endif
 
   int send_buffer_size;
@@ -123,7 +124,9 @@ LUA_API int lua_tcpd_server_close(lua_State *L)
   if (serv->ctx)
   {
     SSL_CTX_free(serv->ctx);
+    EC_KEY_free(serv->ecdh);
     serv->ctx = NULL;
+    serv->ecdh = NULL;
   }
 #endif
 
@@ -415,8 +418,7 @@ static int ssl_servername_cb(SSL *s, int *ad, void *arg)
 
 static void tcpd_server_rebind(lua_State *L, SERVER *serv)
 {
-  if (serv->listener)
-  {
+  if (serv->listener) {
     evconnlistener_free(serv->listener);
     serv->listener = NULL;
   }
@@ -493,6 +495,10 @@ LUA_API int tcpd_bind(lua_State *L)
 
   SERVER *serv = lua_newuserdata(L, sizeof(SERVER));
   memset(serv, 0, sizeof(SERVER));
+    luaL_getmetatable(L, LUA_TCPD_SERVER_TYPE);
+    lua_setmetatable(L, -2);
+    
+    serv->mainthread = utlua_mainthread(L);
 
   SET_FUNC_REF_FROM_TABLE(L, serv->onAcceptRef, 1, "onaccept")
   SET_FUNC_REF_FROM_TABLE(L, serv->onSSLHostNameRef, 1, "onsslhostname")
@@ -524,13 +530,13 @@ LUA_API int tcpd_bind(lua_State *L)
                           SSL_OP_SINGLE_DH_USE | SSL_OP_SINGLE_ECDH_USE |
                               0); // SSL_OP_NO_SSLv2
 
-      EC_KEY *ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
-      if (!ecdh)
+      serv->ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+      if (!serv->ecdh)
       {
         die_most_horribly_from_openssl_error("EC_KEY_new_by_curve_name");
       }
 
-      if (1 != SSL_CTX_set_tmp_ecdh(ctx, ecdh))
+      if (1 != SSL_CTX_set_tmp_ecdh(ctx, serv->ecdh))
       {
         die_most_horribly_from_openssl_error("SSL_CTX_set_tmp_ecdh");
       }
@@ -541,19 +547,13 @@ LUA_API int tcpd_bind(lua_State *L)
     lua_pop(L, 2);
   }
 #else
-  if (ssl)
-  {
+  if (ssl) {
     luaL_error(L, "ssl is not supported on micro version.");
   }
 #endif
 
   SET_INT_FROM_TABLE(L, serv->send_buffer_size, 1, "send_buffer_size")
   SET_INT_FROM_TABLE(L, serv->receive_buffer_size, 1, "receive_buffer_size")
-
-  luaL_getmetatable(L, LUA_TCPD_SERVER_TYPE);
-  lua_setmetatable(L, -2);
-
-  serv->mainthread = utlua_mainthread(L);
 
   lua_getfield(L, 1, "ipv6");
   serv->ipv6 = lua_toboolean(L, -1);
@@ -782,13 +782,10 @@ static void luatcpd_reconnect(Conn *conn)
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &conn->receive_buffer_size,
                sizeof(conn->receive_buffer_size));
   }
-
-#ifdef IP_BOUND_IF
-  if (conn->interface)
-  {
-    setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
-  }
-#endif
+    
+    if (conn->interface) {
+        setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
+    }
 
   if (rc < 0)
   {
@@ -895,6 +892,11 @@ LUA_API int tcpd_connect(lua_State *L)
 
   Conn *conn = lua_newuserdata(L, sizeof(Conn));
   memset(conn, 0, sizeof(Conn));
+    luaL_getmetatable(L, LUA_TCPD_CONNECTION_TYPE);
+    lua_setmetatable(L, -2);
+    
+    conn->mainthread = utlua_mainthread(L);
+
   conn->buf = NULL;
 #if FAN_HAS_OPENSSL
   conn->sslctx = NULL;
@@ -1054,8 +1056,7 @@ LUA_API int tcpd_connect(lua_State *L)
     bytearray_dealloc(&ba);
   }
 #else
-  if (ssl)
-  {
+  if (ssl) {
     luaL_error(L, "ssl is not supported on micro version.");
   }
 #endif
@@ -1072,19 +1073,13 @@ LUA_API int tcpd_connect(lua_State *L)
   lua_Number write_timeout = (int)luaL_optnumber(L, -1, 0);
   conn->write_timeout = write_timeout;
   lua_pop(L, 1);
-
-  lua_getfield(L, 1, "interface");
-  if (lua_type(L, -1) == LUA_TSTRING)
-  {
-    const char *interface = lua_tostring(L, -1);
-    conn->interface = if_nametoindex(interface);
-  }
-  lua_pop(L, 1);
-
-  luaL_getmetatable(L, LUA_TCPD_CONNECTION_TYPE);
-  lua_setmetatable(L, -2);
-
-  conn->mainthread = utlua_mainthread(L);
+    
+    lua_getfield(L, 1, "interface");
+    if (lua_type(L, -1) == LUA_TSTRING) {
+        const char *interface = lua_tostring(L, -1);
+        conn->interface = if_nametoindex(interface);
+    }
+    lua_pop(L, 1);
 
   luatcpd_reconnect(conn);
   return 1;
@@ -1190,7 +1185,7 @@ LUA_API int tcpd_accept_getsockname(lua_State *L)
 
   struct sockaddr_storage ss;
   socklen_t len = sizeof(struct sockaddr_storage);
-  if (getsockname(fd, (struct sockaddr *)&ss, &len))
+  if (getsockname(fd, (struct sockaddr*)&ss, &len))
   {
     lua_pushnil(L);
     lua_pushfstring(L, "getsockname: %s", strerror(errno));
@@ -1256,14 +1251,18 @@ LUA_API int tcpd_accept_read_resume(lua_State *L)
 LUA_API int tcpd_conn_read_pause(lua_State *L)
 {
   Conn *conn = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
-  bufferevent_disable(conn->buf, EV_READ);
+    if (conn->buf) {
+        bufferevent_disable(conn->buf, EV_READ);
+    }
   return 0;
 }
 
 LUA_API int tcpd_conn_read_resume(lua_State *L)
 {
   Conn *conn = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
-  bufferevent_enable(conn->buf, EV_READ);
+    if (conn->buf) {
+        bufferevent_enable(conn->buf, EV_READ);
+    }
   return 0;
 }
 
@@ -1300,8 +1299,15 @@ LUA_API int tcpd_conn_send(lua_State *L)
       }
     }
     bufferevent_write(conn->buf, data, len);
+
+      size_t total = evbuffer_get_length(bufferevent_get_output(conn->buf));
+      lua_pushinteger(L, total);
+  } else {
+      lua_pushinteger(L, -1);
   }
-  return 0;
+    
+  
+  return 1;
 }
 
 LUA_API int tcpd_conn_reconnect(lua_State *L)
@@ -1328,8 +1334,13 @@ LUA_API int tcpd_accept_send(lua_State *L)
   if (data && len > 0 && accept->buf)
   {
     bufferevent_write(accept->buf, data, len);
+      size_t total = evbuffer_get_length(bufferevent_get_output(accept->buf));
+      lua_pushinteger(L, total);
+  } else {
+      lua_pushinteger(L, -1);
   }
-  return 0;
+    
+  return 1;
 }
 
 LUA_API int luaopen_fan_tcpd(lua_State *L)

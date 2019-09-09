@@ -25,7 +25,7 @@ typedef struct
   struct sockaddr addr;
   socklen_t addrlen;
 
-  int interface;
+    int interface;
 
   struct event *read_ev;
   struct event *write_ev;
@@ -149,18 +149,16 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
 {
   if (conn->socket_fd)
   {
-    EVUTIL_CLOSESOCKET(conn->socket_fd);
+    EVUTIL_CLOSESOCKET(conn->socket_fd);    
     conn->socket_fd = 0;
   }
 
-  if (conn->write_ev)
-  {
+  if (conn->write_ev) {
     event_free(conn->write_ev);
     conn->write_ev = NULL;
   }
 
-  if (conn->read_ev)
-  {
+  if (conn->read_ev) {
     event_free(conn->read_ev);
     conn->read_ev = NULL;
   }
@@ -183,13 +181,10 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
   {
     return 0;
   }
-
-#ifdef IP_BOUND_IF
-  if (conn->interface)
-  {
-    setsockopt(socket_fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
-  }
-#endif
+    
+    if (conn->interface) {
+        setsockopt(socket_fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
+    }
 
   if (conn->bind_host)
   {
@@ -237,15 +232,14 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
     }
   }
 
-  if (!conn->bind_port)
+  if(!conn->bind_port)
   {
     struct sockaddr_in addr;
     socklen_t len = sizeof(addr);
-    if (getsockname(socket_fd, (struct sockaddr *)&addr, &len) == -1)
-    {
+    if (getsockname(socket_fd, (struct sockaddr *)&addr, &len) == -1) {
       return 0;
     }
-
+    
     conn->bind_port = ntohs(addr.sin_port);
   }
 
@@ -339,14 +333,13 @@ LUA_API int udpd_new(lua_State *L)
 
   Conn *conn = lua_newuserdata(L, sizeof(Conn));
   memset(conn, 0, sizeof(Conn));
-
-  lua_getfield(L, 1, "interface");
-  if (lua_type(L, -1) == LUA_TSTRING)
-  {
-    const char *interface = lua_tostring(L, -1);
-    conn->interface = if_nametoindex(interface);
-  }
-  lua_pop(L, 1);
+    
+    lua_getfield(L, 1, "interface");
+    if (lua_type(L, -1) == LUA_TSTRING) {
+        const char *interface = lua_tostring(L, -1);
+        conn->interface = if_nametoindex(interface);
+    }
+    lua_pop(L, 1);
 
   SET_FUNC_REF_FROM_TABLE(L, conn->onReadRef, 1, "onread")
   SET_FUNC_REF_FROM_TABLE(L, conn->onSendReadyRef, 1, "onsendready")
@@ -505,15 +498,13 @@ LUA_API int udpd_conn_send(lua_State *L)
   }
 
   lua_pushinteger(L, ret);
-
+  
   if (ret < 0)
   {
     lua_pushstring(L, strerror(errno));
     return 2;
-  }
-  else
-  {
-    return 1;
+  } else {
+    return 1;    
   }
 }
 

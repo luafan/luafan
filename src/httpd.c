@@ -417,6 +417,7 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L)
       lua_pushstring(L, item->value);
       lua_setfield(L, -2, item->key);
     }
+      evhttp_clear_headers(&params);
 
     struct evkeyvalq *headers = evhttp_request_get_input_headers(req);
     const char *contentType = evhttp_find_header(headers, "Content-Type");
@@ -437,6 +438,7 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L)
           lua_pushstring(L, item->value);
           lua_setfield(L, -2, item->key);
         }
+          evhttp_clear_headers(&params);
       }
     }
     return 1;
@@ -645,7 +647,7 @@ LUA_API int luaopen_fan_httpd_core(lua_State *L)
   lua_pushstring(L, "__index");
   lua_pushvalue(L, -2);
   lua_rawset(L, -3);
-
+  
   lua_pop(L, 1);
 
   lua_newtable(L);

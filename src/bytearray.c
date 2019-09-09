@@ -163,7 +163,7 @@ bool bytearray_empty(BYTEARRAY *ba)
 
 bool bytearray_write_ready(BYTEARRAY *ba)
 {
-  if (ba == NULL || !ba->reading || ba->total == 0 || ba->buffer == NULL)
+  if (ba == NULL || !ba->reading || ba->buffer == NULL)
   {
     return false;
   }

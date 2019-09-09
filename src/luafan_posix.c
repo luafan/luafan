@@ -43,22 +43,23 @@ LUA_API int luafan_getdtablesize(lua_State *L)
   return 1;
 }
 
+
 LUA_API int luafan_setpgid(lua_State *L)
 {
-  int result = setpgid((pid_t)luaL_optinteger(L, 1, 0), (pid_t)luaL_optinteger(L, 2, 0));
+  int result = setpgid((pid_t) luaL_optinteger(L, 1, 0), (pid_t) luaL_optinteger(L, 2, 0));
   return luafan_push_result(L, result);
 }
 
 LUA_API int luafan_open(lua_State *L)
 {
-  int result = open(luaL_checkstring(L, 1), (int)luaL_optinteger(L, 2, O_RDWR),
+  int result = open(luaL_checkstring(L, 1), (int) luaL_optinteger(L, 2, O_RDWR),
                     luaL_optinteger(L, 3, 0));
   return luafan_push_result(L, result);
 }
 
 LUA_API int luafan_close(lua_State *L)
 {
-  int result = close((int)luaL_checkinteger(L, 1));
+  int result = close((int) luaL_checkinteger(L, 1));
   return luafan_push_result(L, result);
 }
 
@@ -76,6 +77,7 @@ LUA_API int luafan_setsid(lua_State *L)
 extern char *__progname;
 #endif
 
+
 LUA_API int luafan_setprogname(lua_State *L)
 {
 #if TARGET_OS_IOS == 0
@@ -90,7 +92,7 @@ LUA_API int luafan_setprogname(lua_State *L)
 
 LUA_API int luafan_getpgid(lua_State *L)
 {
-  int result = getpgid((pid_t)luaL_optinteger(L, 1, 0));
+  int result = getpgid((pid_t) luaL_optinteger(L, 1, 0));
   return luafan_push_result(L, result);
 }
 
@@ -214,7 +216,7 @@ LUA_API int luafan_getcpucount(lua_State *L)
 
 LUA_API int luafan_kill(lua_State *L)
 {
-  if (kill(luaL_optinteger(L, 1, -1), (pid_t)luaL_optinteger(L, 2, SIGTERM)))
+  if (kill(luaL_optinteger(L, 1, -1), (pid_t) luaL_optinteger(L, 2, SIGTERM)))
   {
     lua_pushnil(L);
     lua_pushstring(L, strerror(errno));
@@ -231,7 +233,7 @@ LUA_API int luafan_waitpid(lua_State *L)
 {
   int stat = 0;
   int result =
-      waitpid((pid_t)luaL_optinteger(L, 1, -1), &stat, (int)luaL_optinteger(L, 2, -1));
+      waitpid((pid_t) luaL_optinteger(L, 1, -1), &stat, (int) luaL_optinteger(L, 2, -1));
   if (result == -1)
   {
     lua_pushnil(L);
@@ -269,10 +271,9 @@ LUA_API int luafan_getinterfaces(lua_State *L)
   for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
   {
     lua_newtable(L);
-    if (ifa->ifa_name)
-    {
-      lua_pushstring(L, ifa->ifa_name);
-      lua_setfield(L, -2, "name");
+    if (ifa->ifa_name) {
+        lua_pushstring(L, ifa->ifa_name);
+        lua_setfield(L, -2, "name");
     }
     if (ifa->ifa_addr)
     {
