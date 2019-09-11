@@ -181,10 +181,12 @@ static int luaudpd_reconnect(Conn *conn, lua_State *L)
   {
     return 0;
   }
-    
+
+#ifdef IP_BOUND_IF
     if (conn->interface) {
         setsockopt(socket_fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
     }
+#endif
 
   if (conn->bind_host)
   {

@@ -784,9 +784,11 @@ static void luatcpd_reconnect(Conn *conn)
                sizeof(conn->receive_buffer_size));
   }
     
+#ifdef IP_BOUND_IF
     if (conn->interface) {
         setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
     }
+#endif
 
   if (rc < 0)
   {

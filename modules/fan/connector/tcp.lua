@@ -43,7 +43,6 @@ function apt_mt:receive(expect)
     self.receiving = coroutine.running()
 
     local input = coroutine.yield()
-
     self.receiving_expect = 0
     self.receiving = nil
 
@@ -99,7 +98,7 @@ local function connect(host, port, path, args)
   local running = coroutine.running()
 
   local t = {_readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
-  local weak_t = utils.weakify_object(t)
+  local weak_t = t -- utils.weakify_object(t)
   local params = {
     host = host,
     port = port,
@@ -107,6 +106,8 @@ local function connect(host, port, path, args)
       coroutine.resume(running)
     end,
     onread = function(buf)
+      collectgarbage()
+      
       local t = weak_t
 
       if verbose then
@@ -118,13 +119,17 @@ local function connect(host, port, path, args)
       t._readstream:prepare_get()
 
       if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
-        t.conn:pause_read()
+        if t.conn then
+          t.conn:pause_read()
+        end
       end
 
       t:_onread(t._readstream)
 
       if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
-        t.conn:resume_read()
+        if t.conn then
+          t.conn:resume_read()
+        end
       end
     end,
     onsendready = function()
