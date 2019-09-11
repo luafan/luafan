@@ -596,11 +596,12 @@ static void tcpd_conn_readcb(struct bufferevent *bev, void *ctx)
   {
     lua_State *mainthread = conn->mainthread;
     lua_lock(mainthread);
+    lua_rawgeti(mainthread, LUA_REGISTRYINDEX, conn->onReadRef);
     lua_State *co = lua_newthread(mainthread);
     PUSH_REF(mainthread);
+    lua_xmove(mainthread, co, 1);
     lua_unlock(mainthread);
 
-    lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
     lua_pushlstring(co, (const char *)ba.buffer, ba.total);
     FAN_RESUME(co, mainthread, 1);
     POP_REF(mainthread);

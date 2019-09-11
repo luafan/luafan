@@ -3,7 +3,7 @@ local stream = require "fan.stream"
 local config = require "config"
 local utils = require "fan.utils"
 
-local TCP_PAUSE_READ_WRITE_ON_CALLBACK = config.tcp_pause_read_write_on_callback
+local TCP_PAUSE_READ_WRITE_ON_CALLBACK = config.tcp_pause_read_write_on_callback == nil and true or config.tcp_pause_read_write_on_callback
 
 local apt_mt = {}
 apt_mt.__index = apt_mt
@@ -99,8 +99,7 @@ local function connect(host, port, path, args)
   local running = coroutine.running()
 
   local t = {_readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
-  t._pack = {t}
-  local weak_t = utils.weakify_object(t._pack)
+  local weak_t = utils.weakify_object(t)
   local params = {
     host = host,
     port = port,
@@ -108,11 +107,7 @@ local function connect(host, port, path, args)
       coroutine.resume(running)
     end,
     onread = function(buf)
-      local t = weak_t[1]
-
-      if not t then
-        return
-      end
+      local t = weak_t
 
       if verbose then
         print("[CONNECTOR][READ]", buf)
@@ -133,23 +128,21 @@ local function connect(host, port, path, args)
       end
     end,
     onsendready = function()
-      local t = weak_t[1]
+      local t = weak_t
       t:_onsendready()
     end,
     ondisconnected = function(msg)
       if config.debug then
         print("client ondisconnected", msg)
       end
-      local t = weak_t[1]
-
-      if t then
-        t.disconnected_message = msg
-        t:close()
-      end
+      local t = weak_t
+      t.disconnected_message = msg
 
       if running then
         coroutine.resume(running)
       end
+
+      t:close()
     end
   }
 
