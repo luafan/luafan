@@ -35,7 +35,8 @@ static int stmt_store_result_start(lua_State *L, st_data *st) {
     wait_for_status(L, st->conn_data, st, status, stmt_store_result_cont, 0);
     return CONTINUE_YIELD;
   } else if (ret == 0) {
-    return 0;
+    lua_pushboolean(L, 1);
+    return 1;
   } else {
     return luamariadb_push_stmt_error(L, st);
   }
