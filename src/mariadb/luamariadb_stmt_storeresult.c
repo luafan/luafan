@@ -15,7 +15,8 @@ static void stmt_store_result_cont(int fd, short event, void *_userdata) {
       wait_for_status(L, st->conn_data, st, status, stmt_store_result_cont,
                       ms->extra);
     } else if (ret == 0) {
-      FAN_RESUME(L, NULL, 0);
+      lua_pushboolean(L, 1);
+      FAN_RESUME(L, NULL, 1);
       UNREF_CO(st);
     } else {
       FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));

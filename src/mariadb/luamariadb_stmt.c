@@ -23,7 +23,8 @@ static void *get_or_create_ud(lua_State *L, int tableidx, int *ref,
 
 static int luamariadb_push_stmt_error(lua_State *L, st_data *st) {
   lua_pushnil(L);
-  lua_pushstring(L, mysql_stmt_error(st->my_stmt));
+  lua_pushfstring(L, "stmt_error: %d: %s",
+	  mysql_stmt_errno(st->my_stmt), mysql_stmt_error(st->my_stmt));
 
   return 2;
 }

@@ -62,18 +62,12 @@ local function bind_values(stmt, ...)
   if config.debug then
     print("bind_values", ...)
   end
-  -- local tb = {...}
-  -- for i,v in ipairs(tb) do
-  --   if v == json.null then
-  --     tb[i] = nil
-  --   end
-  -- end
 
   if not stmt then
     print(debug.traceback())
   end
 
-  stmt:bind_param(...) -- table.unpack(tb, 1, maxn(tb))
+  stmt:bind_param(...)
 end
 
 local function execute(db, ...)
