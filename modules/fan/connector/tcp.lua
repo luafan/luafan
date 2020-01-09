@@ -94,7 +94,7 @@ function apt_mt:close()
 end
 
 local function connect(host, port, path, args)
-  local verbose = args.verbose == 1
+  local verbose = args and args.verbose == 1 or false
   local running = coroutine.running()
 
   local t = {_readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
