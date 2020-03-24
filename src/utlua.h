@@ -65,7 +65,7 @@ extern "C" {
 #include <openssl/pkcs12.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
-#include "openssl_hostname_validation.h"
+#include <openssl/x509v3.h>
 
 #include <event2/bufferevent_ssl.h>
 #endif

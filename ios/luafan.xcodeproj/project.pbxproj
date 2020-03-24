@@ -19,7 +19,6 @@
 		225C475D1F5CFAF300DCC767 /* luafan.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47291F5CFAF300DCC767 /* luafan.c */; };
 		225C47621F5CFAF300DCC767 /* luasql.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C472E1F5CFAF300DCC767 /* luasql.c */; };
 		225C47741F5CFAF300DCC767 /* objectbuf.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47421F5CFAF300DCC767 /* objectbuf.c */; };
-		225C47761F5CFAF300DCC767 /* openssl_hostname_validation.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47441F5CFAF300DCC767 /* openssl_hostname_validation.c */; };
 		225C47781F5CFAF300DCC767 /* stream.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47471F5CFAF300DCC767 /* stream.c */; };
 		225C477A1F5CFAF300DCC767 /* stream_ffi.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C47491F5CFAF300DCC767 /* stream_ffi.c */; };
 		225C477B1F5CFAF300DCC767 /* tcpd.c in Sources */ = {isa = PBXBuildFile; fileRef = 225C474A1F5CFAF300DCC767 /* tcpd.c */; };
@@ -60,8 +59,6 @@
 		225C472E1F5CFAF300DCC767 /* luasql.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = luasql.c; sourceTree = "<group>"; };
 		225C472F1F5CFAF300DCC767 /* luasql.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = luasql.h; sourceTree = "<group>"; };
 		225C47421F5CFAF300DCC767 /* objectbuf.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = objectbuf.c; sourceTree = "<group>"; };
-		225C47441F5CFAF300DCC767 /* openssl_hostname_validation.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = openssl_hostname_validation.c; sourceTree = "<group>"; };
-		225C47451F5CFAF300DCC767 /* openssl_hostname_validation.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = openssl_hostname_validation.h; sourceTree = "<group>"; };
 		225C47471F5CFAF300DCC767 /* stream.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = stream.c; sourceTree = "<group>"; };
 		225C47491F5CFAF300DCC767 /* stream_ffi.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = stream_ffi.c; sourceTree = "<group>"; };
 		225C474A1F5CFAF300DCC767 /* tcpd.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = tcpd.c; sourceTree = "<group>"; };
@@ -129,8 +126,6 @@
 				225C472E1F5CFAF300DCC767 /* luasql.c */,
 				225C472F1F5CFAF300DCC767 /* luasql.h */,
 				225C47421F5CFAF300DCC767 /* objectbuf.c */,
-				225C47441F5CFAF300DCC767 /* openssl_hostname_validation.c */,
-				225C47451F5CFAF300DCC767 /* openssl_hostname_validation.h */,
 				225C47471F5CFAF300DCC767 /* stream.c */,
 				225C47491F5CFAF300DCC767 /* stream_ffi.c */,
 				225C474A1F5CFAF300DCC767 /* tcpd.c */,
@@ -201,6 +196,7 @@
 			developmentRegion = English;
 			hasScannedForEncodings = 0;
 			knownRegions = (
+				English,
 				en,
 			);
 			mainGroup = 225C47031F5CFAAC00DCC767;
@@ -261,7 +257,6 @@
 				225C47571F5CFAF300DCC767 /* hostcheck.c in Sources */,
 				225C47111F5CFAAC00DCC767 /* luafan.m in Sources */,
 				225C47511F5CFAF300DCC767 /* bytearray.c in Sources */,
-				225C47761F5CFAF300DCC767 /* openssl_hostname_validation.c in Sources */,
 				225C47531F5CFAF300DCC767 /* event_mgr.c in Sources */,
 				225C477F1F5CFAF300DCC767 /* utlua.c in Sources */,
 				225C475B1F5CFAF300DCC767 /* httpd.c in Sources */,

@@ -94,13 +94,6 @@ int event_mgr_init()
     dnsbase = evdns_base_new(event_mgr_base(), 1);
     evdns_base_set_option(dnsbase, "randomize-case:", "0");
 
-#if FAN_HAS_OPENSSL
-    SSL_library_init();
-    ERR_load_crypto_strings();
-    SSL_load_error_strings();
-    OpenSSL_add_all_algorithms();
-#endif
-
     signal(SIGHUP, signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
@@ -138,13 +131,6 @@ int event_mgr_loop()
 
     event_del(&signal_int);
     event_del(&signal_pipe);
-
-#if FAN_HAS_OPENSSL
-    EVP_cleanup();
-    CRYPTO_cleanup_all_ex_data();
-    ERR_remove_state(0);
-    ERR_free_strings();
-#endif
 
     evdns_base_free(dnsbase, 0);
     dnsbase = NULL;

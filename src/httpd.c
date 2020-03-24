@@ -540,7 +540,7 @@ LUA_API int utd_bind(lua_State *L)
 
   if (cert && key)
   {
-    SSL_CTX *ctx = SSL_CTX_new(SSLv23_server_method());
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
     server->ctx = ctx;
     SSL_CTX_set_options(ctx,
                         SSL_OP_SINGLE_DH_USE | SSL_OP_SINGLE_ECDH_USE |
