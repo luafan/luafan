@@ -16,11 +16,10 @@ static int LONG_DATA = 0; // &LONG_DATA used as mariadb const.
     (bind)->is_null = 0;                         \
   }
 
-#define MYSQL_SET_ULONGLONG(bind, buff)        \
+#define MYSQL_SET_LONGLONG(bind, buff)        \
   {                                            \
     (bind)->buffer_type = MYSQL_TYPE_LONGLONG; \
     (bind)->buffer = (buff);                   \
-    (bind)->is_unsigned = true;                \
     (bind)->buffer_length = sizeof(uint64_t);  \
     (bind)->is_null = 0;                       \
   }
@@ -114,17 +113,17 @@ typedef struct
   MYSQL my_conn;
   int coref;
   int coref_count;
-} conn_data;
+} DB_CTX;
 
-struct maria_status
+typedef struct
 {
   lua_State *L;
   void *data;
   int status;
   struct event *event;
-  conn_data *conn_data;
+  DB_CTX *ctx;
   int extra;
-};
+} DB_STATUS;
 
 typedef struct
 {
@@ -132,10 +131,10 @@ typedef struct
   int numcols;            /* number of columns */
   int colnames, coltypes; // ref in registry
   MYSQL_RES *my_res;
-  conn_data *conn_data;
+  DB_CTX *ctx;
   int coref;
   int coref_count;
-} cur_data;
+} CURSOR_CTX;
 
 typedef struct
 {
@@ -151,10 +150,10 @@ typedef struct
   int is_nulls;   // index in table
 
   MYSQL_STMT *my_stmt;
-  conn_data *conn_data;
+  DB_CTX *ctx;
   int coref;
   int coref_count;
-} st_data;
+} STMT_CTX;
 
 #define REF_CO(x)                              \
   if (x->coref == LUA_NOREF)                   \
@@ -179,24 +178,24 @@ typedef struct
     }                                             \
   }
 
-static void wait_for_status(lua_State *L, conn_data *conn, void *data,
+static void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
                             int status, event_callback_fn callback, int extra);
 
-#define LUASQL_CONNECTION_MYSQL "MySQL connection"
-#define LUASQL_STATEMENT_MYSQL "MySQL prepared statement"
-#define LUASQL_CURSOR_MYSQL "MySQL cursor"
+#define MARIADB_CONNECTION_METATABLE "MARIADB_CONNECTION_METATABLE"
+#define MARIADB_STATEMENT_METATABLE "MARIADB_STATEMENT_METATABLE"
+#define MARIADB_CURSOR_METATABLE "MARIADB_CURSOR_METATABLE"
 
 #define CONTINUE_YIELD -1
 
-static void wait_for_status(lua_State *L, conn_data *cdata, void *data,
+static void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
                             int status, event_callback_fn callback, int extra)
 {
-  struct maria_status *ms = malloc(sizeof(struct maria_status));
-  ms->data = data;
-  ms->L = L;
-  ms->status = status;
-  ms->conn_data = cdata;
-  ms->extra = extra;
+  DB_STATUS *bag = malloc(sizeof(DB_STATUS));
+  bag->data = data;
+  bag->L = L;
+  bag->status = status;
+  bag->ctx = ctx;
+  bag->extra = extra;
 
   short wait_event = 0;
   struct timeval tv, *ptv;
@@ -211,38 +210,38 @@ static void wait_for_status(lua_State *L, conn_data *cdata, void *data,
     wait_event |= EV_WRITE;
   }
   if (wait_event)
-    fd = mysql_get_socket(&cdata->my_conn);
+    fd = mysql_get_socket(&ctx->my_conn);
   else
     fd = -1;
   if (status & MYSQL_WAIT_TIMEOUT)
   {
-    tv.tv_sec = mysql_get_timeout_value(&cdata->my_conn);
+    tv.tv_sec = mysql_get_timeout_value(&ctx->my_conn);
     tv.tv_usec = 0;
     ptv = &tv;
   }
   else
     ptv = NULL;
 
-  ms->event = event_new(event_mgr_base(), fd, wait_event, callback, ms);
-  event_add(ms->event, ptv);
+  bag->event = event_new(event_mgr_base(), fd, wait_event, callback, bag);
+  event_add(bag->event, ptv);
 }
 
-static conn_data *getconnection(lua_State *L)
+static DB_CTX *getconnection(lua_State *L)
 {
-  conn_data *conn = (conn_data *)luaL_checkudata(L, 1, LUASQL_CONNECTION_MYSQL);
-  luaL_argcheck(L, conn != NULL, 1, "connection expected");
-  luaL_argcheck(L, !conn->closed, 1, "connection is closed");
-  return conn;
+  DB_CTX *ctx = (DB_CTX *)luaL_checkudata(L, 1, MARIADB_CONNECTION_METATABLE);
+  luaL_argcheck(L, ctx != NULL, 1, "connection expected");
+  luaL_argcheck(L, !ctx->closed, 1, "connection is closed");
+  return ctx;
 }
 
-static int luamariadb_push_errno(lua_State *L, conn_data *conn)
+static int luamariadb_push_errno(lua_State *L, DB_CTX *ctx)
 {
-  int errorcode = mysql_errno(&conn->my_conn);
+  int errorcode = mysql_errno(&ctx->my_conn);
   if (errorcode)
   {
     lua_pushnil(L);
-    printf("mysql_error: %s\n", mysql_error(&conn->my_conn));
-    lua_pushstring(L, mysql_error(&conn->my_conn));
+    printf("mysql_error: %s\n", mysql_error(&ctx->my_conn));
+    lua_pushstring(L, mysql_error(&ctx->my_conn));
     return 2;
   }
   else
@@ -269,16 +268,16 @@ static int luamariadb_push_errno(lua_State *L, conn_data *conn)
 */
 LUA_API int conn_getlastautoid(lua_State *L)
 {
-  conn_data *conn = getconnection(L);
-  lua_pushnumber(L, mysql_insert_id(&conn->my_conn));
+  DB_CTX *ctx = getconnection(L);
+  lua_pushnumber(L, mysql_insert_id(&ctx->my_conn));
   return 1;
 }
 
 LUA_API int conn_gc(lua_State *L)
 {
-  conn_data *conn = (conn_data *)luaL_checkudata(L, 1, LUASQL_CONNECTION_MYSQL);
+  DB_CTX *ctx = (DB_CTX *)luaL_checkudata(L, 1, MARIADB_CONNECTION_METATABLE);
 
-  if (conn != NULL && !(conn->closed))
+  if (ctx != NULL && !(ctx->closed))
   {
     return conn_close_start(L);
   }
@@ -288,20 +287,14 @@ LUA_API int conn_gc(lua_State *L)
 
 LUA_API int escape_string(lua_State *L)
 {
-  size_t size, new_size;
-  conn_data *conn = getconnection(L);
+  DB_CTX *ctx = getconnection(L);
+
+  size_t size = 0;
   const char *from = luaL_checklstring(L, 2, &size);
-  char *to;
-  to = (char *)malloc(sizeof(char) * (2 * size + 1));
-  if (to)
-  {
-    new_size = mysql_real_escape_string(&conn->my_conn, to, from, size);
-    lua_pushlstring(L, to, new_size);
-    free(to);
-    return 1;
-  }
-  luaL_error(L, "could not allocate escaped string");
-  return 0;
+  char *to = lua_newuserdata(L, 2 * size + 1);
+  size_t new_size = mysql_real_escape_string(&ctx->my_conn, to, from, size);
+  lua_pushlstring(L, to, new_size);
+  return 1;
 }
 
 /*
@@ -347,9 +340,9 @@ static void create_metatables(lua_State *L)
       {NULL, NULL},
   };
 
-  luasql_createmeta(L, LUASQL_CONNECTION_MYSQL, connection_methods);
-  luasql_createmeta(L, LUASQL_CURSOR_MYSQL, cursor_methods);
-  luasql_createmeta(L, LUASQL_STATEMENT_MYSQL, statement_methods);
+  luasql_createmeta(L, MARIADB_CONNECTION_METATABLE, connection_methods);
+  luasql_createmeta(L, MARIADB_CURSOR_METATABLE, cursor_methods);
+  luasql_createmeta(L, MARIADB_STATEMENT_METATABLE, statement_methods);
   lua_pop(L, 3);
 }
 
@@ -360,7 +353,8 @@ static void create_metatables(lua_State *L)
 LUA_API int luaopen_fan_mariadb(lua_State *L)
 {
   struct luaL_Reg driver[] = {
-      {"connect", real_connect_start}, {NULL, NULL},
+      {"connect", real_connect_start},
+      {NULL, NULL},
   };
   create_metatables(L);
 

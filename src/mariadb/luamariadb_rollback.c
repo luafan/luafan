@@ -1,43 +1,58 @@
-static void conn_rollback_event(int fd, short event, void *_userdata) {
-  struct maria_status *ms = (struct maria_status *)_userdata;
-  MYSQL *conn = (MYSQL *)ms->data;
-  lua_State *L = ms->L;
+static void conn_rollback_event(int fd, short event, void *_userdata)
+{
+  DB_STATUS *bag = (DB_STATUS *)_userdata;
+  MYSQL *conn = (MYSQL *)bag->data;
+  lua_State *L = bag->L;
 
   int errorcode = mysql_errno(conn);
-  if (errorcode) {
-    FAN_RESUME(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-    UNREF_CO(ms->conn_data);
-  } else {
+  if (errorcode)
+  {
+    FAN_RESUME(L, NULL, luamariadb_push_errno(L, bag->ctx));
+    UNREF_CO(bag->ctx);
+  }
+  else
+  {
     my_bool ret = 0;
-    int status = mysql_rollback_cont(&ret, conn, ms->status);
-    if (status) {
-      wait_for_status(L, ms->conn_data, conn, status, conn_rollback_event,
-                      ms->extra);
-    } else if (ret == 0) {
+    int status = mysql_rollback_cont(&ret, conn, bag->status);
+    if (status)
+    {
+      wait_for_status(L, bag->ctx, conn, status, conn_rollback_event,
+                      bag->extra);
+    }
+    else if (ret == 0)
+    {
       lua_pushboolean(L, true);
       FAN_RESUME(L, NULL, 1);
-      UNREF_CO(ms->conn_data);
-    } else {
-      FAN_RESUME(L, NULL, luamariadb_push_errno(L, ms->conn_data));
-      UNREF_CO(ms->conn_data);
+      UNREF_CO(bag->ctx);
+    }
+    else
+    {
+      FAN_RESUME(L, NULL, luamariadb_push_errno(L, bag->ctx));
+      UNREF_CO(bag->ctx);
     }
   }
-  event_free(ms->event);
-  free(ms);
+  event_free(bag->event);
+  free(bag);
 }
 
-LUA_API int conn_rollback_start(lua_State *L) {
-  conn_data *conn = getconnection(L);
+LUA_API int conn_rollback_start(lua_State *L)
+{
+  DB_CTX *ctx = getconnection(L);
   my_bool ret = 0;
-  int status = mysql_rollback_start(&ret, &conn->my_conn);
-  if (status) {
-    REF_CO(conn);
-    wait_for_status(L, conn, &conn->my_conn, status, conn_rollback_event, 0);
+  int status = mysql_rollback_start(&ret, &ctx->my_conn);
+  if (status)
+  {
+    REF_CO(ctx);
+    wait_for_status(L, ctx, &ctx->my_conn, status, conn_rollback_event, 0);
     return lua_yield(L, 0);
-  } else if (ret == 0) {
+  }
+  else if (ret == 0)
+  {
     lua_pushboolean(L, true);
     return 1;
-  } else {
-    return luamariadb_push_errno(L, conn);
+  }
+  else
+  {
+    return luamariadb_push_errno(L, ctx);
   }
 }

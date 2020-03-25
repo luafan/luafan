@@ -8,7 +8,7 @@
 #endif
 #endif
 
-// #define FAN_HAS_OPENSSL 1
+#define FAN_HAS_OPENSSL 1
 // #define FAN_HAS_LUAJIT  1
 
 #include <ctype.h>

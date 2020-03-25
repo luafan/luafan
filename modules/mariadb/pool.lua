@@ -3,7 +3,6 @@ local getmetatable = getmetatable
 local pairs = pairs
 local pcall = pcall
 local table = table
-local ipairs = ipairs
 local coroutine = coroutine
 
 local mariadb = require "fan.mariadb"
@@ -14,11 +13,9 @@ local config = require "config"
 local pool_mt = {}
 pool_mt.__index = pool_mt
 
-local pool = {idle = {}, yielding = {head = nil, tail = nil}, count = config.maria_pool_size}
-
 local function maxn(t)
     local n = 0
-    for k, v in pairs(t) do
+    for k, _ in pairs(t) do
         if k > n then
             n = k
         end
@@ -28,43 +25,41 @@ local function maxn(t)
 end
 
 function pool_mt:pop()
-    local conn = nil
+    local conn
 
-    while not conn do
-        if #(pool.idle) > 0 then
-            conn = table.remove(pool.idle)
-            break
-        elseif pool.count > 0 then
-            conn =
-                assert(
-                mariadb.connect(
-                    config.maria_database,
-                    config.maria_user,
-                    config.maria_passwd,
-                    config.maria_host,
-                    config.maria_port
-                )
+    if #(self.idle) > 0 then
+        conn = table.remove(self.idle)
+    elseif self.count > 0 then
+        self.count = self.count - 1
+        conn =
+            assert(
+            mariadb.connect(
+                config.maria_database,
+                config.maria_user,
+                config.maria_passwd,
+                config.maria_host,
+                config.maria_port
             )
-            assert(conn:setcharset(config.maria_charset))
-            pool.count = pool.count - 1
-            break
+        )
+        assert(conn:setcharset(config.maria_charset or "utf8mb4"))
+    else
+        if not self.yielding.head then
+            self.yielding.head = {value = coroutine.running()}
+            self.yielding.tail = self.yielding.head
         else
-            if not pool.yielding.head then
-                pool.yielding.head = {value = coroutine.running()}
-                pool.yielding.tail = pool.yielding.head
-            else
-                pool.yielding.tail.next = {value = coroutine.running()}
-                pool.yielding.tail = pool.yielding.tail.next
-            end
-            conn = coroutine.yield()
-            break
+            self.yielding.tail.next = {value = coroutine.running()}
+            self.yielding.tail = self.yielding.tail.next
         end
+        conn = coroutine.yield()
     end
 
     local ctx = self.map[conn]
     if not ctx then
+        local index = self.index
+        self.index = self.index + 1
         ctx = orm.new(conn, table.unpack(self.args, 1, maxn(self.args)))
         self.map[conn] = ctx
+        ctx.index = index
     end
 
     return ctx
@@ -72,35 +67,25 @@ end
 
 function pool_mt:push(ctx)
     local conn = getmetatable(ctx).db
-    if pool.yielding.head then
-        local co = pool.yielding.head.value
-        pool.yielding.head = pool.yielding.head.next
+    if self.yielding.head then
+        local co = self.yielding.head.value
+        self.yielding.head = self.yielding.head.next
         local status, msg = coroutine.resume(co, conn)
         if not status then
             print(msg)
         end
     else
-        table.insert(pool.idle, conn)
-    end
-end
-
-local function _safe(self, func, ...)
-    local ctx = self:pop()
-    local st, msg = pcall(func, ctx, ...)
-    self:push(ctx)
-
-    if not st then
-        error(msg)
-    else
-        return msg
+        table.insert(self.idle, conn)
     end
 end
 
 function pool_mt:safe(func, ...)
-    local st, msg = pcall(_safe, self, func, ...)
+    local ctx = self:pop()
+    local st, msg = xpcall(func, debug.traceback, ctx, ...)
+    self:push(ctx)
 
     if not st then
-        error(msg)
+        print(msg)
     else
         return msg
     end
@@ -108,7 +93,14 @@ end
 
 local function new(...)
     local args = {...}
-    local obj = {args = args, map = {}}
+    local obj = {
+        args = args,
+        map = {},
+        idle = {},
+        yielding = {head = nil, tail = nil},
+        count = config.maria_pool_size or 10,
+        index = 0,
+    }
     setmetatable(obj, pool_mt)
 
     return obj

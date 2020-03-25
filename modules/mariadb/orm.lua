@@ -5,10 +5,8 @@ local string = string
 local type = type
 local table = table
 local print = print
-local next = next
 local ipairs = ipairs
 local error = error
-local math = math
 
 local mariadb = require "fan.mariadb"
 
@@ -21,7 +19,7 @@ local KEY_MODEL = "^model"
 local KEY_NAME = "^name"
 local KEY_ORDER = "^order"
 
-local FIELD_ID_DEFAULT = "id"
+local FIELD_ID_DEFAULT = "ID"
 
 local BUILTIN_VALUE_NOW = "NOW()"
 local FIELD_ID_KEY = {}
@@ -67,7 +65,7 @@ local function bind_values(stmt, ...)
     print(debug.traceback())
   end
 
-  stmt:bind_param(...)
+  assert(stmt:bind_param(...))
 end
 
 local function execute(db, ...)

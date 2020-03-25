@@ -1,7 +1,6 @@
 local setmetatable = setmetatable
-local getmetatable = getmetatable
 local pairs = pairs
-local pcall = pcall
+local xpcall = xpcall
 local table = table
 local ipairs = ipairs
 local coroutine = coroutine
@@ -25,27 +24,22 @@ local function maxn(t)
 end
 
 function pool_mt:pop()
-  local pool_item = nil
+  local pool_item
 
-  while not pool_item do
-    if #(pool.idle) > 0 then
-      pool_item = table.remove(pool.idle)
-      break
-    elseif pool.count and pool.count > 0 and self.onnew then
-      pool_item = self.onnew(self)
-      pool.count = pool.count - 1
-      break
+  if #(pool.idle) > 0 then
+    pool_item = table.remove(pool.idle)
+  elseif pool.count and pool.count > 0 and self.onnew then
+    pool.count = pool.count - 1
+    pool_item = self.onnew(self)
+  else
+    if not pool.yielding.head then
+      pool.yielding.head = {value = coroutine.running()}
+      pool.yielding.tail = pool.yielding.head
     else
-      if not pool.yielding.head then
-        pool.yielding.head = {value = coroutine.running()}
-        pool.yielding.tail = pool.yielding.head
-      else
-        pool.yielding.tail.next = {value = coroutine.running()}
-        pool.yielding.tail = pool.yielding.tail.next
-      end
-      pool_item = coroutine.yield()
-      break
+      pool.yielding.tail.next = {value = coroutine.running()}
+      pool.yielding.tail = pool.yielding.tail.next
     end
+    pool_item = coroutine.yield()
   end
 
   if not self.onbind then
@@ -73,23 +67,13 @@ function pool_mt:push(ctx)
   end
 end
 
-local function _safe(self, func, ...)
+function pool_mt:safe(func, ...)
   local ctx = self:pop()
-  local st, msg = pcall(func, ctx, ...)
+  local st, msg = xpcall(func, debug.traceback, ctx, ...)
   self:push(ctx)
 
   if not st then
-    error(msg)
-  else
-    return msg
-  end
-end
-
-function pool_mt:safe(func, ...)
-  local st, msg = pcall(_safe, self, func, ...)
-
-  if not st then
-    error(msg)
+    print(msg)
   else
     return msg
   end

@@ -34,3 +34,4 @@ upload.sh
 
 ios/Pods
 *.xcuserdatad*
+test
