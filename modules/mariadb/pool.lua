@@ -1,7 +1,7 @@
 local setmetatable = setmetatable
 local getmetatable = getmetatable
 local pairs = pairs
-local pcall = pcall
+local xpcall = xpcall
 local table = table
 local coroutine = coroutine
 

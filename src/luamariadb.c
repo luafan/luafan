@@ -269,7 +269,7 @@ static int luamariadb_push_errno(lua_State *L, DB_CTX *ctx)
 LUA_API int conn_getlastautoid(lua_State *L)
 {
   DB_CTX *ctx = getconnection(L);
-  lua_pushnumber(L, mysql_insert_id(&ctx->my_conn));
+  lua_pushinteger(L, mysql_insert_id(&ctx->my_conn));
   return 1;
 }
 
@@ -335,6 +335,7 @@ static void create_metatables(lua_State *L)
       {"bind", st_bind},
       {"send_long_data", st_send_long_data},
       {"execute", stmt_execute_start},
+      {"store_result", stmt_store_result_start},
       {"fetch", stmt_fetch_start},
       {"pairs", st_pairs},
       {NULL, NULL},

@@ -102,7 +102,8 @@ static int stmt_execute_result(lua_State *L, STMT_CTX *st)
       return luamariadb_push_stmt_error(L, st);
     }
 
-    return stmt_store_result_start(L, st);
+    lua_pushboolean(L, 1);
+    return 1;
   }
 }
 
@@ -130,11 +131,8 @@ static void stmt_execute_cont(int fd, short event, void *_userdata)
     else if (ret == 0)
     {
       int count = stmt_execute_result(L, st);
-      if (count != CONTINUE_YIELD)
-      {
-        FAN_RESUME(L, NULL, count);
-        UNREF_CO(st);
-      }
+      FAN_RESUME(L, NULL, count);
+      UNREF_CO(st);
     }
     else
     {

@@ -19,7 +19,7 @@ local KEY_MODEL = "^model"
 local KEY_NAME = "^name"
 local KEY_ORDER = "^order"
 
-local FIELD_ID_DEFAULT = "ID"
+local FIELD_ID_DEFAULT = "id"
 
 local BUILTIN_VALUE_NOW = "NOW()"
 local FIELD_ID_KEY = {}
@@ -196,7 +196,6 @@ local function make_rows(t, stmt)
 end
 
 local function each_rows(t, stmt, eachfunc)
-  local order = t[KEY_ORDER]
   while true do
     local row = stmt:fetch()
 
@@ -216,8 +215,6 @@ local function each_rows(t, stmt, eachfunc)
 
     eachfunc(row)
   end
-
-  return lines
 end
 
 local field_mt = {
