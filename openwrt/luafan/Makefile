@@ -4,15 +4,17 @@ luafan:
     ../src/fifo.c \
     ../src/bytearray.c \
     ../src/event_mgr.c \
+    ../src/http.c \
     ../src/httpd.c \
     ../src/luafan.c \
     ../src/stream.c \
     ../src/tcpd.c \
     ../src/udpd.c \
     ../src/utlua.c \
+    ../src/luafan_posix.c \
+    ../src/objectbuf.c \
     \
     -levent
 
 clean:
 	rm *.o fan.so
-
