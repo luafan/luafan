@@ -14,7 +14,7 @@ luafan:
     ../../src/luafan_posix.c \
     ../../src/objectbuf.c \
     \
-    -levent
+    -levent -levent_openssl -lssl -lcrypto
 
 clean:
 	rm *.o ../../fan.so
