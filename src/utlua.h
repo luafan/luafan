@@ -8,8 +8,13 @@
 #endif
 #endif
 
+#ifndef FAN_HAS_OPENSSL
 #define FAN_HAS_OPENSSL 1
-// #define FAN_HAS_LUAJIT  1
+#endif
+
+#ifndef FAN_HAS_LUAJIT
+#define FAN_HAS_OPENSSL 0
+#endif
 
 #include <ctype.h>
 #include <errno.h>
