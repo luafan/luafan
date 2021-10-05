@@ -736,6 +736,8 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events,
   }
 }
 
+#if FAN_HAS_OPENSSL
+
 static int ssl_verifypeer_cb(int preverify_ok, X509_STORE_CTX *ctx)
 {
   if (!preverify_ok)
@@ -749,6 +751,8 @@ static int ssl_verifypeer_cb(int preverify_ok, X509_STORE_CTX *ctx)
 
   return preverify_ok;
 }
+
+#endif
 
 static void luatcpd_reconnect(Conn *conn)
 {
