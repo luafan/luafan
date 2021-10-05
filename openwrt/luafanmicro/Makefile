@@ -4,7 +4,6 @@ luafan:
     ../../src/fifo.c \
     ../../src/bytearray.c \
     ../../src/event_mgr.c \
-    ../../src/http.c \
     ../../src/httpd.c \
     ../../src/luafan.c \
     ../../src/stream.c \
