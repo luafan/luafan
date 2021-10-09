@@ -40,7 +40,10 @@ int _utlua_resume(lua_State *co, lua_State *from, int count)
 {
   lua_lock(co);
 
-#if (LUA_VERSION_NUM >= 502)
+#if (LUA_VERSION_NUM >= 504)
+  int nres;
+  int status = lua_resume(co, from, count, &nres);
+#elif (LUA_VERSION_NUM >= 502)
   int status = lua_resume(co, from, count);
 #else
 #if (FAN_HAS_LUAJIT == 0)
