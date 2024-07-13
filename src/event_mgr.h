@@ -8,13 +8,15 @@
 #include <event2/thread.h>
 #include <stdio.h>
 
-struct event_base *event_mgr_base();
-struct event_base *event_mgr_base_current();
+struct event_base *event_mgr_base(void);
+struct event_base *event_mgr_base_current(void);
 
-struct evdns_base *event_mgr_dnsbase();
-void event_mgr_break();
-int event_mgr_init();
-int event_mgr_loop();
-void event_mgr_start();
+struct evdns_base *event_mgr_dnsbase(void);
+void event_mgr_break(void);
+int event_mgr_init(void);
+int event_mgr_loop(void);
+int event_mgr_loop_later_cleanup(void);
+void event_mgr_loop_cleanup(void);
+void event_mgr_start(void);
 
 #endif

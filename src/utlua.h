@@ -3,19 +3,20 @@
 #define utlua_h
 
 #ifndef TARGET_OS_IPHONE
+
 #if defined(__IPHONE_OS_VERSION_MAX_ALLOWED)
-#define TARGET_OS_IPHONE            1
-#endif
+#define TARGET_OS_IPHONE 1
+#else
+#define TARGET_OS_IPHONE 0
 #endif
 
-#ifndef FAN_HAS_OPENSSL
+#endif
+
 #define FAN_HAS_OPENSSL 1
-#endif
+// #define FAN_HAS_LUAJIT  1
 
-#ifndef FAN_HAS_LUAJIT
-#define FAN_HAS_OPENSSL 0
-#endif
-
+#include <openssl/opensslv.h>
+#include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -23,18 +24,15 @@
 #include <math.h>
 #include <memory.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
-#include <unistd.h>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
+#include <sys/queue.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-
-#include <sys/queue.h>
+#include <time.h>
+#include <unistd.h>
 
 #if !defined(__cplusplus)
 #include <stdbool.h>
@@ -64,15 +62,20 @@ extern "C" {
 #include <evhttp.h>
 
 #if FAN_HAS_OPENSSL
+
+#if OPENSSL_VERSION_NUMBER < 0x1010000fL
+#include "openssl_hostname_validation.h"
+#else
+#include <openssl/x509v3.h>
+#endif
+
+#include <event2/bufferevent_ssl.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/pkcs12.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
-#include <openssl/x509v3.h>
-
-#include <event2/bufferevent_ssl.h>
 #endif
 
 #include "bytearray.h"
@@ -90,12 +93,12 @@ extern "C" {
 
 #else
 
-#define LOGD(...)                     \
-        fprintf(stdout, __VA_ARGS__); \
-        fflush(stdout);
-#define LOGE(...)                     \
-        fprintf(stderr, __VA_ARGS__); \
-        fflush(stderr);
+#define LOGD(...)                                                                                                      \
+    fprintf(stdout, __VA_ARGS__);                                                                                      \
+    fflush(stdout);
+#define LOGE(...)                                                                                                      \
+    fprintf(stderr, __VA_ARGS__);                                                                                      \
+    fflush(stderr);
 
 #endif
 
@@ -108,22 +111,22 @@ extern "C" {
 #define lua_objlen lua_rawlen
 
 #undef luaL_register
-#define luaL_register(L, n, f)                  \
-        {                                       \
-                if ((n) == NULL)                \
-                        luaL_setfuncs(L, f, 0); \
-                else                            \
-                        luaL_newlib(L, f);      \
-        }
+#define luaL_register(L, n, f)                                                                                         \
+    {                                                                                                                  \
+        if ((n) == NULL)                                                                                               \
+            luaL_setfuncs(L, f, 0);                                                                                    \
+        else                                                                                                           \
+            luaL_newlib(L, f);                                                                                         \
+    }
 
 #else
 
 #define LUA_OK 0
-#define lua_rawgetp(L, index, p)      \
-        {                             \
-                lua_pushstring(L, p); \
-                lua_rawget(L, index); \
-        }
+#define lua_rawgetp(L, index, p)                                                                                       \
+    {                                                                                                                  \
+        lua_pushstring(L, p);                                                                                          \
+        lua_rawget(L, index);                                                                                          \
+    }
 
 #endif
 
@@ -137,76 +140,87 @@ extern "C" {
 
 lua_State *utlua_mainthread(lua_State *L);
 
-typedef int(*FAN_RESUME_TPYE)(lua_State *co, lua_State *from, int count);
+typedef int (*FAN_RESUME_TPYE)(lua_State *co, lua_State *from, int count);
 
 void utlua_set_resume(FAN_RESUME_TPYE resume);
 
 extern FAN_RESUME_TPYE FAN_RESUME;
 
-#define PUSH_REF(L)                                 \
-        lua_lock(L);                                \
-        int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX); \
-        lua_unlock(L);
+#define PUSH_REF(L)                                                                                                    \
+    lua_lock(L);                                                                                                       \
+    int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                                                        \
+    lua_unlock(L);
 
-#define POP_REF(L)                               \
-        lua_lock(L);                             \
-        luaL_unref(L, LUA_REGISTRYINDEX, _ref_); \
-        lua_unlock(L);
+#define POP_REF(L)                                                                                                     \
+    lua_lock(L);                                                                                                       \
+    luaL_unref(L, LUA_REGISTRYINDEX, _ref_);                                                                           \
+    lua_unlock(L);
 
-#define SET_FUNC_REF_FROM_TABLE(L, REF, IDX, KEY)     \
-        lua_getfield(L, IDX, KEY);                    \
-        if (lua_isfunction(L, -1))                    \
-        {                                             \
-                REF = luaL_ref(L, LUA_REGISTRYINDEX); \
-        }                                             \
-        else                                          \
-        {                                             \
-                REF = LUA_NOREF;                      \
-                lua_pop(L, 1);                        \
-        }
+#define REF_STATE_SET(obj, L)                                                                                          \
+    lua_lock(L);                                                                                                       \
+    obj->mainthread = utlua_mainthread(L); \
+lua_pushthread(L);\
+    obj->_ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                                                        \
+    lua_unlock(L);
 
-#define CLEAR_REF(L, REF)                              \
-        if (REF != LUA_NOREF)                          \
-        {                                              \
-                luaL_unref(L, LUA_REGISTRYINDEX, REF); \
-                REF = LUA_NOREF;                       \
-        }
+#define REF_STATE_GET(obj, L)                                                                                          \
+    lua_lock(L);                                                                                                       \
+if (obj->_ref_ != LUA_NOREF) {\
+    lua_rawgeti(obj->mainthread, LUA_REGISTRYINDEX, obj->_ref_);\
+    L = lua_tothread(obj->mainthread, -1);\
+    lua_pop(obj->mainthread, 1);\
+}\
+    lua_unlock(L);
 
-#define DUP_STR_FROM_TABLE(L, REF, IDX, KEY)           \
-        {                                              \
-                lua_getfield(L, IDX, KEY);             \
-                const char *str = lua_tostring(L, -1); \
-                if (str)                               \
-                {                                      \
-                        REF = strdup(str);             \
-                }                                      \
-                else                                   \
-                {                                      \
-                        REF = NULL;                    \
-                }                                      \
-                lua_pop(L, 1);                         \
-        }
+#define REF_STATE_CLEAR(obj)                                                                                                     \
+    CLEAR_REF(obj->mainthread, obj->_ref_);
 
-#define FREE_STR(REF)       \
-        if (REF)            \
-        {                   \
-                free(REF);  \
-                REF = NULL; \
-        }
+#define SET_FUNC_REF_FROM_TABLE(L, REF, IDX, KEY)                                                                      \
+    lua_getfield(L, IDX, KEY);                                                                                         \
+    if (lua_isfunction(L, -1)) {                                                                                       \
+        REF = luaL_ref(L, LUA_REGISTRYINDEX);                                                                          \
+    } else {                                                                                                           \
+        REF = LUA_NOREF;                                                                                               \
+        lua_pop(L, 1);                                                                                                 \
+    }
 
-#define SET_INT_FROM_TABLE(L, REF, IDX, KEY)             \
-        {                                                \
-                lua_getfield(L, IDX, KEY);               \
-                if (!lua_isnil(L, -1))                   \
-                {                                        \
-                        REF = (int)lua_tointeger(L, -1); \
-                }                                        \
-                else                                     \
-                {                                        \
-                        REF = 0;                         \
-                }                                        \
-                lua_pop(L, 1);                           \
-        }
+#define CLEAR_REF(L, REF)                                                                                              \
+lua_lock(L);                                                                                                       \
+    if (REF != LUA_NOREF) {                                                                                            \
+        luaL_unref(L, LUA_REGISTRYINDEX, REF);                                                                         \
+        REF = LUA_NOREF;                                                                                               \
+    }\
+lua_unlock(L);
+
+
+#define DUP_STR_FROM_TABLE(L, REF, IDX, KEY)                                                                           \
+    {                                                                                                                  \
+        lua_getfield(L, IDX, KEY);                                                                                     \
+        const char *str = lua_tostring(L, -1);                                                                         \
+        if (str) {                                                                                                     \
+            REF = strdup(str);                                                                                         \
+        } else {                                                                                                       \
+            REF = NULL;                                                                                                \
+        }                                                                                                              \
+        lua_pop(L, 1);                                                                                                 \
+    }
+
+#define FREE_STR(REF)                                                                                                  \
+    if (REF) {                                                                                                         \
+        free(REF);                                                                                                     \
+        REF = NULL;                                                                                                    \
+    }
+
+#define SET_INT_FROM_TABLE(L, REF, IDX, KEY)                                                                           \
+    {                                                                                                                  \
+        lua_getfield(L, IDX, KEY);                                                                                     \
+        if (!lua_isnil(L, -1)) {                                                                                       \
+            REF = (int)lua_tointeger(L, -1);                                                                           \
+        } else {                                                                                                       \
+            REF = 0;                                                                                                   \
+        }                                                                                                              \
+        lua_pop(L, 1);                                                                                                 \
+    }
 
 #if (LUA_VERSION_NUM < 502)
 void utlua_set_mainthread(lua_State *L);
@@ -220,8 +234,7 @@ void regress_get_socket_host(evutil_socket_t fd, char *host);
 #if FAN_HAS_OPENSSL
 void die_most_horribly_from_openssl_error(const char *func);
 
-void server_setup_certs(SSL_CTX *ctx, const char *certificate_chain,
-                        const char *private_key);
+void server_setup_certs(SSL_CTX *ctx, const char *certificate_chain, const char *private_key);
 #endif
 
 #endif
