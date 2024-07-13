@@ -6,7 +6,7 @@ jobs:
      steps:
        - run: apk add --update git
        - checkout
-       - run: cd ~/project && bash build_docker_alpine.sh || exit -1
+       - run: cd ~/project && sh build_docker_alpine.sh || exit -1
        - run: echo "Build Alpine finished!"
    build-ubuntu:
      docker:
