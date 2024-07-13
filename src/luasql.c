@@ -4,10 +4,6 @@
 */
 
 #include "luasql.h"
-
-#include "lauxlib.h"
-#include "lua.h"
-
 #include <string.h>
 
 #if !defined(lua_pushliteral)

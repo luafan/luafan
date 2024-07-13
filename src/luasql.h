@@ -10,6 +10,8 @@
 #define LUASQL_API
 #endif
 
+#include "utlua.h"
+
 #define LUASQL_PREFIX "LuaSQL: "
 #define LUASQL_TABLENAME "luasql"
 #define LUASQL_ENVIRONMENT "Each driver must have an environment metatable"
