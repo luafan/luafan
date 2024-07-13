@@ -1,15 +1,24 @@
 version: 2
 jobs:
-   build-job:
+   build-alpine:
+     docker:
+       - image: alpine
+     steps:
+       - run: apk add --update git
+       - checkout
+       - run: cd ~/project && bash build_docker_alpine.sh || exit -1
+       - run: echo "Build Alpine finished!"
+   build-ubuntu:
      docker:
        - image: ubuntu:22.04
      steps:
        - run: apt update && apt install -y git
        - checkout
        - run: cd ~/project && bash build_docker_ubuntu.sh || exit -1
-       - run: echo "Build finished!"
+       - run: echo "Build Ubuntu finished!"
 workflows:
   version: 2
   build-deploy:
     jobs:
-      - build-job
+      - build-alpine
+      - build-ubuntu
