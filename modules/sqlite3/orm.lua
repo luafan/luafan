@@ -62,7 +62,7 @@ end
 local function delete(db, tablename, fmt, ...)
 	local stmt = nil
 	if fmt then
-		stmt = prepare(db, string.format("delete from %s where %s", tablename, fmt))
+		stmt = prepare(db, string.format("delete from %s %s", tablename, fmt))
 		bind_values(stmt, ...)
 	else
 		stmt = prepare(db, string.format("delete from %s", tablename))
@@ -85,7 +85,7 @@ local function make_row_mt(t)
 						local attr = r[KEY_ATTR]
 
 						local db = getmetatable(t[KEY_CONTEXT]).db
-						local st = delete(db, t[KEY_NAME], "id=?", attr[FIELD_ID])
+						local st = delete(db, t[KEY_NAME], "where id=?", attr[FIELD_ID])
 
 						if st == sqlite3.DONE then
 							setmetatable(r, nil)
@@ -120,7 +120,9 @@ local function make_row_mt(t)
 						if #(list) > 0 then
 							local db = getmetatable(ctx).db
 							local stmt =
-								prepare(db, "update " .. t[KEY_NAME] .. " set " .. table.concat(list, ",") .. " where " .. FIELD_ID .. "=?")
+								prepare(db,
+									"update " ..
+									t[KEY_NAME] .. " set " .. table.concat(list, ",") .. " where " .. FIELD_ID .. "=?")
 
 							table.insert(values, attr[FIELD_ID])
 							bind_values(stmt, table.unpack(values, 1, maxn(values)))
@@ -263,7 +265,7 @@ local table_mt = {
 			local fmt = obj
 
 			if fmt then
-				local params = {...}
+				local params = { ... }
 				stmt = prepare(db, "select * from " .. t[KEY_NAME] .. " " .. fmt)
 				if #(params) > 0 then
 					bind_values(stmt, ...)
@@ -308,14 +310,17 @@ local table_mt = {
 
 			local stmt =
 				prepare(
-				db,
-				"insert into " .. t[KEY_NAME] .. " (" .. table.concat(keys, ",") .. ") values(" .. table.concat(places, ",") .. ")"
-			)
+					db,
+					"insert into " ..
+					t[KEY_NAME] .. " (" .. table.concat(keys, ",") .. ") values(" .. table.concat(places, ",") .. ")"
+				)
 			bind_values(stmt, table.unpack(values, 1, maxn(values)))
 
 			local last_insert_rowid
 			if stmt:step() == sqlite3.DONE then
 				last_insert_rowid = db:last_insert_rowid()
+			else
+				print(db:errmsg())
 			end
 
 			stmt:finalize()
@@ -366,7 +371,9 @@ local function update_schema(db, tablename, model)
 	else
 		local items = {}
 
-		model[FIELD_ID] = "integer primary key"
+		if not model[FIELD_ID] then
+			model[FIELD_ID] = "INTEGER PRIMARY KEY AUTOINCREMENT"
+		end
 
 		for k, v in pairs(model) do
 			if type(v) == "string" then

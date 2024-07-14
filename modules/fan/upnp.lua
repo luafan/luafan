@@ -28,7 +28,7 @@ function upnp_mt:AddPortMapping(ip, port, extport, protocol, description)
   if not description then
     description = "fan.upnp"
   end
-  for i, v in ipairs(self.devices) do
+  for _, v in ipairs(self.devices) do
     if v.st == WANIPConnectionType then
       local ret =
         http.post {

@@ -755,6 +755,7 @@ local function bind(host, port, path)
     end
     obj.serv =
         udpd.new {
+        interface = config.manual_interface and config.interface or nil,
         bind_port = port,
         onsendready = function()
             local obj = weak_obj

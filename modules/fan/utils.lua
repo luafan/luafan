@@ -9,16 +9,16 @@ local function random_string(letters, count, join, joingroupcount)
     local tb = {}
 
     if type(joingroupcount) == "number" then
-        for i = 1, count / joingroupcount do
+        for _ = 1, count / joingroupcount do
             local group = {}
-            for i = 1, joingroupcount do
+            for _ = 1, joingroupcount do
                 local ri = math.random(1, #(letters))
                 table.insert(group, letters:sub(ri, ri))
             end
             table.insert(tb, table.concat(group))
         end
     else
-        for i = 1, count do
+        for _ = 1, count do
             local ri = math.random(1, #(letters))
             table.insert(tb, letters:sub(ri, ri))
         end
@@ -57,7 +57,7 @@ local function weakify(...)
     local t = {...}
     if #t > 1 then
         local out = {}
-        for i, v in ipairs(t) do
+        for _, v in ipairs(t) do
             table.insert(out, weakify_object(v))
         end
 
@@ -67,15 +67,37 @@ local function weakify(...)
     end
 end
 
+local function split(str, pat)
+    local t = {}
+    if str then
+        local fpat = "(.-)" .. pat
+        local last_end = 1
+        local s, e, cap = str:find(fpat, 1)
+        while s do
+            if s ~= 1 or cap ~= "" then
+                table.insert(t, cap)
+            end
+            last_end = e + 1
+            s, e, cap = str:find(fpat, last_end)
+        end
+        if last_end <= #str then
+            cap = str:sub(last_end)
+            table.insert(t, cap)
+        end
+    end
+    return t
+end
+
 local m = {
     random_string = random_string,
     gettime = gettime,
+    split = split,
     LETTERS_W = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
     weakify = weakify,
     weakify_object = weakify_object
 }
 
-if jit then
+if _G.jit then
     local ffi = require("ffi")
 
     ffi.cdef [[

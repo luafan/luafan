@@ -3,7 +3,8 @@ local stream = require "fan.stream"
 local config = require "config"
 local utils = require "fan.utils"
 
-local TCP_PAUSE_READ_WRITE_ON_CALLBACK = config.tcp_pause_read_write_on_callback == nil and true or config.tcp_pause_read_write_on_callback
+local TCP_PAUSE_READ_WRITE_ON_CALLBACK = config.tcp_pause_read_write_on_callback == nil and true or
+config.tcp_pause_read_write_on_callback
 
 local apt_mt = {}
 apt_mt.__index = apt_mt
@@ -97,9 +98,11 @@ local function connect(host, port, path, args)
   local verbose = args and args.verbose == 1 or false
   local running = coroutine.running()
 
-  local t = {_readstream = stream.new(), _sender_queue = {}, simulate_send_block = true}
+  local t = { _readstream = stream.new(), _sender_queue = {}, simulate_send_block = true }
   local weak_t = t -- utils.weakify_object(t)
   local params = {
+    receive_buffer_size = config.receive_buffer_size,
+    send_buffer_size = config.send_buffer_size,
     host = host,
     port = port,
     onconnected = function()
@@ -107,7 +110,7 @@ local function connect(host, port, path, args)
     end,
     onread = function(buf)
       collectgarbage()
-      
+
       local t = weak_t
 
       if verbose then
@@ -169,10 +172,12 @@ end
 
 local function bind(host, port, path, args)
   local connection_map = {}
-  local obj = {onaccept = nil, connection_map = connection_map}
+  local obj = { onaccept = nil, connection_map = connection_map }
 
   local weak_connection_map = utils.weakify_object(connection_map)
   local params = {
+    receive_buffer_size = config.receive_buffer_size,
+    send_buffer_size = config.send_buffer_size,
     host = host,
     port = port,
     onaccept = function(apt)
@@ -183,7 +188,7 @@ local function bind(host, port, path, args)
         _sender_queue = {},
         simulate_send_block = true
       }
-      t._pack = {t}
+      t._pack = { t }
       setmetatable(t, apt_mt)
 
       weak_connection_map[apt] = t

@@ -34,16 +34,18 @@ function mt:readline()
     if self:available() > 0 then
         local breakflag
         local t = {}
+        self:mark()
         while true do
             local b = self:GetBytes(1)
             if not b then
-                break
+                -- failed to find line end.
+                self:reset()
+                return
             elseif b == "\r" then
-                self:mark()
-                if self:GetBytes(1) ~= "\n" then
-                    self:reset()
+                if self:TestBytes(1) ~= "\n" then
                     breakflag = "\r"
                 else
+                    self:GetBytes(1)
                     breakflag = "\r\n"
                 end
                 break
