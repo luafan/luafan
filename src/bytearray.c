@@ -4,57 +4,40 @@
 #include <memory.h>
 #include <stdlib.h>
 
-#define WRITE_VALUE(type)                                                                                              \
-    while (ba->total - ba->offset < sizeof(type)) {                                                                    \
-        if (!ba->wrapbuffer) {                                                                                         \
-            ba->buflen += ba->buflen;                                                                                  \
-            ba->total = ba->buflen;                                                                                    \
-            ba->buffer = realloc(ba->buffer, ba->buflen);                                                              \
-        } else {                                                                                                       \
-            return false;                                                                                              \
-        }                                                                                                              \
-    }                                                                                                                  \
-    memcpy(ba->buffer + ba->offset, &value, sizeof(type));                                                             \
-    ba->offset += sizeof(type);                                                                                        \
+inline bool ensure_capacity(BYTEARRAY *ba, size_t required_size) {
+    while (ba->total - ba->offset < required_size) {
+        if (!ba->wrapbuffer) {
+            ba->buflen *= 2;
+            ba->total = ba->buflen;
+            void *temp = realloc(ba->buffer, ba->buflen);
+            if (!temp) {
+                return false;
+            }
+            ba->buffer = temp;
+        } else {
+            return false;
+        }
+    }
     return true;
+}
 
-#define WRITE_STRING(type)                                                                                             \
-    while (ba->total - ba->offset < length + sizeof(type)) {                                                           \
-        if (!ba->wrapbuffer) {                                                                                         \
-            ba->buflen += ba->buflen;                                                                                  \
-            ba->total = ba->buflen;                                                                                    \
-            ba->buffer = realloc(ba->buffer, ba->buflen);                                                              \
-        } else {                                                                                                       \
-            return false;                                                                                              \
-        }                                                                                                              \
-    }                                                                                                                  \
-    memcpy(ba->buffer + ba->offset, &length, sizeof(type));                                                            \
-    memcpy(ba->buffer + ba->offset + sizeof(type), str, length);                                                       \
-    ba->offset += sizeof(type) + length;                                                                               \
+inline bool write_value(BYTEARRAY *ba, const void *value, size_t size) {
+    if (!ensure_capacity(ba, size)) {
+        return false;
+    }
+    memcpy(ba->buffer + ba->offset, value, size);
+    ba->offset += size;
     return true;
+}
 
-#define READ_VALUE(type)                                                                                               \
-    if (ba->total - ba->offset < sizeof(type)) {                                                                       \
-        return false;                                                                                                  \
-    }                                                                                                                  \
-    memcpy(value, ba->buffer + ba->offset, sizeof(type));                                                              \
-    ba->offset += sizeof(type);                                                                                        \
+inline bool read_value(BYTEARRAY *ba, void *value, size_t size) {
+    if (ba->total - ba->offset < size) {
+        return false;
+    }
+    memcpy(value, ba->buffer + ba->offset, size);
+    ba->offset += size;
     return true;
-
-#define READ_STRING(type)                                                                                              \
-    if (ba->total - ba->offset < sizeof(type)) {                                                                       \
-        return false;                                                                                                  \
-    }                                                                                                                  \
-    memcpy(count, ba->buffer + ba->offset, sizeof(type));                                                              \
-    if (ba->total - ba->offset < sizeof(type) + *count) {                                                              \
-        *count = 0;                                                                                                    \
-        return false;                                                                                                  \
-    }                                                                                                                  \
-    type readLen = length < *count ? length : *count;                                                                  \
-    memcpy(str, ba->buffer + ba->offset + sizeof(type), readLen);                                                      \
-    ba->offset += sizeof(type) + *count;                                                                               \
-    *count = readLen;                                                                                                  \
-    return true;
+}
 
 bool bytearray_alloc(BYTEARRAY *ba, uint32_t length) {
     if (length == 0) {
@@ -156,68 +139,14 @@ bool bytearray_write_ready(BYTEARRAY *ba) {
 
     return true;
 }
-#define type uint8_t
-bool bytearray_write8(BYTEARRAY *ba, const uint8_t value) {
-    WRITE_VALUE(uint8_t)
-}
-
-bool bytearray_write16(BYTEARRAY *ba, const uint16_t value) {
-    WRITE_VALUE(uint16_t)
-}
-
-bool bytearray_write32(BYTEARRAY *ba, const uint32_t value) {
-    WRITE_VALUE(uint32_t)
-}
-
-bool bytearray_write64(BYTEARRAY *ba, const uint64_t value) {
-    WRITE_VALUE(uint64_t)
-}
-
-bool bytearray_write64d(BYTEARRAY *ba, const double value) {
-    WRITE_VALUE(double)
-}
 
 bool bytearray_writebuffer(BYTEARRAY *ba, const void *buff, const size_t length) {
-    if (ba->total - ba->offset < length) {
-        ba->total = length + ba->offset;
-        ba->buflen = ba->total;
-        ba->buffer = realloc(ba->buffer, ba->buflen);
+    if (!ensure_capacity(ba, length)) {
+        return false;
     }
     memcpy(ba->buffer + ba->offset, buff, length);
     ba->offset += length;
     return true;
-}
-
-bool bytearray_writestring8(BYTEARRAY *ba, const uint8_t *str, const uint8_t length) {
-    WRITE_STRING(uint8_t)
-}
-
-bool bytearray_writestring16(BYTEARRAY *ba, const uint8_t *str, const uint16_t length) {
-    WRITE_STRING(uint16_t)
-}
-
-bool bytearray_writestring32(BYTEARRAY *ba, const uint8_t *str, const uint32_t length) {
-    WRITE_STRING(uint32_t)
-}
-
-bool bytearray_read8(BYTEARRAY *ba, uint8_t *value) {
-    READ_VALUE(uint8_t)
-}
-
-bool bytearray_read16(BYTEARRAY *ba, uint16_t *value) {
-    READ_VALUE(uint16_t)
-}
-
-bool bytearray_read32(BYTEARRAY *ba, uint32_t *value) {
-    READ_VALUE(uint32_t)
-}
-
-bool bytearray_read64(BYTEARRAY *ba, uint64_t *value) {
-    READ_VALUE(uint64_t)
-}
-
-bool bytearray_read64d(BYTEARRAY *ba, double *value) {
-    READ_VALUE(double)
 }
 
 bool bytearray_readbuffer(BYTEARRAY *ba, void *buff, uint32_t length) {
@@ -232,14 +161,42 @@ bool bytearray_readbuffer(BYTEARRAY *ba, void *buff, uint32_t length) {
     return true;
 }
 
-bool bytearray_readstring8(BYTEARRAY *ba, uint8_t *str, uint8_t length, uint8_t *count) {
-    READ_STRING(uint8_t)
+bool bytearray_write8(BYTEARRAY *ba, const uint8_t value) {
+    return write_value(ba, &value, sizeof(uint8_t));
 }
 
-bool bytearray_readstring16(BYTEARRAY *ba, uint8_t *str, uint16_t length, uint16_t *count) {
-    READ_STRING(uint16_t)
+bool bytearray_write16(BYTEARRAY *ba, const uint16_t value) {
+    return write_value(ba, &value, sizeof(uint16_t));
 }
 
-bool bytearray_readstring32(BYTEARRAY *ba, uint8_t *str, uint32_t length, uint32_t *count) {
-    READ_STRING(uint32_t)
+bool bytearray_write32(BYTEARRAY *ba, const uint32_t value) {
+    return write_value(ba, &value, sizeof(uint32_t));
+}
+
+bool bytearray_write64(BYTEARRAY *ba, const uint64_t value) {
+    return write_value(ba, &value, sizeof(uint64_t));
+}
+
+bool bytearray_write64d(BYTEARRAY *ba, const double value) {
+    return write_value(ba, &value, sizeof(double));
+}
+
+bool bytearray_read8(BYTEARRAY *ba, uint8_t *value) {
+    return read_value(ba, value, sizeof(uint8_t));
+}
+
+bool bytearray_read16(BYTEARRAY *ba, uint16_t *value) {
+    return read_value(ba, value, sizeof(uint16_t));
+}
+
+bool bytearray_read32(BYTEARRAY *ba, uint32_t *value) {
+    return read_value(ba, value, sizeof(uint32_t));
+}
+
+bool bytearray_read64(BYTEARRAY *ba, uint64_t *value) {
+    return read_value(ba, value, sizeof(uint64_t));
+}
+
+bool bytearray_read64d(BYTEARRAY *ba, double *value) {
+    return read_value(ba, value, sizeof(double));
 }
