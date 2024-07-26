@@ -4,7 +4,7 @@
 #include <memory.h>
 #include <stdlib.h>
 
-inline bool ensure_capacity(BYTEARRAY *ba, size_t required_size) {
+bool ensure_capacity(BYTEARRAY *ba, size_t required_size) {
     while (ba->total - ba->offset < required_size) {
         if (!ba->wrapbuffer) {
             ba->buflen *= 2;
@@ -21,7 +21,7 @@ inline bool ensure_capacity(BYTEARRAY *ba, size_t required_size) {
     return true;
 }
 
-inline bool write_value(BYTEARRAY *ba, const void *value, size_t size) {
+bool write_value(BYTEARRAY *ba, const void *value, size_t size) {
     if (!ensure_capacity(ba, size)) {
         return false;
     }
@@ -30,7 +30,7 @@ inline bool write_value(BYTEARRAY *ba, const void *value, size_t size) {
     return true;
 }
 
-inline bool read_value(BYTEARRAY *ba, void *value, size_t size) {
+bool read_value(BYTEARRAY *ba, void *value, size_t size) {
     if (ba->total - ba->offset < size) {
         return false;
     }
