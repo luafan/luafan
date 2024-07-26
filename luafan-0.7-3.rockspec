@@ -41,7 +41,6 @@ build = {
             "src/utlua.c",
             "src/bytearray.c",
             "src/event_mgr.c",
-            "src/hostcheck.c",
             "src/luafan.c",
             "src/luafan_posix.c",
             "src/tcpd.c",
