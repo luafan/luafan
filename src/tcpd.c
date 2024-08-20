@@ -27,7 +27,7 @@ typedef struct {
 
     int ssl_verifyhost;
     int ssl_verifypeer;
-    const char *ssl_error;
+    char *ssl_error;
 #endif
 
     lua_State *mainthread;
@@ -38,7 +38,6 @@ typedef struct {
     int onConnectedRef;
 
     char *host;
-    char *ssl_host;
     int port;
 
     int send_buffer_size;
@@ -630,89 +629,28 @@ static void tcpd_conn_eventcb(struct bufferevent *bev, short events, void *arg) 
     }
 }
 
+static void conn_set_ssl_error(Conn *conn, const char *msg) {
+    if (conn->ssl_error) {
+        free(conn->ssl_error);
+    }
+    
+    if (msg) {
+        conn->ssl_error = strdup(msg);
+    } else {
+        conn->ssl_error = NULL;
+    }
+}
+
 static int ssl_verifypeer_cb(int preverify_ok, X509_STORE_CTX *ctx) {
     if (!preverify_ok) {
         SSL *ssl = X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
         Conn *conn = SSL_get_ex_data(ssl, conn_index);
 
         int err = X509_STORE_CTX_get_error(ctx);
-        conn->ssl_error = strdup(X509_verify_cert_error_string(err));
+        conn_set_ssl_error(conn, X509_verify_cert_error_string(err));
     }
 
     return preverify_ok;
-}
-
-static void luatcpd_reconnect(Conn *conn) {
-    if (conn->buf) {
-        shutdown_bev(conn->buf);
-        conn->buf = NULL;
-    }
-#if FAN_HAS_OPENSSL
-    conn->ssl_error = 0;
-
-    if (conn->sslctx) {
-        SSL *ssl = SSL_new(conn->sslctx->ssl_ctx);
-        SSL_set_ex_data(ssl, conn_index, conn);
-
-#if OPENSSL_VERSION_NUMBER < 0x1010000fL
-        // logic in cert_verify_callback
-#else
-        if (conn->ssl_verifyhost && (conn->ssl_host ?: conn->host)) {
-            SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-            if (!SSL_set1_host(ssl, conn->ssl_host ?: conn->host)) {
-                printf("SSL_set1_host '%s' failed!\n", conn->ssl_host ?: conn->host);
-            }
-        }
-
-        /* Enable peer verification (with a non-null callback if desired) */
-        if (conn->ssl_verifypeer) {
-            SSL_set_verify(ssl, SSL_VERIFY_PEER, NULL);
-        } else {
-            SSL_set_verify(ssl, SSL_VERIFY_NONE, NULL);
-        }
-#endif
-        SSL_set_tlsext_host_name(ssl, conn->ssl_host ?: conn->host);
-        conn->buf = bufferevent_openssl_socket_new(event_mgr_base(), -1, ssl, BUFFEREVENT_SSL_CONNECTING,
-                                                   BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
-#ifdef EVENT__NUMERIC_VERSION
-#if (EVENT__NUMERIC_VERSION >= 0x02010500)
-        bufferevent_openssl_set_allow_dirty_shutdown(conn->buf, 1);
-#endif
-#endif
-    } else {
-#endif
-        conn->buf = bufferevent_socket_new(event_mgr_base(), -1, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
-#if FAN_HAS_OPENSSL
-    }
-#endif
-
-    int rc = bufferevent_socket_connect_hostname(conn->buf, event_mgr_dnsbase(), AF_UNSPEC, conn->host, conn->port);
-
-    evutil_socket_t fd = bufferevent_getfd(conn->buf);
-    if (conn->send_buffer_size) {
-        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &conn->send_buffer_size, sizeof(conn->send_buffer_size));
-    }
-    if (conn->receive_buffer_size) {
-        bufferevent_setwatermark(conn->buf, EV_READ, 0, conn->receive_buffer_size);
-        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &conn->receive_buffer_size, sizeof(conn->receive_buffer_size));
-    }
-
-#ifdef IP_BOUND_IF
-    if (conn->interface) {
-        setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
-    }
-#endif
-
-    if (rc < 0) {
-        LOGE("could not connect to %s:%d %s", conn->host, conn->port,
-             evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
-        shutdown_bev(conn->buf);
-        conn->buf = NULL;
-        return;
-    }
-
-    bufferevent_enable(conn->buf, EV_WRITE | EV_READ);
-    bufferevent_setcb(conn->buf, tcpd_conn_readcb, tcpd_conn_writecb, tcpd_conn_eventcb, conn);
 }
 
 #if FAN_HAS_OPENSSL && OPENSSL_VERSION_NUMBER < 0x1010000fL
@@ -725,7 +663,7 @@ static int cert_verify_callback(X509_STORE_CTX *x509_ctx, void *arg) {
     if (!conn->ssl_verifypeer) {
         return 1;
     }
-    conn->ssl_error = NULL;
+    conn_set_ssl_error(conn, NULL);
     HostnameValidationResult res = Error;
 
     /* This is the function that OpenSSL would call if we hadn't called
@@ -747,23 +685,23 @@ static int cert_verify_callback(X509_STORE_CTX *x509_ctx, void *arg) {
                 case MatchFound:
                     break;
                 case MatchNotFound:
-                    conn->ssl_error = "MatchNotFound";
+                    conn_set_ssl_error(conn, "MatchNotFound");
                     break;
                 case NoSANPresent:
-                    conn->ssl_error = "NoSANPresent";
+                    conn_set_ssl_error(conn, "NoSANPresent");
                     break;
                 case MalformedCertificate:
-                    conn->ssl_error = "MalformedCertificate";
+                    conn_set_ssl_error(conn, "MalformedCertificate");
                     break;
                 case Error:
-                    conn->ssl_error = "Error";
+                    conn_set_ssl_error(conn, "Error");
                     break;
                 default:
-                    conn->ssl_error = "WTF!";
+                    conn_set_ssl_error(conn, "WTF!");
                     break;
             }
         } else {
-            conn->ssl_error = "X509_verify_cert failed";
+            conn_set_ssl_error(conn, "X509_verify_cert failed");
         }
     } else {
         return 1;
@@ -800,7 +738,7 @@ LUA_API int tcpd_connect(lua_State *L) {
     conn->buf = NULL;
 #if FAN_HAS_OPENSSL
     conn->sslctx = NULL;
-    conn->ssl_error = 0;
+    conn_set_ssl_error(conn, NULL);
 #endif
     conn->send_buffer_size = 0;
     conn->receive_buffer_size = 0;
@@ -826,7 +764,9 @@ LUA_API int tcpd_connect(lua_State *L) {
     conn->ssl_verifypeer = (int)luaL_optinteger(L, -1, 1);
     lua_pop(L, 1);
 
-    DUP_STR_FROM_TABLE(L, conn->ssl_host, 1, "ssl_host")
+    lua_getfield(L, 1, "ssl_host");
+    const char *ssl_host = lua_tostring(L, -1);
+    lua_pop(L, 1);
 
     if (ssl) {
         lua_getfield(L, 1, "cainfo");
@@ -978,7 +918,73 @@ LUA_API int tcpd_connect(lua_State *L) {
     }
     lua_pop(L, 1);
 
-    luatcpd_reconnect(conn);
+#if FAN_HAS_OPENSSL
+    conn_set_ssl_error(conn, NULL);
+
+    if (conn->sslctx) {
+        SSL *ssl = SSL_new(conn->sslctx->ssl_ctx);
+        SSL_set_ex_data(ssl, conn_index, conn);
+
+#if OPENSSL_VERSION_NUMBER < 0x1010000fL
+        // logic in cert_verify_callback
+#else
+        if (conn->ssl_verifyhost && (ssl_host ?: conn->host)) {
+            SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+            if (!SSL_set1_host(ssl, ssl_host ?: conn->host)) {
+                printf("SSL_set1_host '%s' failed!\n", ssl_host ?: conn->host);
+            }
+        }
+
+        /* Enable peer verification (with a non-null callback if desired) */
+        if (conn->ssl_verifypeer) {
+            SSL_set_verify(ssl, SSL_VERIFY_PEER, NULL);
+        } else {
+            SSL_set_verify(ssl, SSL_VERIFY_NONE, NULL);
+        }
+#endif
+        SSL_set_tlsext_host_name(ssl, ssl_host ?: conn->host);
+        conn->buf = bufferevent_openssl_socket_new(event_mgr_base(), -1, ssl, BUFFEREVENT_SSL_CONNECTING,
+                                                   BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
+#ifdef EVENT__NUMERIC_VERSION
+#if (EVENT__NUMERIC_VERSION >= 0x02010500)
+        bufferevent_openssl_set_allow_dirty_shutdown(conn->buf, 1);
+#endif
+#endif
+    } else {
+#endif
+        conn->buf = bufferevent_socket_new(event_mgr_base(), -1, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
+#if FAN_HAS_OPENSSL
+    }
+#endif
+
+    int rc = bufferevent_socket_connect_hostname(conn->buf, event_mgr_dnsbase(), AF_UNSPEC, conn->host, conn->port);
+
+    evutil_socket_t fd = bufferevent_getfd(conn->buf);
+    if (conn->send_buffer_size) {
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &conn->send_buffer_size, sizeof(conn->send_buffer_size));
+    }
+    if (conn->receive_buffer_size) {
+        bufferevent_setwatermark(conn->buf, EV_READ, 0, conn->receive_buffer_size);
+        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &conn->receive_buffer_size, sizeof(conn->receive_buffer_size));
+    }
+
+#ifdef IP_BOUND_IF
+    if (conn->interface) {
+        setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &conn->interface, sizeof(conn->interface));
+    }
+#endif
+
+    if (rc < 0) {
+        LOGE("could not connect to %s:%d %s", conn->host, conn->port,
+             evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
+        shutdown_bev(conn->buf);
+        conn->buf = NULL;
+        return 1;
+    }
+
+    bufferevent_enable(conn->buf, EV_WRITE | EV_READ);
+    bufferevent_setcb(conn->buf, tcpd_conn_readcb, tcpd_conn_writecb, tcpd_conn_eventcb, conn);
+
     return 1;
 }
 
@@ -990,6 +996,8 @@ LUA_API int tcpd_conn_close(lua_State *L) {
         shutdown_bev(conn->buf);
         conn->buf = NULL;
     }
+    
+    conn_set_ssl_error(conn, NULL);
 
     CLEAR_REF(L, conn->onReadRef)
     CLEAR_REF(L, conn->onSendReadyRef)
@@ -997,7 +1005,6 @@ LUA_API int tcpd_conn_close(lua_State *L) {
     CLEAR_REF(L, conn->onConnectedRef)
 
     FREE_STR(conn->host)
-    FREE_STR(conn->ssl_host)
 
 #if FAN_HAS_OPENSSL
     if (conn->sslctx) {
@@ -1221,12 +1228,6 @@ LUA_API int tcpd_conn_send(lua_State *L) {
     return 1;
 }
 
-LUA_API int tcpd_conn_reconnect(lua_State *L) {
-    Conn *conn = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
-    luatcpd_reconnect(conn);
-    return 0;
-}
-
 LUA_API int tcpd_accept_flush(lua_State *L) {
     ACCEPT *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
     int mode = (int)luaL_optinteger(L, 2, BEV_NORMAL);
@@ -1274,9 +1275,6 @@ LUA_API int luaopen_fan_tcpd(lua_State *L) {
 
     lua_pushcfunction(L, &tcpd_conn_close);
     lua_setfield(L, -2, "close");
-
-    lua_pushcfunction(L, &tcpd_conn_reconnect);
-    lua_setfield(L, -2, "reconnect");
 
     lua_pushstring(L, "__index");
     lua_pushvalue(L, -2);
