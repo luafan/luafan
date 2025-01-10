@@ -450,7 +450,7 @@ LUA_API int udpd_conn_send_request(lua_State *L) {
     return 0;
 }
 
-LUA_API int udpd_dest_host(lua_State *L) {
+LUA_API int lua_udpd_dest_host(lua_State *L) {
     Dest *dest = luaL_checkudata(L, 1, LUA_UDPD_DEST_TYPE);
     char buf[20] = {0};
     struct sockaddr_in *addr = (struct sockaddr_in *)&dest->si_client;
@@ -463,14 +463,14 @@ LUA_API int udpd_dest_host(lua_State *L) {
     return 0;
 }
 
-LUA_API int udpd_dest_port(lua_State *L) {
+LUA_API int lua_udpd_dest_port(lua_State *L) {
     Dest *dest = luaL_checkudata(L, 1, LUA_UDPD_DEST_TYPE);
     struct sockaddr_in *addr = (struct sockaddr_in *)&dest->si_client;
     lua_pushinteger(L, ntohs(addr->sin_port));
     return 1;
 }
 
-LUA_API int udpd_dest_tostring(lua_State *L) {
+LUA_API int lua_udpd_dest_tostring(lua_State *L) {
     Dest *dest = luaL_checkudata(L, 1, LUA_UDPD_DEST_TYPE);
 
     char buf[20];
@@ -482,6 +482,24 @@ LUA_API int udpd_dest_tostring(lua_State *L) {
     }
 
     return 0;
+}
+
+LUA_API int lua_udpd_dest_eq(lua_State *L) {
+    Dest *dest1 = luaL_checkudata(L, 1, LUA_UDPD_DEST_TYPE);
+    Dest *dest2 = luaL_checkudata(L, 2, LUA_UDPD_DEST_TYPE);
+
+    if (dest1->client_len != dest2->client_len) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    if (memcmp(&dest1->si_client, &dest2->si_client, dest1->client_len) == 0) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    lua_pushboolean(L, 0);
+    return 1;
 }
 
 LUA_API int udpd_conn_get_port(lua_State *L) {
@@ -521,14 +539,17 @@ LUA_API int luaopen_fan_udpd(lua_State *L) {
     lua_pop(L, 1);
 
     luaL_newmetatable(L, LUA_UDPD_DEST_TYPE);
-    lua_pushcfunction(L, &udpd_dest_host);
+    lua_pushcfunction(L, &lua_udpd_dest_host);
     lua_setfield(L, -2, "getHost");
 
-    lua_pushcfunction(L, &udpd_dest_port);
+    lua_pushcfunction(L, &lua_udpd_dest_port);
     lua_setfield(L, -2, "getPort");
 
-    lua_pushcfunction(L, &udpd_dest_tostring);
+    lua_pushcfunction(L, &lua_udpd_dest_tostring);
     lua_setfield(L, -2, "__tostring");
+
+    lua_pushcfunction(L, &lua_udpd_dest_eq);
+    lua_setfield(L, -2, "__eq");
 
     lua_pushstring(L, "__index");
     lua_pushvalue(L, -2);
