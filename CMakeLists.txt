@@ -10,8 +10,11 @@ include_directories ("/usr/local/include/luajit-2.0" "/usr/include/luajit-2.0")
 include_directories ("/usr/local/Cellar/mariadb/5.5.30/include/mysql")
 include_directories ("/usr/local/Cellar/openssl/1.0.2g/include/")
 include_directories ("/usr/local/include")
+include_directories ("/opt/homebrew/include")
+include_directories ("/opt/homebrew/opt/libevent/include")
 
 LINK_DIRECTORIES ("/usr/local/Cellar/openssl/1.0.2g/lib" "/usr/local/lib")
+LINK_DIRECTORIES ("/opt/homebrew/lib" "/opt/homebrew/opt/libevent/lib")
 
 IF( ${CMAKE_SYSTEM_NAME} MATCHES "Windows" )
     SET( PRMAN_COMPILE_FLAGS "/c /nologo /MT /TP /DWIN32" )

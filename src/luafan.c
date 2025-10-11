@@ -226,6 +226,13 @@ LUA_API int luaopen_fan(lua_State *L) {
     utlua_set_mainthread(L);
 #endif
 
+#if DEBUG_THREAD_TRACKING
+    // Initialize thread tracker
+    thread_tracker_init();
+    // Register Lua functions
+    thread_tracker_register_lua_functions(L);
+#endif
+
     lua_newtable(L);
     luaL_register(L, "fan", fanlib);
     return 1;

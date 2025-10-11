@@ -83,6 +83,11 @@ extern "C" {
 
 #define READ_BUFF_LEN 64 * 1024
 
+// Thread tracking debug switch - set to 1 to enable, 0 to disable
+#ifndef DEBUG_THREAD_TRACKING
+#define DEBUG_THREAD_TRACKING 0
+#endif
+
 #ifdef __ANDROID__
 
 #include <android/log.h>
@@ -146,6 +151,40 @@ void utlua_set_resume(FAN_RESUME_TPYE resume);
 
 extern FAN_RESUME_TPYE FAN_RESUME;
 
+#if DEBUG_THREAD_TRACKING
+// Reference tracking global variables and functions
+extern int g_thread_ref_count;
+extern int g_function_ref_count;
+void thread_tracker_init(void);
+void thread_tracker_log_create(const char* location, int ref);
+void thread_tracker_log_destroy(const char* location, int ref);
+void function_tracker_log_create(const char* location, int ref);
+void function_tracker_log_destroy(const char* location, int ref);
+void ref_tracker_log_destroy(const char* location, int ref);
+int thread_tracker_get_count(void);
+int function_tracker_get_count(void);
+void thread_tracker_print_active(void);
+void thread_tracker_periodic_check(void);
+void thread_tracker_register_lua_functions(lua_State *L);
+
+// Helper macros for stringifying line numbers
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+#endif
+
+#if DEBUG_THREAD_TRACKING
+#define PUSH_REF(L)                                                                                                    \
+    lua_lock(L);                                                                                                       \
+    int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                                                        \
+    thread_tracker_log_create(__FILE__ ":" TOSTRING(__LINE__), _ref_);                                                \
+    lua_unlock(L);
+
+#define POP_REF(L)                                                                                                     \
+    lua_lock(L);                                                                                                       \
+    thread_tracker_log_destroy(__FILE__ ":" TOSTRING(__LINE__), _ref_);                                               \
+    luaL_unref(L, LUA_REGISTRYINDEX, _ref_);                                                                           \
+    lua_unlock(L);
+#else
 #define PUSH_REF(L)                                                                                                    \
     lua_lock(L);                                                                                                       \
     int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                                                        \
@@ -155,13 +194,24 @@ extern FAN_RESUME_TPYE FAN_RESUME;
     lua_lock(L);                                                                                                       \
     luaL_unref(L, LUA_REGISTRYINDEX, _ref_);                                                                           \
     lua_unlock(L);
+#endif
 
+#if DEBUG_THREAD_TRACKING
 #define REF_STATE_SET(obj, L)                                                                                          \
     lua_lock(L);                                                                                                       \
-    obj->mainthread = utlua_mainthread(L); \
-lua_pushthread(L);\
+    obj->mainthread = utlua_mainthread(L);                                                                             \
+    lua_pushthread(L);                                                                                                 \
+    obj->_ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                                                        \
+    thread_tracker_log_create(__FILE__ ":" TOSTRING(__LINE__), obj->_ref_);                                           \
+    lua_unlock(L);
+#else
+#define REF_STATE_SET(obj, L)                                                                                          \
+    lua_lock(L);                                                                                                       \
+    obj->mainthread = utlua_mainthread(L);                                                                             \
+    lua_pushthread(L);                                                                                                 \
     obj->_ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                                                        \
     lua_unlock(L);
+#endif
 
 #define REF_STATE_GET(obj, L)                                                                                          \
     lua_lock(L);                                                                                                       \
@@ -175,6 +225,17 @@ if (obj->_ref_ != LUA_NOREF) {\
 #define REF_STATE_CLEAR(obj)                                                                                                     \
     CLEAR_REF(obj->mainthread, obj->_ref_);
 
+#if DEBUG_THREAD_TRACKING
+#define SET_FUNC_REF_FROM_TABLE(L, REF, IDX, KEY)                                                                      \
+    lua_getfield(L, IDX, KEY);                                                                                         \
+    if (lua_isfunction(L, -1)) {                                                                                       \
+        REF = luaL_ref(L, LUA_REGISTRYINDEX);                                                                          \
+        function_tracker_log_create(__FILE__ ":" TOSTRING(__LINE__) ":" KEY, REF);                                    \
+    } else {                                                                                                           \
+        REF = LUA_NOREF;                                                                                               \
+        lua_pop(L, 1);                                                                                                 \
+    }
+#else
 #define SET_FUNC_REF_FROM_TABLE(L, REF, IDX, KEY)                                                                      \
     lua_getfield(L, IDX, KEY);                                                                                         \
     if (lua_isfunction(L, -1)) {                                                                                       \
@@ -183,7 +244,35 @@ if (obj->_ref_ != LUA_NOREF) {\
         REF = LUA_NOREF;                                                                                               \
         lua_pop(L, 1);                                                                                                 \
     }
+#endif
 
+#if DEBUG_THREAD_TRACKING
+// Generic reference cleanup - try to remove from both trackers
+#define CLEAR_REF(L, REF)                                                                                              \
+lua_lock(L);                                                                                                       \
+    if (REF != LUA_NOREF) {                                                                                            \
+        ref_tracker_log_destroy(__FILE__ ":" TOSTRING(__LINE__), REF);                                                \
+        luaL_unref(L, LUA_REGISTRYINDEX, REF);                                                                         \
+        REF = LUA_NOREF;                                                                                               \
+    }\
+lua_unlock(L);
+
+// Function reference tracking macros
+#define FUNC_REF_CREATE(L, REF)                                                                                        \
+lua_lock(L);                                                                                                       \
+    REF = luaL_ref(L, LUA_REGISTRYINDEX);                                                                             \
+    function_tracker_log_create(__FILE__ ":" TOSTRING(__LINE__), REF);                                                \
+lua_unlock(L);
+
+#define FUNC_REF_DESTROY(L, REF)                                                                                       \
+lua_lock(L);                                                                                                       \
+    if (REF != LUA_NOREF) {                                                                                            \
+        function_tracker_log_destroy(__FILE__ ":" TOSTRING(__LINE__), REF);                                           \
+        luaL_unref(L, LUA_REGISTRYINDEX, REF);                                                                         \
+        REF = LUA_NOREF;                                                                                               \
+    }\
+lua_unlock(L);
+#else
 #define CLEAR_REF(L, REF)                                                                                              \
 lua_lock(L);                                                                                                       \
     if (REF != LUA_NOREF) {                                                                                            \
@@ -191,6 +280,20 @@ lua_lock(L);                                                                    
         REF = LUA_NOREF;                                                                                               \
     }\
 lua_unlock(L);
+
+#define FUNC_REF_CREATE(L, REF)                                                                                        \
+lua_lock(L);                                                                                                       \
+    REF = luaL_ref(L, LUA_REGISTRYINDEX);                                                                             \
+lua_unlock(L);
+
+#define FUNC_REF_DESTROY(L, REF)                                                                                       \
+lua_lock(L);                                                                                                       \
+    if (REF != LUA_NOREF) {                                                                                            \
+        luaL_unref(L, LUA_REGISTRYINDEX, REF);                                                                         \
+        REF = LUA_NOREF;                                                                                               \
+    }\
+lua_unlock(L);
+#endif
 
 
 #define DUP_STR_FROM_TABLE(L, REF, IDX, KEY)                                                                           \
