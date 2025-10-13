@@ -15,6 +15,7 @@ typedef struct tcpd_ssl_context {
     SSL_CTX *ssl_ctx;
     char *cache_key;
     int retain_count;
+    int configured;  // Flag to track if context is already configured
 
     // SSL configuration
     char *cert_file;
@@ -29,31 +30,28 @@ typedef struct tcpd_ssl_context {
     int verify_host;
 } tcpd_ssl_context_t;
 
-// SSL connection data
-typedef struct tcpd_ssl_conn {
-    SSL *ssl;
-    char *ssl_host;
-    char *error_message;
-} tcpd_ssl_conn_t;
 
 // SSL context management
-tcpd_ssl_context_t* tcpd_ssl_context_create(void);
+tcpd_ssl_context_t* tcpd_ssl_context_create(lua_State *L);
 int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_index);
-tcpd_ssl_context_t* tcpd_ssl_context_get_or_create(const char *cache_key);
+tcpd_ssl_context_t* tcpd_ssl_context_get_or_create(lua_State *L, const char *cache_key);
 void tcpd_ssl_context_retain(tcpd_ssl_context_t *ctx);
-void tcpd_ssl_context_release(tcpd_ssl_context_t *ctx);
+void tcpd_ssl_context_release(tcpd_ssl_context_t *ctx, lua_State *L);
 
-// SSL connection management
-int tcpd_ssl_connection_init(tcpd_ssl_conn_t *ssl_conn, tcpd_ssl_context_t *ctx, const char *hostname);
-void tcpd_ssl_connection_cleanup(tcpd_ssl_conn_t *ssl_conn);
-const char* tcpd_ssl_get_error(tcpd_ssl_conn_t *ssl_conn);
-void tcpd_ssl_set_error(tcpd_ssl_conn_t *ssl_conn, const char *error);
+// Cache key generation
+char* tcpd_ssl_generate_cache_key_from_table(lua_State *L, int table_index);
+
+
+// Client connection SSL error handling
+void tcpd_ssl_set_client_error(tcpd_client_conn_t *client, const char *error);
+const char* tcpd_ssl_get_client_error(tcpd_client_conn_t *client);
 
 // SSL bufferevent creation
 struct bufferevent* tcpd_ssl_create_client_bufferevent(
     struct event_base *base,
     tcpd_ssl_context_t *ctx,
-    const char *hostname
+    const char *hostname,
+    tcpd_client_conn_t *client
 );
 
 struct bufferevent* tcpd_ssl_create_server_bufferevent(
@@ -86,20 +84,20 @@ int tcpd_ssl_cert_verify_callback(X509_STORE_CTX *ctx, void *arg);
 void tcpd_ssl_print_errors(void);
 char* tcpd_ssl_get_error_string(void);
 
+// SSL context metatable registration
+void tcpd_ssl_register_metatable(lua_State *L);
+
 #else
 // Stub definitions when SSL is not available
 typedef struct tcpd_ssl_context {
     int dummy;
 } tcpd_ssl_context_t;
 
-typedef struct tcpd_ssl_conn {
-    int dummy;
-} tcpd_ssl_conn_t;
-
 // Stub functions
-static inline tcpd_ssl_context_t* tcpd_ssl_context_create(void) { return NULL; }
-static inline void tcpd_ssl_context_release(tcpd_ssl_context_t *ctx) { (void)ctx; }
-static inline const char* tcpd_ssl_get_error(tcpd_ssl_conn_t *ssl_conn) { (void)ssl_conn; return "SSL not supported"; }
+static inline tcpd_ssl_context_t* tcpd_ssl_context_create(lua_State *L) { (void)L; return NULL; }
+static inline void tcpd_ssl_context_release(tcpd_ssl_context_t *ctx, lua_State *L) { (void)ctx; (void)L; }
+static inline const char* tcpd_ssl_get_client_error(tcpd_client_conn_t *client) { (void)client; return "SSL not supported"; }
+static inline void tcpd_ssl_register_metatable(lua_State *L) { (void)L; }
 
 #endif // FAN_HAS_OPENSSL
 

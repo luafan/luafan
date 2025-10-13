@@ -281,7 +281,7 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
 
     // Clean up SSL context (will be implemented in SSL module)
     if (conn->ssl_ctx) {
-        tcpd_ssl_context_release(conn->ssl_ctx);
+        tcpd_ssl_context_release(conn->ssl_ctx, conn->mainthread);
         conn->ssl_ctx = NULL;
     }
 

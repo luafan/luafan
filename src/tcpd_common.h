@@ -76,6 +76,19 @@ typedef struct tcpd_base_conn {
     char ip[INET6_ADDRSTRLEN];
 } tcpd_base_conn_t;
 
+// Extended structures using the base connection
+typedef struct {
+    tcpd_base_conn_t base;
+    // Note: onConnectedRef is already defined in base structure
+
+    // SSL connection data (integrated from tcpd_ssl_conn_t)
+#if FAN_HAS_OPENSSL
+    SSL *ssl;
+    char *ssl_host;
+    char *ssl_error_message;
+#endif
+} tcpd_client_conn_t;
+
 // Function prototypes for common operations
 int tcpd_config_init(tcpd_config_t *config);
 int tcpd_config_set_defaults(tcpd_config_t *config);
@@ -112,25 +125,6 @@ tcpd_error_t tcpd_error_dns(int dns_error);
 tcpd_error_t tcpd_error_eof(tcpd_conn_type_t conn_type);
 tcpd_error_t tcpd_error_ssl(const char *ssl_error_msg);
 
-// Resource management
-typedef void (*tcpd_resource_cleanup_func_t)(void *resource);
-typedef struct tcpd_resource_manager tcpd_resource_manager_t;
-typedef struct tcpd_operation_context tcpd_operation_context_t;
-
-int tcpd_resource_manager_init(tcpd_resource_manager_t *manager);
-void tcpd_resource_manager_cleanup(tcpd_resource_manager_t *manager);
-int tcpd_resource_manager_add_memory(tcpd_resource_manager_t *manager, void *ptr);
-int tcpd_resource_manager_add_file(tcpd_resource_manager_t *manager, FILE *fp);
-int tcpd_resource_manager_add_bufferevent(tcpd_resource_manager_t *manager, struct bufferevent *bev);
-
-char* tcpd_safe_strdup(tcpd_resource_manager_t *manager, const char *str);
-void* tcpd_safe_malloc(tcpd_resource_manager_t *manager, size_t size);
-
-// Operation context for exception-safe operations
-int tcpd_operation_context_init(tcpd_operation_context_t *ctx);
-void tcpd_operation_context_cleanup(tcpd_operation_context_t *ctx);
-void tcpd_operation_set_error(tcpd_operation_context_t *ctx, tcpd_error_t error);
-int tcpd_operation_has_error(tcpd_operation_context_t *ctx);
 
 // Additional config functions
 int tcpd_config_apply_keepalive(const tcpd_config_t *config, evutil_socket_t fd);

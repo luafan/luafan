@@ -10,12 +10,6 @@
 
 #define LUA_TCPD_CONNECTION_TYPE "<tcpd.connect>"
 
-// Extended structures using the base connection
-typedef struct {
-    tcpd_base_conn_t base;
-    // Note: onConnectedRef is already defined in base structure
-} tcpd_client_conn_t;
-
 // Forward declarations
 static void tcpd_client_cleanup_on_disconnect(tcpd_client_conn_t *client);
 
@@ -68,18 +62,24 @@ LUA_API int tcpd_connect(lua_State *L) {
     if (client->base.config.ssl_enabled) {
 #if FAN_HAS_OPENSSL
         tcpd_ssl_init();
-        client->base.ssl_ctx = tcpd_ssl_context_create();
-        if (client->base.ssl_ctx) {
-            tcpd_ssl_context_configure(client->base.ssl_ctx, L, 1);
 
-            // Get SSL hostname override
-            lua_getfield(L, 1, "ssl_host");
-            const char *ssl_host = lua_tostring(L, -1);
-            lua_pop(L, 1);
+        // Generate cache key based on SSL configuration
+        char *cache_key = tcpd_ssl_generate_cache_key_from_table(L, 1);
+        if (cache_key) {
+            client->base.ssl_ctx = tcpd_ssl_context_get_or_create(L, cache_key);
+            if (client->base.ssl_ctx) {
+                tcpd_ssl_context_configure(client->base.ssl_ctx, L, 1);
 
-            client->base.buf = tcpd_ssl_create_client_bufferevent(
-                event_mgr_base(), client->base.ssl_ctx,
-                ssl_host ? ssl_host : client->base.host);
+                // Get SSL hostname override
+                lua_getfield(L, 1, "ssl_host");
+                const char *ssl_host = lua_tostring(L, -1);
+                lua_pop(L, 1);
+
+                client->base.buf = tcpd_ssl_create_client_bufferevent(
+                    event_mgr_base(), client->base.ssl_ctx,
+                    ssl_host ? ssl_host : client->base.host, client);
+            }
+            free(cache_key);
         }
 #else
         luaL_error(L, "SSL is not supported in this build");
@@ -125,6 +125,21 @@ LUA_API int tcpd_connect(lua_State *L) {
 static void tcpd_client_cleanup_on_disconnect(tcpd_client_conn_t *client) {
     if (!client) return;
 
+#if FAN_HAS_OPENSSL
+    // Clean up SSL fields
+    free(client->ssl_host);
+    free(client->ssl_error_message);
+    client->ssl_host = NULL;
+    client->ssl_error_message = NULL;
+    // SSL object is freed by bufferevent
+    client->ssl = NULL;
+
+    // Release SSL context with retain count management
+    if (client->base.ssl_ctx) {
+        tcpd_ssl_context_release(client->base.ssl_ctx, client->base.mainthread);
+        client->base.ssl_ctx = NULL;
+    }
+#endif
     // Base cleanup handles all references including onConnectedRef
     tcpd_base_conn_cleanup(&client->base);
 }
@@ -275,6 +290,7 @@ static const luaL_Reg tcpdlib[] = {
 LUA_API int luaopen_fan_tcpd(lua_State *L) {
 #if FAN_HAS_OPENSSL
     tcpd_ssl_init();
+    tcpd_ssl_register_metatable(L);
 #endif
 
     // Register CONNECTION_TYPE metatable

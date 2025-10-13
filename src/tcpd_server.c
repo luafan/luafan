@@ -187,7 +187,7 @@ LUA_API int tcpd_bind(lua_State *L) {
     // Set up SSL if enabled
     if (server->config.ssl_enabled) {
 #if FAN_HAS_OPENSSL
-        server->ssl_ctx = tcpd_ssl_context_create();
+        server->ssl_ctx = tcpd_ssl_context_create(L);
         if (server->ssl_ctx) {
             tcpd_ssl_context_configure(server->ssl_ctx, L, 1);
         }
@@ -387,7 +387,7 @@ static int tcpd_server_gc(lua_State *L) {
 
     // Clean up SSL context
     if (server->ssl_ctx) {
-        tcpd_ssl_context_release(server->ssl_ctx);
+        tcpd_ssl_context_release(server->ssl_ctx, server->mainthread);
         server->ssl_ctx = NULL;
     }
 

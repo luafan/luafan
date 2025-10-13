@@ -15,15 +15,53 @@ void tcpd_ssl_init(void) {
     }
 }
 
-// Create a new SSL context
-tcpd_ssl_context_t* tcpd_ssl_context_create(void) {
-    tcpd_ssl_context_t *ctx = malloc(sizeof(tcpd_ssl_context_t));
-    if (!ctx) return NULL;
+// SSL context metatable name
+#define LUA_TCPD_SSL_CONTEXT_TYPE "<tcpd.ssl_context>"
 
+// SSL context garbage collection
+static int tcpd_ssl_context_gc(lua_State *L) {
+    tcpd_ssl_context_t *ctx = luaL_checkudata(L, 1, LUA_TCPD_SSL_CONTEXT_TYPE);
+
+    // Clean up SSL context
+    if (ctx->ssl_ctx) {
+        SSL_CTX_free(ctx->ssl_ctx);
+        ctx->ssl_ctx = NULL;
+    }
+
+    // Free allocated strings
+    free(ctx->cache_key);
+    free(ctx->cert_file);
+    free(ctx->key_file);
+    free(ctx->ca_info);
+    free(ctx->ca_path);
+    free(ctx->pkcs12_path);
+    free(ctx->pkcs12_password);
+
+    // Clear the strings to avoid double-free
+    ctx->cache_key = NULL;
+    ctx->cert_file = NULL;
+    ctx->key_file = NULL;
+    ctx->ca_info = NULL;
+    ctx->ca_path = NULL;
+    ctx->pkcs12_path = NULL;
+    ctx->pkcs12_password = NULL;
+
+    return 0;
+}
+
+// Create a new SSL context
+tcpd_ssl_context_t* tcpd_ssl_context_create(lua_State *L) {
+    if (!L) return NULL;
+
+    tcpd_ssl_context_t *ctx = lua_newuserdata(L, sizeof(tcpd_ssl_context_t));
     memset(ctx, 0, sizeof(tcpd_ssl_context_t));
     ctx->retain_count = 1;
     ctx->verify_peer = 1;
     ctx->verify_host = 1;
+
+    // Set metatable for proper garbage collection
+    luaL_getmetatable(L, LUA_TCPD_SSL_CONTEXT_TYPE);
+    lua_setmetatable(L, -2);
 
     return ctx;
 }
@@ -31,6 +69,11 @@ tcpd_ssl_context_t* tcpd_ssl_context_create(void) {
 // Configure SSL context from Lua table
 int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_index) {
     if (!ctx || !L) return -1;
+
+    // Skip configuration if already configured (from cached context)
+    if (ctx->configured) {
+        return 0;
+    }
 
     // Extract SSL configuration from Lua table
     lua_getfield(L, table_index, "cert");
@@ -130,6 +173,9 @@ int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_
     SSL_CTX_set_verify(ctx->ssl_ctx, SSL_VERIFY_PEER, tcpd_ssl_verify_callback);
 #endif
 
+    // Mark as configured to prevent re-configuration
+    ctx->configured = 1;
+
     return 0;
 }
 
@@ -161,11 +207,85 @@ static char* tcpd_ssl_generate_cache_key(tcpd_ssl_context_t *ctx) {
     return key;
 }
 
+// Generate cache key from Lua table (based on tcpd.c.txt logic)
+char* tcpd_ssl_generate_cache_key_from_table(lua_State *L, int table_index) {
+    if (!L) return NULL;
+
+    BYTEARRAY ba = {0};
+    bytearray_alloc(&ba, 1024);
+    bytearray_writebuffer(&ba, "SSL_CTX:", 8);
+
+    // Add cainfo to cache key
+    lua_getfield(L, table_index, "cainfo");
+    const char *cainfo = lua_tostring(L, -1);
+    if (cainfo) {
+        bytearray_writebuffer(&ba, cainfo, strlen(cainfo));
+    } else {
+        // Use default cert.pem if no CA specified (like in original)
+        bytearray_writebuffer(&ba, "cert.pem", 8);
+    }
+    lua_pop(L, 1);
+
+    // Add capath to cache key
+    lua_getfield(L, table_index, "capath");
+    const char *capath = lua_tostring(L, -1);
+    if (capath) {
+        bytearray_writebuffer(&ba, capath, strlen(capath));
+    }
+    lua_pop(L, 1);
+
+    // Add PKCS12 path to cache key
+    lua_getfield(L, table_index, "pkcs12.path");
+    const char *p12path = lua_tostring(L, -1);
+    if (p12path) {
+        bytearray_writebuffer(&ba, p12path, strlen(p12path));
+    }
+    lua_pop(L, 1);
+
+    // Add PKCS12 password to cache key
+    lua_getfield(L, table_index, "pkcs12.password");
+    const char *p12password = lua_tostring(L, -1);
+    if (p12password) {
+        bytearray_writebuffer(&ba, p12password, strlen(p12password));
+    }
+    lua_pop(L, 1);
+
+    bytearray_write8(&ba, 0);
+    bytearray_read_ready(&ba);
+
+    char *key = strdup((const char *)ba.buffer);
+    bytearray_dealloc(&ba);
+
+    return key;
+}
+
 // Get or create SSL context (with caching)
-tcpd_ssl_context_t* tcpd_ssl_context_get_or_create(const char *cache_key) {
-    // This would typically use a global cache
-    // For now, we'll create a new context each time
-    return tcpd_ssl_context_create();
+tcpd_ssl_context_t* tcpd_ssl_context_get_or_create(lua_State *L, const char *cache_key) {
+    if (!L || !cache_key) return NULL;
+
+    // Try to get from Lua registry cache
+    lua_getfield(L, LUA_REGISTRYINDEX, cache_key);
+    if (!lua_isnil(L, -1)) {
+        // Found cached context
+        tcpd_ssl_context_t *ctx = lua_touserdata(L, -1);
+        if (ctx) {
+            ctx->retain_count++;
+            lua_pop(L, 1);
+            return ctx;
+        }
+    }
+    lua_pop(L, 1);
+
+    // Create new context using lua_newuserdata
+    tcpd_ssl_context_t *ctx = tcpd_ssl_context_create(L);
+    if (!ctx) return NULL;
+
+    ctx->cache_key = strdup(cache_key);
+
+    // Store in Lua registry (context is already a userdata on stack)
+    lua_setfield(L, LUA_REGISTRYINDEX, cache_key);
+
+    return ctx;
 }
 
 // Retain SSL context
@@ -175,106 +295,85 @@ void tcpd_ssl_context_retain(tcpd_ssl_context_t *ctx) {
     }
 }
 
-// Release SSL context
-void tcpd_ssl_context_release(tcpd_ssl_context_t *ctx) {
+// Release SSL context (with cache cleanup)
+void tcpd_ssl_context_release(tcpd_ssl_context_t *ctx, lua_State *L) {
     if (!ctx) return;
 
     ctx->retain_count--;
     if (ctx->retain_count <= 0) {
-        // Clean up SSL context
-        if (ctx->ssl_ctx) {
-            SSL_CTX_free(ctx->ssl_ctx);
+        // Remove from Lua registry cache if cached
+        if (ctx->cache_key && L) {
+            lua_pushnil(L);
+            lua_setfield(L, LUA_REGISTRYINDEX, ctx->cache_key);
         }
-
-        // Free allocated strings
-        free(ctx->cache_key);
-        free(ctx->cert_file);
-        free(ctx->key_file);
-        free(ctx->ca_info);
-        free(ctx->ca_path);
-        free(ctx->pkcs12_path);
-        free(ctx->pkcs12_password);
-
-        free(ctx);
+        // Note: The actual cleanup is handled by the __gc method
+        // when Lua garbage collects the userdata
     }
 }
 
-// Initialize SSL connection
-int tcpd_ssl_connection_init(tcpd_ssl_conn_t *ssl_conn, tcpd_ssl_context_t *ctx, const char *hostname) {
-    if (!ssl_conn || !ctx || !ctx->ssl_ctx) return -1;
 
-    memset(ssl_conn, 0, sizeof(tcpd_ssl_conn_t));
+// Set SSL error message for client connection
+void tcpd_ssl_set_client_error(tcpd_client_conn_t *client, const char *error) {
+    if (!client) return;
 
-    ssl_conn->ssl = SSL_new(ctx->ssl_ctx);
-    if (!ssl_conn->ssl) return -1;
-
-    SSL_set_ex_data(ssl_conn->ssl, ssl_conn_index, ssl_conn);
-
-    if (hostname) {
-        ssl_conn->ssl_host = strdup(hostname);
-
-#if OPENSSL_VERSION_NUMBER >= 0x1010000fL
-        if (ctx->verify_host) {
-            SSL_set_hostflags(ssl_conn->ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-            if (!SSL_set1_host(ssl_conn->ssl, hostname)) {
-                printf("SSL_set1_host '%s' failed!\n", hostname);
-            }
-        }
-
-        if (ctx->verify_peer) {
-            SSL_set_verify(ssl_conn->ssl, SSL_VERIFY_PEER, NULL);
-        } else {
-            SSL_set_verify(ssl_conn->ssl, SSL_VERIFY_NONE, NULL);
-        }
-#endif
-
-        SSL_set_tlsext_host_name(ssl_conn->ssl, hostname);
-    }
-
-    return 0;
+    free(client->ssl_error_message);
+    client->ssl_error_message = error ? strdup(error) : NULL;
 }
 
-// Clean up SSL connection
-void tcpd_ssl_connection_cleanup(tcpd_ssl_conn_t *ssl_conn) {
-    if (!ssl_conn) return;
-
-    free(ssl_conn->ssl_host);
-    free(ssl_conn->error_message);
-
-    // SSL object is freed by bufferevent
-    memset(ssl_conn, 0, sizeof(tcpd_ssl_conn_t));
-}
-
-// Get SSL error message
-const char* tcpd_ssl_get_error(tcpd_ssl_conn_t *ssl_conn) {
-    return ssl_conn ? ssl_conn->error_message : NULL;
-}
-
-// Set SSL error message
-void tcpd_ssl_set_error(tcpd_ssl_conn_t *ssl_conn, const char *error) {
-    if (!ssl_conn) return;
-
-    free(ssl_conn->error_message);
-    ssl_conn->error_message = error ? strdup(error) : NULL;
+// Get SSL error message from client connection
+const char* tcpd_ssl_get_client_error(tcpd_client_conn_t *client) {
+    return client ? client->ssl_error_message : NULL;
 }
 
 // Create client SSL bufferevent
 struct bufferevent* tcpd_ssl_create_client_bufferevent(
     struct event_base *base,
     tcpd_ssl_context_t *ctx,
-    const char *hostname) {
+    const char *hostname,
+    tcpd_client_conn_t *client) {
 
-    if (!base || !ctx || !ctx->ssl_ctx) return NULL;
+    if (!base || !ctx || !ctx->ssl_ctx || !client) return NULL;
 
-    tcpd_ssl_conn_t ssl_conn;
-    if (tcpd_ssl_connection_init(&ssl_conn, ctx, hostname) != 0) {
-        return NULL;
+    // Initialize SSL fields directly in client structure
+    client->ssl = SSL_new(ctx->ssl_ctx);
+    if (!client->ssl) return NULL;
+
+    SSL_set_ex_data(client->ssl, ssl_conn_index, client);
+
+    if (hostname) {
+        client->ssl_host = strdup(hostname);
+
+#if OPENSSL_VERSION_NUMBER >= 0x1010000fL
+        if (ctx->verify_host) {
+            SSL_set_hostflags(client->ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+            if (!SSL_set1_host(client->ssl, hostname)) {
+                printf("SSL_set1_host '%s' failed!\n", hostname);
+            }
+        }
+
+        if (ctx->verify_peer) {
+            SSL_set_verify(client->ssl, SSL_VERIFY_PEER, NULL);
+        } else {
+            SSL_set_verify(client->ssl, SSL_VERIFY_NONE, NULL);
+        }
+#endif
+
+        SSL_set_tlsext_host_name(client->ssl, hostname);
     }
 
     struct bufferevent *bev = bufferevent_openssl_socket_new(
-        base, -1, ssl_conn.ssl, BUFFEREVENT_SSL_CONNECTING,
+        base, -1, client->ssl, BUFFEREVENT_SSL_CONNECTING,
         BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS
     );
+
+    if (!bev) {
+        // If bufferevent creation failed, clean up SSL object
+        SSL_free(client->ssl);
+        client->ssl = NULL;
+        free(client->ssl_host);
+        client->ssl_host = NULL;
+        return NULL;
+    }
 
 #ifdef EVENT__NUMERIC_VERSION
 #if (EVENT__NUMERIC_VERSION >= 0x02010500)
@@ -296,10 +395,18 @@ struct bufferevent* tcpd_ssl_create_server_bufferevent(
     SSL *ssl = SSL_new(ctx->ssl_ctx);
     if (!ssl) return NULL;
 
-    return bufferevent_openssl_socket_new(
+    struct bufferevent *bev = bufferevent_openssl_socket_new(
         base, fd, ssl, BUFFEREVENT_SSL_ACCEPTING,
         BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS
     );
+
+    if (!bev) {
+        // If bufferevent creation failed, clean up SSL object
+        SSL_free(ssl);
+        return NULL;
+    }
+
+    return bev;
 }
 
 // Load certificate and key files
@@ -383,10 +490,10 @@ int tcpd_ssl_cert_verify_callback(X509_STORE_CTX *ctx, void *arg) {
     if (!preverify_ok) {
         SSL *ssl = X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
         if (ssl) {
-            tcpd_ssl_conn_t *ssl_conn = SSL_get_ex_data(ssl, ssl_conn_index);
+            tcpd_client_conn_t *client = SSL_get_ex_data(ssl, ssl_conn_index);
             int err = X509_STORE_CTX_get_error(ctx);
-            if (ssl_conn) {
-                tcpd_ssl_set_error(ssl_conn, X509_verify_cert_error_string(err));
+            if (client) {
+                tcpd_ssl_set_client_error(client, X509_verify_cert_error_string(err));
             }
         }
     }
@@ -398,11 +505,11 @@ int tcpd_ssl_cert_verify_callback(X509_STORE_CTX *ctx, void *arg) {
 int tcpd_ssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx) {
     if (!preverify_ok) {
         SSL *ssl = X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
-        tcpd_ssl_conn_t *ssl_conn = SSL_get_ex_data(ssl, ssl_conn_index);
+        tcpd_client_conn_t *client = SSL_get_ex_data(ssl, ssl_conn_index);
 
         int err = X509_STORE_CTX_get_error(ctx);
-        if (ssl_conn) {
-            tcpd_ssl_set_error(ssl_conn, X509_verify_cert_error_string(err));
+        if (client) {
+            tcpd_ssl_set_client_error(client, X509_verify_cert_error_string(err));
         }
     }
 
@@ -427,6 +534,19 @@ char* tcpd_ssl_get_error_string(void) {
 
     BIO_free(bio);
     return result;
+}
+
+// Register SSL context metatable
+void tcpd_ssl_register_metatable(lua_State *L) {
+    // Register SSL_CONTEXT_TYPE metatable
+    luaL_newmetatable(L, LUA_TCPD_SSL_CONTEXT_TYPE);
+    lua_pushcfunction(L, tcpd_ssl_context_gc);
+    lua_setfield(L, -2, "__gc");
+    lua_pushstring(L, "ssl_context");
+    lua_setfield(L, -2, "__typename");
+    lua_pushvalue(L, -1);
+    lua_setfield(L, -2, "__index");
+    lua_pop(L, 1);
 }
 
 #endif // FAN_HAS_OPENSSL
