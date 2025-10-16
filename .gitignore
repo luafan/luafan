@@ -35,3 +35,6 @@ upload.sh
 ios/Pods
 *.xcuserdatad*
 test
+
+# Claude Code Assistant project file
+CLAUDE.md

@@ -14,6 +14,7 @@ struct event_base *event_mgr_base_current(void);
 struct evdns_base *event_mgr_dnsbase(void);
 void event_mgr_break(void);
 int event_mgr_init(void);
+void event_mgr_cleanup(void);
 int event_mgr_loop(void);
 int event_mgr_loop_later_cleanup(void);
 void event_mgr_loop_cleanup(void);

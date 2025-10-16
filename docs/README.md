@@ -24,6 +24,11 @@ It's easy to write several api invocations one by one without any callback.
 * [fan.connector](api/connector.md) fifo/tcp/udp connector helper.
 * [fan.worker](api/worker.md) multi-process worker helper.
 
+## Utility Modules
+* [fan.utils](api/utils.md) utility functions for strings, time, and weak references.
+* [fan.pool](api/pool.md) generic resource pooling system.
+* [fan.upnp](api/upnp.md) UPnP client for automatic port mapping.
+
 ## ORM
 * [mariadb.orm](api/mariadb_orm.md) mariadb orm impl.
 * [sqlite3.orm](api/sqlite3_orm.md) sqlite3 orm impl.
@@ -34,13 +39,22 @@ It's easy to write several api invocations one by one without any callback.
 ## Config
 * [config](api/config.md) common config.
 
-Introduce
-=========
+Package Variants
+================
 
-There are 3 spec in luarocks, luafan/luafanlite/luafanmicro
+There are 3 package variants available in LuaRocks:
 
-* `luafan` contains `fifo` `tcpd` `udpd` `httpd` `stream` `objectbuf` `http` `mariadb` depends `libevent curl openssl mariadb`
+## luafan (Full Package)
+**Modules:** `fifo` `tcpd` `udpd` `httpd` `stream` `objectbuf` `http` `mariadb` `connector` `worker` `utils` `pool` `upnp`
+**Dependencies:** `libevent` `curl` `openssl` `mariadb`
+**Use case:** Complete async networking and database development
 
-* `luafanlite` contains `fifo` `tcpd` `udpd` `httpd` `stream` `objectbuf` `http` depends `libevent curl openssl`
+## luafanlite (Lite Package)
+**Modules:** `fifo` `tcpd` `udpd` `httpd` `stream` `objectbuf` `http` `connector` `worker` `utils` `pool` `upnp`
+**Dependencies:** `libevent` `curl` `openssl`
+**Use case:** Async networking without database requirements
 
-* `luafanmicro` contains `fifo` `tcpd` `udpd` `httpd` `stream` `objectbuf` depends `libevent`
+## luafanmicro (Micro Package)
+**Modules:** `fifo` `tcpd` `udpd` `httpd` `stream` `objectbuf` `connector` `worker` `utils` `pool`
+**Dependencies:** `libevent`
+**Use case:** Minimal async networking (no SSL/HTTP client/UPnP)

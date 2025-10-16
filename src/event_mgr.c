@@ -75,6 +75,60 @@ void event_mgr_break() {
     }
 }
 
+/* Internal cleanup functions to eliminate redundancy */
+static void cleanup_signals() {
+    signal(SIGHUP, SIG_DFL);
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGINT, SIG_DFL);
+    signal(SIGQUIT, SIG_DFL);
+    signal(SIGPIPE, SIG_DFL);
+}
+
+static void cleanup_signal_events() {
+    if (base) {
+        event_del(&signal_int);
+        event_del(&signal_pipe);
+    }
+}
+
+static void cleanup_openssl() {
+#if FAN_HAS_OPENSSL && OPENSSL_VERSION_NUMBER < 0x1010000fL
+    EVP_cleanup();
+    CRYPTO_cleanup_all_ex_data();
+    ERR_remove_state(0);
+    ERR_free_strings();
+#endif
+}
+
+static void cleanup_dnsbase() {
+    if (dnsbase) {
+        evdns_base_free(dnsbase, 0);
+        dnsbase = NULL;
+    }
+}
+
+static void cleanup_eventbase() {
+    if (base) {
+        event_base_free(base);
+        base = NULL;
+    }
+}
+
+static void reset_state() {
+    initialized = 0;
+    looping = 0;
+    signal_count = 0;
+}
+
+static void full_cleanup() {
+    cleanup_signals();
+    cleanup_signal_events();
+    cleanup_openssl();
+    cleanup_dnsbase();
+    cleanup_eventbase();
+    reset_state();
+}
+
 int event_mgr_init() {
     if (!initialized) {
         initialized = 1;
@@ -114,30 +168,8 @@ int event_mgr_loop() {
 
         event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
 
-        signal(SIGHUP, SIG_IGN);
-        signal(SIGTERM, SIG_IGN);
-        signal(SIGINT, SIG_IGN);
-        signal(SIGQUIT, SIG_IGN);
-        signal(SIGPIPE, SIG_IGN);
-
-        event_del(&signal_int);
-        event_del(&signal_pipe);
-
-#if FAN_HAS_OPENSSL && OPENSSL_VERSION_NUMBER < 0x1010000fL
-        EVP_cleanup();
-        CRYPTO_cleanup_all_ex_data();
-        ERR_remove_state(0);
-        ERR_free_strings();
-#endif
-
-        evdns_base_free(dnsbase, 0);
-        dnsbase = NULL;
-
-        event_base_free(base);
-        base = NULL;
-
-        looping = 0;
-        initialized = 0;
+        // Full cleanup after loop exits
+        full_cleanup();
         return 0;
     }
 
@@ -152,23 +184,11 @@ int event_mgr_loop_later_cleanup() {
 
         event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
 
-        signal(SIGHUP, SIG_IGN);
-        signal(SIGTERM, SIG_IGN);
-        signal(SIGINT, SIG_IGN);
-        signal(SIGQUIT, SIG_IGN);
-        signal(SIGPIPE, SIG_IGN);
-
-        event_del(&signal_int);
-        event_del(&signal_pipe);
-
-#if FAN_HAS_OPENSSL && OPENSSL_VERSION_NUMBER < 0x1010000fL
-        EVP_cleanup();
-        CRYPTO_cleanup_all_ex_data();
-        ERR_remove_state(0);
-        ERR_free_strings();
-#endif
-        evdns_base_free(dnsbase, 0);
-        dnsbase = NULL;
+        // Partial cleanup - keep event base for later cleanup
+        cleanup_signals();
+        cleanup_signal_events();
+        cleanup_openssl();
+        cleanup_dnsbase();
 
         looping = 0;
         initialized = 0;
@@ -178,7 +198,12 @@ int event_mgr_loop_later_cleanup() {
     return -1;
 }
 
+void event_mgr_cleanup() {
+    if (initialized) {
+        full_cleanup();
+    }
+}
+
 void event_mgr_loop_cleanup() {
-    event_base_free(base);
-    base = NULL;
+    cleanup_eventbase();
 }
