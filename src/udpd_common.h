@@ -43,9 +43,8 @@ typedef struct udpd_config {
     int reuse_addr;
     int reuse_port;
 
-    // Buffer sizes specific to UDP
-    int recv_buffer_size;
-    int send_buffer_size;
+    // Note: UDP uses base.send_buffer_size and base.receive_buffer_size
+    // No separate UDP buffer sizes needed - eliminates redundancy
 } udpd_config_t;
 
 // Base UDP connection structure

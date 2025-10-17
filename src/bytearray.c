@@ -9,51 +9,8 @@
 #define MAX_PREALLOC 4096       // Larger pre-allocation for objectbuf
 #define CACHE_LINE_SIZE 64      // For memory alignment optimization
 
-// Memory pool for small allocations to reduce malloc overhead
-#define POOL_SIZE 512
-#define POOL_BLOCK_SIZE 2048
-static struct {
-    uint8_t blocks[POOL_SIZE][POOL_BLOCK_SIZE];
-    bool used[POOL_SIZE];
-    int next_free;
-} memory_pool = {.next_free = 0};
-
-// Fast memory pool allocation for small buffers
-static inline void* pool_alloc(size_t size) {
-    if (size <= POOL_BLOCK_SIZE) {
-        for (int i = memory_pool.next_free; i < POOL_SIZE; i++) {
-            if (!memory_pool.used[i]) {
-                memory_pool.used[i] = true;
-                memory_pool.next_free = (i + 1) % POOL_SIZE;
-                return memory_pool.blocks[i];
-            }
-        }
-        // Wrap around if needed
-        for (int i = 0; i < memory_pool.next_free; i++) {
-            if (!memory_pool.used[i]) {
-                memory_pool.used[i] = true;
-                memory_pool.next_free = (i + 1) % POOL_SIZE;
-                return memory_pool.blocks[i];
-            }
-        }
-    }
-    return malloc(size);
-}
-
-static inline void pool_free(void* ptr) {
-    // Check if pointer is in our pool
-    if (ptr >= (void*)memory_pool.blocks && ptr < (void*)(memory_pool.blocks + POOL_SIZE)) {
-        int index = ((uint8_t*)ptr - (uint8_t*)memory_pool.blocks) / POOL_BLOCK_SIZE;
-        if (index >= 0 && index < POOL_SIZE) {
-            memory_pool.used[index] = false;
-            if (index < memory_pool.next_free) {
-                memory_pool.next_free = index;
-            }
-            return;
-        }
-    }
-    free(ptr);
-}
+// Note: Memory pool allocation was removed as it was unused
+// All allocation now goes through standard malloc/realloc/free
 
 // Branch prediction hints for better performance
 #define LIKELY(x)   __builtin_expect(!!(x), 1)
@@ -102,8 +59,7 @@ static inline bool ensure_capacity_optimized(BYTEARRAY *ba, size_t required_size
         new_size = (new_size + CACHE_LINE_SIZE - 1) & ~(CACHE_LINE_SIZE - 1);
     }
 
-    // For simplicity, disable pool allocation in capacity expansion
-    // This avoids mixing pool and malloc pointers which causes realloc issues
+    // Use realloc for capacity expansion
     uint8_t *new_buffer = realloc(ba->buffer, new_size);
 
     if (UNLIKELY(!new_buffer)) {
@@ -230,7 +186,7 @@ bool bytearray_alloc(BYTEARRAY *ba, uint32_t length) {
         length = MIN_CAPACITY;
     }
 
-    // Use regular malloc to avoid mixing with realloc
+    // Allocate buffer memory
     ba->buffer = malloc(length);
 
     if (UNLIKELY(!ba->buffer)) {

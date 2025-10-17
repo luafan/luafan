@@ -30,8 +30,14 @@ int udpd_config_set_defaults(udpd_config_t *config) {
     config->multicast_ttl = 1;
     config->reuse_addr = 1;
     config->reuse_port = 0;
-    config->recv_buffer_size = UDPD_DEFAULT_BUFFER_SIZE;
-    config->send_buffer_size = UDPD_DEFAULT_BUFFER_SIZE;
+
+    // Set UDP-specific buffer defaults in base config if not already set
+    if (config->base.send_buffer_size == 0) {
+        config->base.send_buffer_size = UDPD_DEFAULT_BUFFER_SIZE;
+    }
+    if (config->base.receive_buffer_size == 0) {
+        config->base.receive_buffer_size = UDPD_DEFAULT_BUFFER_SIZE;
+    }
 
     return 0;
 }
@@ -40,11 +46,30 @@ int udpd_config_set_defaults(udpd_config_t *config) {
 int udpd_config_from_lua_table(lua_State *L, int table_index, udpd_config_t *config) {
     if (!L || !config) return -1;
 
-    // Initialize with defaults first
-    udpd_config_init(config);
+    // Initialize structure first
+    memset(config, 0, sizeof(udpd_config_t));
+
+    // Initialize base TCP configuration first
+    tcpd_config_init(&config->base);
 
     // Extract base TCP configuration (reuse existing logic)
     tcpd_config_from_lua_table(L, table_index, &config->base);
+
+    // Set UDP-specific defaults (non-buffer fields)
+    config->broadcast_enabled = 0;
+    config->multicast_enabled = 0;
+    config->multicast_group = NULL;
+    config->multicast_ttl = 1;
+    config->reuse_addr = 1;
+    config->reuse_port = 0;
+
+    // Set UDP-specific buffer defaults only if not already set by Lua table
+    if (config->base.send_buffer_size == 0) {
+        config->base.send_buffer_size = UDPD_DEFAULT_BUFFER_SIZE;
+    }
+    if (config->base.receive_buffer_size == 0) {
+        config->base.receive_buffer_size = UDPD_DEFAULT_BUFFER_SIZE;
+    }
 
     // Extract UDP-specific configuration
     lua_getfield(L, table_index, "broadcast");
@@ -84,17 +109,8 @@ int udpd_config_from_lua_table(lua_State *L, int table_index, udpd_config_t *con
     }
     lua_pop(L, 1);
 
-    lua_getfield(L, table_index, "recv_buffer_size");
-    if (lua_type(L, -1) == LUA_TNUMBER) {
-        config->recv_buffer_size = (int)lua_tointeger(L, -1);
-    }
-    lua_pop(L, 1);
-
-    lua_getfield(L, table_index, "send_buffer_size");
-    if (lua_type(L, -1) == LUA_TNUMBER) {
-        config->send_buffer_size = (int)lua_tointeger(L, -1);
-    }
-    lua_pop(L, 1);
+    // Buffer sizes are handled by tcpd_config_from_lua_table() in base config
+    // No separate UDP buffer handling needed - eliminates field conflicts
 
     return 0;
 }
@@ -129,17 +145,17 @@ int udpd_config_apply_socket_options(const udpd_config_t *config, evutil_socket_
         }
     }
 
-    // Apply buffer sizes
-    if (config->recv_buffer_size > 0) {
+    // Apply buffer sizes from base config
+    if (config->base.receive_buffer_size > 0) {
         if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
-                      &config->recv_buffer_size, sizeof(config->recv_buffer_size)) < 0) {
+                      &config->base.receive_buffer_size, sizeof(config->base.receive_buffer_size)) < 0) {
             // Non-fatal, continue
         }
     }
 
-    if (config->send_buffer_size > 0) {
+    if (config->base.send_buffer_size > 0) {
         if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
-                      &config->send_buffer_size, sizeof(config->send_buffer_size)) < 0) {
+                      &config->base.send_buffer_size, sizeof(config->base.send_buffer_size)) < 0) {
             // Non-fatal, continue
         }
     }
@@ -206,12 +222,12 @@ void udpd_config_cleanup(udpd_config_t *config) {
 int udpd_config_validate(const udpd_config_t *config) {
     if (!config) return -1;
 
-    // Validate buffer sizes
-    if (config->recv_buffer_size <= 0 || config->recv_buffer_size > UDPD_MAX_PACKET_SIZE) {
+    // Validate buffer sizes from base config
+    if (config->base.receive_buffer_size <= 0 || config->base.receive_buffer_size > UDPD_MAX_PACKET_SIZE) {
         return -1;
     }
 
-    if (config->send_buffer_size <= 0 || config->send_buffer_size > UDPD_MAX_PACKET_SIZE) {
+    if (config->base.send_buffer_size <= 0 || config->base.send_buffer_size > UDPD_MAX_PACKET_SIZE) {
         return -1;
     }
 
@@ -248,14 +264,12 @@ int udpd_config_copy(udpd_config_t *dest, const udpd_config_t *src) {
     // Copy base configuration
     dest->base = src->base;
 
-    // Copy UDP-specific fields
+    // Copy UDP-specific fields (buffer sizes are in base config)
     dest->broadcast_enabled = src->broadcast_enabled;
     dest->multicast_enabled = src->multicast_enabled;
     dest->multicast_ttl = src->multicast_ttl;
     dest->reuse_addr = src->reuse_addr;
     dest->reuse_port = src->reuse_port;
-    dest->recv_buffer_size = src->recv_buffer_size;
-    dest->send_buffer_size = src->send_buffer_size;
 
     // Copy allocated strings
     if (src->multicast_group) {
