@@ -193,7 +193,7 @@ int udpd_is_ip_address(const char *str) {
 // Create socket address from string and port
 int udpd_create_address_from_string(const char *host, int port,
                                    struct sockaddr_storage *addr, socklen_t *addrlen) {
-    if (!host || !addr || !addrlen || port <= 0) return -1;
+    if (!host || !addr || !addrlen || port <= 0 || port > 65535) return -1;
 
     memset(addr, 0, sizeof(*addr));
 
