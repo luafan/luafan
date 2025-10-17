@@ -1,18 +1,20 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 2.8.12)
 
 project(fan)
 
 #SET(CMAKE_BUILD_TYPE "Debug")
 
-#include_directories ("/usr/local/include/lua5.3")
+include_directories ("/usr/include/lua5.3" "/usr/local/include/lua5.3")
 include_directories ("/usr/local/include/luajit-2.0" "/usr/include/luajit-2.0")
 
+include_directories ("/usr/local/mysql/include")
 include_directories ("/usr/local/Cellar/mariadb/5.5.30/include/mysql")
 include_directories ("/usr/local/Cellar/openssl/1.0.2g/include/")
 include_directories ("/usr/local/include")
 include_directories ("/opt/homebrew/include")
 include_directories ("/opt/homebrew/opt/libevent/include")
 
+LINK_DIRECTORIES ("/usr/local/mysql/lib")
 LINK_DIRECTORIES ("/usr/local/Cellar/openssl/1.0.2g/lib" "/usr/local/lib")
 LINK_DIRECTORIES ("/opt/homebrew/lib" "/opt/homebrew/opt/libevent/lib")
 
@@ -28,6 +30,7 @@ ELSEIF( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
     SET( PRMAN_COMPILE_FLAGS "-c -fPIC" )
     SET( PRMAN_LINK_FLAGS "-shared" )
     add_definitions( -DLUA_USE_LINUX )
+    add_definitions( -D_GNU_SOURCE )
 ENDIF()
 
 SET (MODULE_NAME   "luafan")

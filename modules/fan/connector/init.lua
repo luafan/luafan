@@ -1,5 +1,4 @@
 local fan = require "fan"
-require "compat53"
 
 local scheme_map = {}
 scheme_map["tcp"] = require "fan.connector.tcp"
