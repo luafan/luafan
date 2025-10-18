@@ -32,6 +32,7 @@ fi
 
 # Set up Lua path to include project modules and test framework
 export LUA_PATH="$PROJECT_ROOT/modules/?.lua;$PROJECT_ROOT/modules/?/init.lua;$SCRIPT_DIR/lua/framework/?.lua;$SCRIPT_DIR/lua/?.lua;;"
+export LUA_CPATH="$PROJECT_ROOT/?.so;;"
 
 # Check if LuaFan is available
 echo "Checking LuaFan availability..."

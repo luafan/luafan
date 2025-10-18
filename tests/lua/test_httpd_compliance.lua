@@ -3,7 +3,7 @@
 -- Tests RFC 7230/7231 compliance and security features
 
 local fan = require "fan"
-local httpd = require "modules.fan.httpd.httpd"
+local httpd = require "fan.httpd.httpd"
 local http = require "fan.http"
 
 -- Test configuration

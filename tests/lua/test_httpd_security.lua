@@ -3,7 +3,7 @@
 -- Tests security features and vulnerability resistance
 
 local fan = require "fan"
-local httpd = require "modules.fan.httpd.httpd"
+local httpd = require "fan.httpd.httpd"
 local http = require "fan.http"
 
 -- Test configuration

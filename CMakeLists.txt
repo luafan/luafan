@@ -65,3 +65,36 @@ INSTALL(TARGETS ${MODULE_NAME}
     RUNTIME DESTINATION sbin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib/static)
+
+# Testing integration
+enable_testing()
+
+# Add custom test target that runs our comprehensive test suite
+add_custom_target(test_suite
+    COMMAND cd ${CMAKE_SOURCE_DIR}/tests && ./run_all_tests.sh --all --verbose
+    DEPENDS ${MODULE_NAME}
+    COMMENT "Running comprehensive LuaFan test suite (C + Lua + Performance + Coverage)"
+    VERBATIM
+)
+
+# Add individual test targets for flexibility
+add_custom_target(test_c
+    COMMAND cd ${CMAKE_SOURCE_DIR}/tests && ./run_all_tests.sh --c-only --verbose
+    DEPENDS ${MODULE_NAME}
+    COMMENT "Running C unit tests"
+    VERBATIM
+)
+
+add_custom_target(test_lua
+    COMMAND cd ${CMAKE_SOURCE_DIR}/tests && ./run_all_tests.sh --lua-only --verbose
+    DEPENDS ${MODULE_NAME}
+    COMMENT "Running Lua unit tests"
+    VERBATIM
+)
+
+add_custom_target(test_performance
+    COMMAND cd ${CMAKE_SOURCE_DIR}/tests && ./run_all_tests.sh --quick-perf --verbose
+    DEPENDS ${MODULE_NAME}
+    COMMENT "Running performance benchmarks"
+    VERBATIM
+)
