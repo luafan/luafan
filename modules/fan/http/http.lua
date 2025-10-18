@@ -1,5 +1,6 @@
 local tcpd = require "fan.tcpd"
 local connector = require "fan.connector"
+local config = require "config"
 
 local string = string
 local table = table
@@ -25,7 +26,7 @@ local function request(method, check_body, args)
     if schema == "https" then
         args.ssl = true
         if not args.cainfo then
-            args.cainfo = "cert.pem"
+            args.cainfo = config.cainfo or "cert.pem"
         end
     end
 

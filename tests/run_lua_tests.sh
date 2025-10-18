@@ -54,29 +54,31 @@ for file in "${TEST_FILES[@]}"; do
 done
 echo
 
-# Run all tests
-TOTAL_FAILURES=0
-TESTS_RUN=0
+# Use run_all_lua_tests.lua to provide fan.loop context for all tests
+echo -e "${YELLOW}Running all Lua tests in fan.loop context...${NC}"
 
-for test_file in "${TEST_FILES[@]}"; do
-    echo -e "${YELLOW}Running $(basename "$test_file")...${NC}"
-
-    # Run test with 5-second timeout
-    if timeout 5s $LUA_CMD "$test_file"; then
-        echo -e "${GREEN}✓ $(basename "$test_file") passed${NC}"
+ALL_LUA_TESTS_SCRIPT="$SCRIPT_DIR/lua/run_all_lua_tests.lua"
+if [ -f "$ALL_LUA_TESTS_SCRIPT" ]; then
+    # Run with timeout
+    if timeout 30s $LUA_CMD "$ALL_LUA_TESTS_SCRIPT"; then
+        echo -e "${GREEN}✓ All Lua tests completed successfully${NC}"
+        TOTAL_FAILURES=0
+        TESTS_RUN=1
     else
         exit_code=$?
         if [ $exit_code -eq 124 ]; then
-            echo -e "${RED}✗ $(basename "$test_file") timed out (5s limit)${NC}"
+            echo -e "${RED}✗ Lua tests timed out (30s limit)${NC}"
         else
-            echo -e "${RED}✗ $(basename "$test_file") failed${NC}"
+            echo -e "${RED}✗ Lua tests failed${NC}"
         fi
-        TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
+        TOTAL_FAILURES=1
+        TESTS_RUN=1
     fi
-
-    TESTS_RUN=$((TESTS_RUN + 1))
-    echo
-done
+else
+    echo -e "${RED}Error: run_all_lua_tests.lua not found${NC}"
+    TOTAL_FAILURES=1
+    TESTS_RUN=1
+fi
 
 # Summary
 echo "=================================="

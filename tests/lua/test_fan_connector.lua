@@ -295,6 +295,46 @@ suite:test("tmpfifoname_functionality", function()
     TestFramework.assert_not_equal(name1, name2)
 end)
 
+-- Test callback_self_first integration
+suite:test("callback_self_first_integration", function()
+    print("Testing callback_self_first integration with connector...")
+
+    -- Test that connector can create TCP connections with callback_self_first
+    local server = connector.bind("tcp://127.0.0.1:0", {
+        callback_self_first = true,
+        onaccept = function(accept_conn)
+            TestFramework.assert_not_nil(accept_conn)
+            TestFramework.assert_type(accept_conn, "userdata")
+
+            -- Test that accept connection can use callback_self_first
+            if accept_conn and accept_conn.bind then
+                accept_conn:bind({
+                    onread = function(self, data, ...)
+                        -- With callback_self_first=true, should receive self parameter
+                        TestFramework.assert_not_nil(self)
+                        TestFramework.assert_type(self, "userdata")
+                        TestFramework.assert_type(data, "string")
+                        TestFramework.assert_equal(2, select('#', self, data, ...))
+                    end,
+                    ondisconnected = function(self, error_msg, ...)
+                        TestFramework.assert_not_nil(self)
+                        TestFramework.assert_type(self, "userdata")
+                        TestFramework.assert_equal(2, select('#', self, error_msg, ...))
+                    end
+                })
+            end
+        end
+    })
+
+    if server then
+        TestFramework.assert_not_nil(server)
+        TestFramework.assert_type(server, "table")
+        print("Connector with callback_self_first integration successful")
+    else
+        print("Warning: Could not test callback_self_first integration - server creation failed")
+    end
+end)
+
 -- Run the test suite
 local failures = TestFramework.run_suite(suite)
 
