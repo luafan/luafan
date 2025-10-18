@@ -160,6 +160,56 @@ LUA_API int lua_tcpd_server_rebind(lua_State *L) {
     return 0;
 }
 
+// Lua API wrapper for server localinfo
+LUA_API int lua_tcpd_server_localinfo(lua_State *L) {
+    tcpd_server_t *server = luaL_checkudata(L, 1, LUA_TCPD_SERVER_TYPE);
+
+    if (!server->listener) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    // Get the actual bound address and port
+    evutil_socket_t fd = evconnlistener_get_fd(server->listener);
+    if (fd < 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    struct sockaddr_storage ss;
+    socklen_t len = sizeof(ss);
+
+    if (getsockname(fd, (struct sockaddr*)&ss, &len) != 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    char ip[INET6_ADDRSTRLEN];
+    int port = 0;
+
+    if (ss.ss_family == AF_INET) {
+        struct sockaddr_in *addr = (struct sockaddr_in*)&ss;
+        inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip));
+        port = ntohs(addr->sin_port);
+    } else if (ss.ss_family == AF_INET6) {
+        struct sockaddr_in6 *addr = (struct sockaddr_in6*)&ss;
+        inet_ntop(AF_INET6, &addr->sin6_addr, ip, sizeof(ip));
+        port = ntohs(addr->sin6_port);
+    } else {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    // Return a table with ip and port
+    lua_newtable(L);
+    lua_pushstring(L, ip);
+    lua_setfield(L, -2, "ip");
+    lua_pushinteger(L, port);
+    lua_setfield(L, -2, "port");
+
+    return 1;
+}
+
 // Server bind function
 LUA_API int tcpd_bind(lua_State *L) {
     event_mgr_init();
@@ -439,6 +489,8 @@ void tcpd_server_register_metatables(lua_State *L) {
     luaL_newmetatable(L, LUA_TCPD_SERVER_TYPE);
     lua_pushcfunction(L, lua_tcpd_server_rebind);
     lua_setfield(L, -2, "rebind");
+    lua_pushcfunction(L, lua_tcpd_server_localinfo);
+    lua_setfield(L, -2, "localinfo");
     lua_pushcfunction(L, tcpd_server_gc);
     lua_setfield(L, -2, "__gc");
     lua_pushstring(L, "server");

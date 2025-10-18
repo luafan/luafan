@@ -243,6 +243,22 @@ local function bind(host, port, path, args)
 
   obj.serv = tcpd.bind(params)
 
+  -- For now, set the host and port from params
+  -- The actual bound port will be available once the server is active
+  obj.host = host or "0.0.0.0"
+  obj.port = tonumber(port) or 0
+
+  -- Try to get actual bound info from server if available
+  if obj.serv and type(obj.serv.localinfo) == "function" then
+    pcall(function()
+      local localinfo = obj.serv:localinfo()
+      if localinfo and localinfo.ip and localinfo.port then
+        obj.host = localinfo.ip
+        obj.port = tonumber(localinfo.port) or obj.port
+      end
+    end)
+  end
+
   obj.rebind = function(obj)
     obj.serv:rebind()
   end

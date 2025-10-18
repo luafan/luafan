@@ -33,6 +33,27 @@ static void main_handler(const int fd, const short which, void *arg) {
 }
 
 LUA_API int luafan_start(lua_State *L) {
+    // Check if we are already in a loop (nested call detection)
+    if (event_mgr_is_looping()) {
+        // Already in loop - nested call detected
+        // But we still need to execute the function if provided
+        if (lua_gettop(L) > 0 && lua_isfunction(L, 1)) {
+            // Make a copy of the function and call it directly
+            lua_pushvalue(L, 1);  // Copy the function to the top
+            int result = lua_pcall(L, 0, 0, 0);
+            if (result != LUA_OK) {
+                // Handle error
+                const char *error_msg = lua_tostring(L, -1);
+                fprintf(stderr, "Error in nested fan.loop function: %s\n", error_msg);
+                lua_pop(L, 1); // Remove error message
+            }
+        }
+
+        // Skip the actual loop since we're already looping
+        return 0;
+    }
+
+    // Not in a loop yet, set up the function for execution and start the loop
     if (lua_gettop(L) > 0) {
         if (lua_isfunction(L, 1)) {
             lua_settop(L, 1);
@@ -42,12 +63,19 @@ LUA_API int luafan_start(lua_State *L) {
 
             struct timeval t = {0, 1};
             mainevent = malloc(sizeof(struct event));
+            if (!mainevent) {
+                fprintf(stderr, "Memory allocation failed for main event: %zu bytes\n", sizeof(struct event));
+                luaL_error(L, "Memory allocation failure");
+                return 0;
+            }
             evtimer_set(mainevent, main_handler, NULL);
             event_mgr_init();
             event_base_set(event_mgr_base(), mainevent);
             evtimer_add(mainevent, &t);
         }
     }
+
+    // Start the actual event loop
     event_mgr_loop();
     return 0;
 }
@@ -83,6 +111,11 @@ LUA_API int luafan_sleep(lua_State *L) {
     struct event_base *base = event_mgr_base();
 
     struct sleep_args *args = malloc(sizeof(struct sleep_args));
+    if (!args) {
+        fprintf(stderr, "Memory allocation failed for sleep args: %zu bytes\n", sizeof(struct sleep_args));
+        luaL_error(L, "Memory allocation failure");
+        return 0;
+    }
     memset(args, 0, sizeof(struct sleep_args));
 
     REF_STATE_SET(args, L);
@@ -113,6 +146,11 @@ LUA_API int hex2data(lua_State *L) {
     const char *bytes = lua_tolstring(L, 1, &length);
 
     char *r = (char *)malloc(length / 2 + 1);
+    if (!r) {
+        fprintf(stderr, "Memory allocation failed for hex2data: %zu bytes\n", length / 2 + 1);
+        luaL_error(L, "Memory allocation failure");
+        return 0;
+    }
     char *index = r;
 
     while ((*bytes) && (*(bytes + 1))) {
@@ -139,6 +177,11 @@ LUA_API int data2hex(lua_State *L) {
     const size_t numBytes = len;
     const char *bytes = data;
     char *strbuf = (char *)malloc(numBytes * 2 + 1);
+    if (!strbuf) {
+        fprintf(stderr, "Memory allocation failed for data2hex: %zu bytes\n", numBytes * 2 + 1);
+        luaL_error(L, "Memory allocation failure");
+        return 0;
+    }
     char *hex = strbuf;
     int i = 0;
     for (i = 0; i < numBytes; ++i) {
@@ -222,6 +265,7 @@ static const struct luaL_Reg fanlib[] = {
 };
 
 LUA_API int luaopen_fan(lua_State *L) {
+
 #if (LUA_VERSION_NUM < 502)
     utlua_set_mainthread(L);
 #endif

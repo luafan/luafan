@@ -18,6 +18,7 @@ void event_mgr_cleanup(void);
 int event_mgr_loop(void);
 int event_mgr_loop_later_cleanup(void);
 void event_mgr_loop_cleanup(void);
+int event_mgr_is_looping(void);
 void event_mgr_start(void);
 
 #endif

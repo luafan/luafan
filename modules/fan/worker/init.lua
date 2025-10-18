@@ -4,7 +4,6 @@ local config = require "config"
 local objectbuf = config.worker_using_cjson and require "cjson" or require "fan.objectbuf"
 local connector = require "fan.connector"
 local stream = require "fan.stream"
-require "compat53"
 
 local function maxn(t)
   local n = 0

@@ -251,6 +251,15 @@ static void http_getpost_complete(ConnInfo *conn) {
     lua_unlock(L);
 
     ResumeInfo *info = malloc(sizeof(ResumeInfo));
+    if (!info) {
+        // Critical fix: Handle memory allocation failure
+        fprintf(stderr, "Memory allocation failed for ResumeInfo: %zu bytes\n", sizeof(ResumeInfo));
+        // Cannot safely resume, but we need to clean up coref
+        if (conn->coref != LUA_NOREF) {
+            luaL_unref(utlua_mainthread(L), LUA_REGISTRYINDEX, conn->coref);
+        }
+        return;
+    }
     info->L = L;
     info->coref = conn->coref;
     info->resume_timer = evtimer_new(event_mgr_base(), resume_cb, info);
@@ -974,6 +983,12 @@ static int http_getpost(lua_State *L, int method) {
 
                 if (value && valuelen) {
                     char *buf = malloc(keylen + valuelen + 3);
+                    if (!buf) {
+                        // Critical fix: Handle memory allocation failure
+                        fprintf(stderr, "Memory allocation failed for HTTP header: %zu bytes\n", keylen + valuelen + 3);
+                        err = "Memory allocation failure";
+                        goto ERROR;
+                    }
                     strcpy(buf, key);
                     strcpy(buf + keylen, ": ");
                     strcpy(buf + keylen + 2, value);

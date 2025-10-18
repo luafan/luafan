@@ -23,6 +23,7 @@ typedef struct tcpd_server {
 void tcpd_server_rebind(lua_State *L, tcpd_server_t *server);
 LUA_API int tcpd_bind(lua_State *L);
 LUA_API int lua_tcpd_server_rebind(lua_State *L);
+LUA_API int lua_tcpd_server_localinfo(lua_State *L);
 
 // Server listener callback
 void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd,

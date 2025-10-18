@@ -207,3 +207,8 @@ void event_mgr_cleanup() {
 void event_mgr_loop_cleanup() {
     cleanup_eventbase();
 }
+
+// Check if we are currently in a loop without starting one
+int event_mgr_is_looping() {
+    return looping;
+}

@@ -1,5 +1,3 @@
-require "compat53"
-
 local lfs = require "lfs"
 
 local config_dir = "config"

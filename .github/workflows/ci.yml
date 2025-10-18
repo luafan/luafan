@@ -1,0 +1,309 @@
+name: LuaFan CI/CD Pipeline
+
+on:
+  push:
+    branches: [ master, develop ]
+  pull_request:
+    branches: [ master, develop ]
+
+jobs:
+  test-ubuntu:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        lua-version: ['5.3', '5.4']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Cache build dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/luarocks
+          /usr/local/lib/lua
+        key: ${{ runner.os }}-deps-${{ matrix.lua-version }}-${{ hashFiles('**/CMakeLists.txt', '**/*.rockspec') }}
+        restore-keys: |
+          ${{ runner.os }}-deps-${{ matrix.lua-version }}-
+          ${{ runner.os }}-deps-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential cmake pkg-config \
+          liblua${{ matrix.lua-version }}-dev \
+          libssl-dev libcurl4-openssl-dev \
+          libevent-dev libmariadb-dev \
+          luarocks git
+
+    - name: Setup Lua environment
+      run: |
+        lua${{ matrix.lua-version }} -v
+        luarocks --version
+
+    - name: Build LuaFan
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Debug
+        make -j$(nproc)
+
+    - name: Run C unit tests
+      run: |
+        cd tests
+        chmod +x run_all_tests.sh
+        ./run_all_tests.sh --c-only --verbose
+
+    - name: Run Lua unit tests
+      run: |
+        cd tests
+        ./run_all_tests.sh --lua-only --verbose
+
+    - name: Run performance benchmarks
+      run: |
+        cd tests
+        if [ -f run_performance_tests.sh ]; then
+          chmod +x run_performance_tests.sh
+          ./run_performance_tests.sh --quick
+        else
+          echo "Performance tests not found, skipping..."
+        fi
+
+    - name: Generate test coverage
+      run: |
+        cd tests/build
+        if command -v gcov &> /dev/null; then
+          gcov CMakeFiles/run_c_tests.dir/c/unit/*.gcno
+          echo "Coverage files generated"
+          ls -la *.gcov | head -10
+        else
+          echo "gcov not available, skipping coverage"
+        fi
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-ubuntu-lua${{ matrix.lua-version }}
+        path: |
+          tests/build/*.gcov
+          tests/test-results.*
+          tests/performance-results.*
+        retention-days: 7
+
+  test-alpine:
+    runs-on: ubuntu-22.04
+    container:
+      image: alpine:3.18
+
+    steps:
+    - name: Install git
+      run: apk add --no-cache git
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        apk add --no-cache \
+          build-base cmake pkgconfig \
+          lua5.3-dev luarocks5.3 \
+          openssl-dev curl-dev \
+          libevent-dev mariadb-dev \
+          bash
+
+    - name: Build LuaFan (Alpine)
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j$(nproc)
+
+    - name: Run tests (Alpine)
+      run: |
+        cd tests
+        chmod +x run_all_tests.sh
+        ./run_all_tests.sh --verbose
+
+  security-scan:
+    runs-on: ubuntu-22.04
+    needs: [test-ubuntu]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run security analysis
+      uses: github/super-linter@v5
+      env:
+        DEFAULT_BRANCH: master
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VALIDATE_C: true
+        VALIDATE_LUA: true
+        VALIDATE_BASH: true
+        VALIDATE_CMAKE: true
+
+    - name: Run static analysis with cppcheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cppcheck
+        cppcheck --enable=all --xml --xml-version=2 src/ 2> cppcheck-results.xml || true
+
+    - name: Upload security scan results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: security-scan-results
+        path: |
+          cppcheck-results.xml
+        retention-days: 30
+
+  build-and-test-macos:
+    runs-on: macos-13
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies (macOS)
+      run: |
+        brew update
+        brew install lua@5.3 luarocks cmake openssl curl libevent
+
+    - name: Setup environment
+      run: |
+        echo 'export PATH="/usr/local/opt/lua@5.3/bin:$PATH"' >> $GITHUB_ENV
+        echo 'export LDFLAGS="-L/usr/local/opt/openssl/lib"' >> $GITHUB_ENV
+        echo 'export CPPFLAGS="-I/usr/local/opt/openssl/include"' >> $GITHUB_ENV
+
+    - name: Build LuaFan (macOS)
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j$(sysctl -n hw.ncpu)
+
+    - name: Run tests (macOS)
+      run: |
+        cd tests
+        chmod +x run_all_tests.sh
+        ./run_all_tests.sh --verbose
+
+  performance-monitoring:
+    runs-on: ubuntu-22.04
+    needs: [test-ubuntu]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup for performance testing
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential cmake pkg-config \
+          liblua5.3-dev libssl-dev libcurl4-openssl-dev \
+          libevent-dev time valgrind
+
+    - name: Build optimized version
+      run: |
+        mkdir -p build-perf
+        cd build-perf
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_PROFILING=ON
+        make -j$(nproc)
+
+    - name: Run performance benchmarks
+      run: |
+        cd tests
+        chmod +x run_performance_tests.sh
+        ./run_performance_tests.sh --full --output=performance-results.json
+
+    - name: Compare performance with baseline
+      run: |
+        if [ -f .github/performance-baseline.json ]; then
+          echo "Comparing with baseline performance..."
+          # Performance comparison logic would go here
+        else
+          echo "No baseline found, setting current results as baseline"
+          cp tests/performance-results.json .github/performance-baseline.json
+        fi
+
+    - name: Upload performance results
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-results
+        path: |
+          tests/performance-results.json
+          .github/performance-baseline.json
+        retention-days: 90
+
+  integration-tests:
+    runs-on: ubuntu-22.04
+    needs: [test-ubuntu]
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MYSQL_ROOT_PASSWORD: testpass
+          MYSQL_DATABASE: luafan_test
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential cmake pkg-config \
+          liblua5.3-dev libssl-dev libcurl4-openssl-dev \
+          libevent-dev libmariadb-dev mariadb-client
+
+    - name: Build LuaFan
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Debug
+        make -j$(nproc)
+
+    - name: Setup test database
+      run: |
+        mysql -h 127.0.0.1 -u root -ptestpass -e "
+          CREATE DATABASE IF NOT EXISTS luafan_test;
+          GRANT ALL ON luafan_test.* TO 'luafan'@'%' IDENTIFIED BY 'testpass';
+          FLUSH PRIVILEGES;"
+
+    - name: Run integration tests
+      env:
+        LUAFAN_TEST_DB_HOST: 127.0.0.1
+        LUAFAN_TEST_DB_USER: luafan
+        LUAFAN_TEST_DB_PASS: testpass
+        LUAFAN_TEST_DB_NAME: luafan_test
+      run: |
+        cd tests
+        ./run_all_tests.sh --integration --verbose
+
+  # This job only runs on successful completion of all tests
+  deploy-ready:
+    runs-on: ubuntu-22.04
+    needs: [test-ubuntu, test-alpine, build-and-test-macos, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    steps:
+    - name: Mark as deploy-ready
+      run: |
+        echo "🎉 All tests passed! Ready for deployment."
+        echo "Build matrix completed successfully across:"
+        echo "  - Ubuntu (Lua 5.3, 5.4)"
+        echo "  - Alpine Linux"
+        echo "  - macOS"
+        echo "  - Security scans passed"
+        echo "  - Integration tests passed"

@@ -18,7 +18,7 @@ local function extract_url(url)
       _, _, host, port = string.find(server, "^([^:]+):(%d+)$")
     end
   else
-    path = twoslash .. others
+    path = (twoslash or "") .. (others or "")
   end
 
   return scheme, host, port, path
