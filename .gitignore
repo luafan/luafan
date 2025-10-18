@@ -36,5 +36,51 @@ ios/Pods
 *.xcuserdatad*
 test
 
+# Testing and Development Files
+## Test executables and binaries
+tests/*_test
+tests/*_perf_*
+tests/*_optimized
+tests/*_original
+tests/debug_test
+tests/micro_benchmark
+tests/performance_test
+tests/simple_perf_test
+tests/test_runner*
+
+## Test results and temporary files
+tests/*.json
+tests/*.txt
+tests/*_results*
+tests/baseline_*
+tests/demo_*
+tests/final_*
+
+## Test source files (temporary)
+tests/*.c
+tests/Makefile.*
+
+## Performance and benchmark reports
+tests/*_REPORT.md
+tests/*_COMPARISON.md
+tests/*_PLAN.md
+tests/TEST_PLAN.md
+
+# Temporary test files in root
+*_test.lua
+debug_*.lua
+test_*.lua
+minimal_test.lua
+simple_*.lua
+clear_*.lua
+direct_*.lua
+force_*.lua
+final_*.lua
+
+# Compiled test executables in root
+test_tcpd_*
+objectbuf_perf_*
+*_perf_*
+
 # Claude Code Assistant project file
 CLAUDE.md
