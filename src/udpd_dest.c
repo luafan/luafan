@@ -181,6 +181,33 @@ LUA_API int lua_udpd_dest_get_port(lua_State *L) {
     return 1;
 }
 
+// Lua: dest:getIP()
+LUA_API int lua_udpd_dest_get_ip(lua_State *L) {
+    udpd_dest_t *dest = luaL_checkudata(L, 1, LUA_UDPD_DEST_TYPE);
+
+    if (!dest) {
+        return 0;
+    }
+
+    char ip_buf[INET6_ADDRSTRLEN];
+    const char *result = NULL;
+
+    if (dest->addr.ss_family == AF_INET) {
+        const struct sockaddr_in *addr_in = (const struct sockaddr_in *)&dest->addr;
+        result = inet_ntop(AF_INET, &addr_in->sin_addr, ip_buf, sizeof(ip_buf));
+    } else if (dest->addr.ss_family == AF_INET6) {
+        const struct sockaddr_in6 *addr_in6 = (const struct sockaddr_in6 *)&dest->addr;
+        result = inet_ntop(AF_INET6, &addr_in6->sin6_addr, ip_buf, sizeof(ip_buf));
+    }
+
+    if (result) {
+        lua_pushstring(L, result);
+        return 1;
+    }
+
+    return 0;
+}
+
 // Lua: tostring(dest)
 LUA_API int lua_udpd_dest_tostring(lua_State *L) {
     udpd_dest_t *dest = luaL_checkudata(L, 1, LUA_UDPD_DEST_TYPE);
@@ -228,6 +255,9 @@ void udpd_dest_setup_metatable(lua_State *L) {
 
     lua_pushcfunction(L, lua_udpd_dest_get_port);
     lua_setfield(L, -2, "getPort");
+
+    lua_pushcfunction(L, lua_udpd_dest_get_ip);
+    lua_setfield(L, -2, "getIP");
 
     lua_pushcfunction(L, lua_udpd_dest_tostring);
     lua_setfield(L, -2, "__tostring");

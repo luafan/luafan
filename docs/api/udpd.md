@@ -88,3 +88,39 @@ get the income message host.
 
 ### `getPort():integer`
 get the income message port.
+
+### `getIP():string`
+get the IP address from the destination address. Returns the IP address as a string, supporting both IPv4 and IPv6 formats.
+
+**Note:** For IP addresses, `getIP()` and `getHost()` return the same value. The `getIP()` method is provided for clarity when you specifically need the IP address without any potential hostname resolution confusion.
+
+**Example:**
+```lua
+local udpd = require('fan.udpd')
+
+-- Create a destination
+local dest = udpd.make_dest("192.168.1.100", 8080)
+
+-- Get different address components
+local ip = dest:getIP()      -- "192.168.1.100"
+local host = dest:getHost()  -- "192.168.1.100" (same as getIP for IP addresses)
+local port = dest:getPort()  -- 8080
+
+print("IP:", ip)     -- IP: 192.168.1.100
+print("Host:", host) -- Host: 192.168.1.100
+print("Port:", port) -- Port: 8080
+
+-- Usage in UDP server callback (using modern callback_self_first pattern)
+local server = udpd.new({
+    bind_port = 8080,
+    callback_self_first = true,  -- Recommended to avoid circular references
+    onread = function(self, data, dest)
+        local client_ip = dest:getIP()
+        local client_port = dest:getPort()
+        print(string.format("Received '%s' from %s:%d", data, client_ip, client_port))
+
+        -- Echo back to the same client using self parameter
+        self:send("Echo: " .. data, dest)
+    end
+})
+```

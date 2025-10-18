@@ -148,6 +148,14 @@ int udpd_dest_is_loopback(const udpd_dest_t *dest);
 udpd_dest_t* udpd_dest_from_lua(lua_State *L, int index);
 void udpd_dest_setup_metatable(lua_State *L);
 
+// Lua interface functions for destination objects
+LUA_API int lua_udpd_dest_get_host(lua_State *L);
+LUA_API int lua_udpd_dest_get_port(lua_State *L);
+LUA_API int lua_udpd_dest_get_ip(lua_State *L);
+LUA_API int lua_udpd_dest_tostring(lua_State *L);
+LUA_API int lua_udpd_dest_eq(lua_State *L);
+LUA_API int lua_udpd_dest_gc(lua_State *L);
+
 // DNS resolution functions
 udpd_dns_request_t* udpd_dns_request_create(const char *hostname, int port);
 void udpd_dns_request_cleanup(udpd_dns_request_t *request);

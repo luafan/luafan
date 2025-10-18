@@ -34,6 +34,7 @@ local test_files = {
     "test_integration_http_server.lua",
     "test_tcpd_callback_self_first.lua",
     "test_udpd_callback_self_first.lua",
+    "test_udpd_dest_getip.lua",
     -- Add more test files here as they are completed
 }
 
