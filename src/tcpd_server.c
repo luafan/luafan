@@ -87,13 +87,18 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
         accept->base.port = ntohs(addr_in->sin6_port);
     }
 
-    // If callback_self_first is enabled, store a self-reference for the accept connection
-    if (accept->base.config.callback_self_first) {
-        lua_pushvalue(co, -1);  // Push the accept connection object
-        accept->base.selfRef = luaL_ref(mainthread, LUA_REGISTRYINDEX);
+    // selfRef will be set later in tcpd_accept_bind function to avoid GC issues
+
+    // Check if callback_self_first is enabled for the server onaccept callback
+    int argc = 1;
+    if (server->config.callback_self_first && server->selfRef != LUA_NOREF) {
+        // Push server object as first parameter, then accept object
+        lua_rawgeti(co, LUA_REGISTRYINDEX, server->selfRef);
+        lua_insert(co, -2);  // Move server object before accept object
+        argc = 2;
     }
 
-    FAN_RESUME(co, mainthread, 1);
+    FAN_RESUME(co, mainthread, argc);
     POP_REF(mainthread);
 }
 
@@ -228,6 +233,7 @@ LUA_API int tcpd_bind(lua_State *L) {
     lua_setmetatable(L, -2);
 
     server->mainthread = utlua_mainthread(L);
+    server->selfRef = LUA_NOREF;
 
     // Set callbacks
     SET_FUNC_REF_FROM_TABLE(L, server->onAcceptRef, 1, "onaccept");
@@ -239,6 +245,12 @@ LUA_API int tcpd_bind(lua_State *L) {
 
     // Extract configuration
     tcpd_config_from_lua_table(L, 1, &server->config);
+
+    // Set server self-reference if callback_self_first is enabled
+    if (server->config.callback_self_first) {
+        lua_pushvalue(L, -1);  // Push server object
+        server->selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    }
 
     // Set up SSL if enabled
     if (server->config.ssl_enabled) {
@@ -427,6 +439,7 @@ static int tcpd_server_gc(lua_State *L) {
     if (server->mainthread) {
         CLEAR_REF(server->mainthread, server->onAcceptRef);
         CLEAR_REF(server->mainthread, server->onSSLHostNameRef);
+        CLEAR_REF(server->mainthread, server->selfRef);
     }
 
     // Clean up listener

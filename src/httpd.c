@@ -7,10 +7,33 @@
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #include <arpa/inet.h>  // For ntohs, htons
+
+// Endianness conversion functions
 #ifdef __linux__
 #include <endian.h>     // For be64toh, htobe64
+#elif defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+// iOS doesn't have sys/endian.h, use libkern/OSByteOrder.h
+#include <libkern/OSByteOrder.h>
+#define be64toh(x) OSSwapBigToHostInt64(x)
+#define htobe64(x) OSSwapHostToBigInt64(x)
 #else
-#include <machine/endian.h>  // For BSD/macOS
+// macOS has sys/endian.h
+#include <sys/endian.h>
+#endif
+#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#include <sys/endian.h> // For BSD systems
+#else
+// Fallback implementation for other systems
+#include <netinet/in.h>
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define be64toh(x) __builtin_bswap64(x)
+#define htobe64(x) __builtin_bswap64(x)
+#else
+#define be64toh(x) (x)
+#define htobe64(x) (x)
+#endif
 #endif
 
 typedef struct {
