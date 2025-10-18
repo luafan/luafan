@@ -74,7 +74,14 @@ LUA_API int udpd_new(lua_State *L) {
 
     // Set up Lua state reference for async operations
     REF_STATE_SET((&conn->base), L);
-    conn->base.selfRef = LUA_NOREF;
+
+    // Store self-reference if callback_self_first is enabled
+    if (conn->base.config.base.callback_self_first) {
+        lua_pushvalue(L, -1);  // Push the connection object again
+        conn->base.selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    } else {
+        conn->base.selfRef = LUA_NOREF;
+    }
 
     // If we have a target host, check if it's an IP address first
     if (conn->base.host && conn->base.port > 0) {

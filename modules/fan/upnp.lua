@@ -60,7 +60,8 @@ local function new(timeout_sec)
     udpd.new {
     host = "239.255.255.250",
     port = 1900,
-    onread = function(buf)
+    callback_self_first = true,  -- Enable to avoid circular references
+    onread = function(conn, buf, from)
       if task.running then
         table.insert(task.responses, buf)
       end

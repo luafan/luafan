@@ -3,6 +3,20 @@
 #include <errno.h>
 #include <unistd.h>
 
+// Helper function to push UDP connection object to Lua stack based on stored reference
+void udpd_push_connection_object(lua_State *co, udpd_base_conn_t *conn) {
+    if (!co || !conn) return;
+
+    // Use the selfRef from connection if available
+    if (conn->selfRef != LUA_NOREF) {
+        lua_rawgeti(co, LUA_REGISTRYINDEX, conn->selfRef);
+        return;
+    }
+
+    // For connections without selfRef, push nil
+    lua_pushnil(co);
+}
+
 // Common read callback for UDP connections
 void udpd_common_readcb(evutil_socket_t fd, short what, void *ctx) {
     udpd_base_conn_t *conn = (udpd_base_conn_t *)ctx;
@@ -52,7 +66,15 @@ void udpd_common_writecb(evutil_socket_t fd, short what, void *ctx) {
     lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-    FAN_RESUME(co, mainthread, 0);
+
+    int argc = 0;
+    // Check if callback_self_first is enabled
+    if (conn->config.base.callback_self_first) {
+        udpd_push_connection_object(co, conn);
+        argc = 1;
+    }
+
+    FAN_RESUME(co, mainthread, argc);
     POP_REF(mainthread);
 }
 
@@ -70,8 +92,16 @@ void udpd_process_received_data(udpd_base_conn_t *conn, const char *data, size_t
     // Push read callback function
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
 
+    int argc = 0;
+    // Check if callback_self_first is enabled
+    if (conn->config.base.callback_self_first) {
+        udpd_push_connection_object(co, conn);
+        argc++;
+    }
+
     // Push received data
     lua_pushlstring(co, data, len);
+    argc++;
 
     // Create destination object for sender
     udpd_dest_t *dest = lua_newuserdata(co, sizeof(udpd_dest_t));
@@ -83,9 +113,10 @@ void udpd_process_received_data(udpd_base_conn_t *conn, const char *data, size_t
     dest->addrlen = from_len;
     dest->host = NULL;  // Will be resolved on demand
     dest->port = udpd_dest_get_port(dest);
+    argc++;
 
-    // Resume coroutine with data and sender info
-    FAN_RESUME(co, mainthread, 2);
+    // Resume coroutine with data and sender info (and self if enabled)
+    FAN_RESUME(co, mainthread, argc);
     POP_REF(mainthread);
 }
 

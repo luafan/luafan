@@ -13,9 +13,13 @@ keys in the `arg`:
 
 	callback on receive data. arg1 => data:string, arg2 => [UDP_AddrInfo](#udp_addr_info)
 
+	If `callback_self_first=true`, signature becomes: `function(self, data:string, dest:UDP_AddrInfo)`
+
 * `onsendready: function?`
 
 	callback on ready to send new data after `send_req`. no arg.
+
+	If `callback_self_first=true`, signature becomes: `function(self)`
 
 * `host: string?`
 
@@ -32,6 +36,32 @@ keys in the `arg`:
 * `bind_port: integer`
 
 	local bind port
+
+* `callback_self_first: boolean?`
+
+	When enabled (true), passes the connection object as the first parameter to all callbacks.
+	This helps avoid circular references when callbacks need to access the connection object.
+	Default: false (for backward compatibility).
+
+	**Example:**
+	```lua
+	-- Traditional approach (may cause circular references)
+	local conn = udpd.new({
+		bind_port = 8080,
+		onread = function(data, dest)
+			conn:send("response", dest)  -- Captures 'conn' in closure
+		end
+	})
+
+	-- With callback_self_first=true (avoids circular references)
+	local conn = udpd.new({
+		bind_port = 8080,
+		callback_self_first = true,
+		onread = function(self, data, dest)
+			self:send("response", dest)  -- No closure capture needed
+		end
+	})
+	```
 
 ---------
 conn apis:

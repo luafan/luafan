@@ -32,6 +32,8 @@ local test_files = {
     "test_mariadb_orm.lua",
     "test_sqlite3_orm.lua",
     "test_integration_http_server.lua",
+    "test_tcpd_callback_self_first.lua",
+    "test_udpd_callback_self_first.lua",
     -- Add more test files here as they are completed
 }
 

@@ -9,6 +9,21 @@
 static tcpd_error_t tcpd_analyze_event_error(struct bufferevent *bev, short events);
 static void tcpd_call_lua_callback(lua_State *mainthread, int callback_ref, int argc);
 
+// Helper function to push connection object to Lua stack based on stored reference
+void tcpd_push_connection_object(lua_State *co, tcpd_base_conn_t *conn) {
+    if (!co || !conn) return;
+
+    // Use the selfRef from base connection if available
+    if (conn->selfRef != LUA_NOREF) {
+        lua_rawgeti(co, LUA_REGISTRYINDEX, conn->selfRef);
+        return;
+    }
+
+    // For connections without selfRef (like client connections that don't set it),
+    // push nil for now. This will need to be handled when callback_self_first is enabled
+    lua_pushnil(co);
+}
+
 // Common read callback for all connection types
 void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
     tcpd_base_conn_t *conn = (tcpd_base_conn_t *)ctx;
@@ -35,9 +50,19 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
     lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
-    lua_pushlstring(co, (const char *)ba.buffer, ba.total);
 
-    FAN_RESUME(co, mainthread, 1);
+    // Check if callback_self_first is enabled
+    int argc = 1;
+    if (conn->config.callback_self_first) {
+        tcpd_push_connection_object(co, conn);
+        lua_pushlstring(co, (const char *)ba.buffer, ba.total);
+        argc = 2;
+    } else {
+        lua_pushlstring(co, (const char *)ba.buffer, ba.total);
+        argc = 1;
+    }
+
+    FAN_RESUME(co, mainthread, argc);
     POP_REF(mainthread);
 
     bytearray_dealloc(&ba);
@@ -60,7 +85,15 @@ void tcpd_common_writecb(struct bufferevent *bev, void *ctx) {
         lua_unlock(mainthread);
 
         lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
-        FAN_RESUME(co, mainthread, 0);
+
+        // Check if callback_self_first is enabled
+        int argc = 0;
+        if (conn->config.callback_self_first) {
+            tcpd_push_connection_object(co, conn);
+            argc = 1;
+        }
+
+        FAN_RESUME(co, mainthread, argc);
         POP_REF(mainthread);
     }
 }
@@ -83,7 +116,15 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
             lua_unlock(mainthread);
 
             lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onConnectedRef);
-            FAN_RESUME(co, mainthread, 0);
+
+            // Check if callback_self_first is enabled
+            int argc = 0;
+            if (conn->config.callback_self_first) {
+                tcpd_push_connection_object(co, conn);
+                argc = 1;
+            }
+
+            FAN_RESUME(co, mainthread, argc);
             POP_REF(mainthread);
         }
         return;
@@ -124,6 +165,13 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
 
             lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onDisconnectedRef);
 
+            // Check if callback_self_first is enabled
+            int argc = 1;
+            if (conn->config.callback_self_first) {
+                tcpd_push_connection_object(co, conn);
+                argc = 2;
+            }
+
             // Push error message
             const char *error_msg = tcpd_error_to_string(&error);
             if (error_msg) {
@@ -135,7 +183,7 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
             // Clear the callback reference
             CLEAR_REF(mainthread, conn->onDisconnectedRef);
 
-            FAN_RESUME(co, mainthread, 1);
+            FAN_RESUME(co, mainthread, argc);
             POP_REF(mainthread);
         }
 
@@ -249,6 +297,7 @@ int tcpd_base_conn_init(tcpd_base_conn_t *conn, tcpd_conn_type_t type, lua_State
     conn->onSendReadyRef = LUA_NOREF;
     conn->onDisconnectedRef = LUA_NOREF;
     conn->onConnectedRef = LUA_NOREF;
+    conn->selfRef = LUA_NOREF;
 
     memset(conn->ip, 0, INET6_ADDRSTRLEN);
 
@@ -271,6 +320,7 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
         CLEAR_REF(conn->mainthread, conn->onSendReadyRef);
         CLEAR_REF(conn->mainthread, conn->onDisconnectedRef);
         CLEAR_REF(conn->mainthread, conn->onConnectedRef);
+        CLEAR_REF(conn->mainthread, conn->selfRef);
     }
 
     // Free host string

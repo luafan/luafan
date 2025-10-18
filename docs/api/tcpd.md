@@ -19,17 +19,25 @@ keys in the `arg`:
 
 	stream input callback, arg1 => buffer_in:string
 
+	If `callback_self_first=true`, signature becomes: `function(self, buffer_in:string)`
+
 * `onsendready: function?`
 
 	callback on ready to send new data (stream output complete), no arg
+
+	If `callback_self_first=true`, signature becomes: `function(self)`
 
 * `ondisconnected: function?`
 
 	ondisconnected callback, arg1 => reason:string
 
+	If `callback_self_first=true`, signature becomes: `function(self, reason:string)`
+
 * `onconnected: function?`
 
 	onconnected callback
+
+	If `callback_self_first=true`, signature becomes: `function(self)`
 
 * `ssl: boolean?`
 
@@ -70,6 +78,32 @@ keys in the `arg`:
 * `write_timeout: number?`
 
 	connection's write timeout.
+
+* `callback_self_first: boolean?`
+
+	When enabled (true), passes the connection object as the first parameter to all callbacks.
+	This helps avoid circular references when callbacks need to access the connection object.
+	Default: false (for backward compatibility).
+
+	**Example:**
+	```lua
+	-- Traditional approach (may cause circular references)
+	local conn = tcpd.connect({
+		host = "example.com", port = 80,
+		onread = function(data)
+			conn:send("response")  -- Captures 'conn' in closure
+		end
+	})
+
+	-- With callback_self_first=true (avoids circular references)
+	local conn = tcpd.connect({
+		host = "example.com", port = 80,
+		callback_self_first = true,
+		onread = function(self, data)
+			self:send("response")  -- No closure capture needed
+		end
+	})
+	```
 
 ---------
 `conn` apis:
@@ -145,6 +179,11 @@ keys in the `arg`:
 
 	client connection receive buffer size.
 
+* `callback_self_first: boolean?`
+
+	When enabled (true), passes the connection object as the first parameter to server callbacks.
+	This applies to accept connection callbacks (`onread`, `onsendready`, `ondisconnected`).
+	Default: false (for backward compatibility).
 
 AcceptConnection
 ================
@@ -179,10 +218,16 @@ keys in the `arg`:
 
 	on read message from client callback, arg1 => databuf:string
 
+	If server's `callback_self_first=true`, signature becomes: `function(self, databuf:string)`
+
 * `onsendready: function?`
 
 	on send ready callback, no arg.
 
+	If server's `callback_self_first=true`, signature becomes: `function(self)`
+
 * `ondisconnected`
 
 	on client disconnected callback, arg1 => reason:string
+
+	If server's `callback_self_first=true`, signature becomes: `function(self, reason:string)`

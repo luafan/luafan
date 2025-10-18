@@ -651,7 +651,8 @@ local function connect(host, port, path)
         udpd.new {
         host = host,
         port = port,
-        onread = function(buf, from)
+        callback_self_first = true,  -- Enable to avoid circular references
+        onread = function(conn, buf, from)
             -- print("onread", #(buf), from, host, port, type(from:getPort()), type(port))
             config.udp_receive_total = config.udp_receive_total + 1
             weak_apt._WAITING_COUNT = WAITING_COUNT
@@ -661,7 +662,7 @@ local function connect(host, port, path)
                 weak_apt:_onread(buf)
             end
         end,
-        onsendready = function()
+        onsendready = function(conn)
             weak_apt._pending_for_send = nil
 
             if not weak_apt._window_sent then
@@ -757,7 +758,8 @@ local function bind(host, port, path)
         udpd.new {
         interface = config.manual_interface and config.interface or nil,
         bind_port = port,
-        onsendready = function()
+        callback_self_first = true,  -- Enable to avoid circular references
+        onsendready = function(conn)
             local obj = weak_obj
             obj._pending_for_send = nil
 
@@ -790,7 +792,7 @@ local function bind(host, port, path)
                 end
             end
         end,
-        onread = function(buf, from)
+        onread = function(conn, buf, from)
             local obj = weak_obj
             config.udp_receive_total = config.udp_receive_total + 1
             local apt = obj.getapt(nil, nil, from, tostring(from))

@@ -105,10 +105,11 @@ local function connect(host, port, path, args)
     send_buffer_size = config.send_buffer_size,
     host = host,
     port = port,
-    onconnected = function()
+    callback_self_first = true,  -- Enable to avoid circular references
+    onconnected = function(conn)
       coroutine.resume(running)
     end,
-    onread = function(buf)
+    onread = function(conn, buf)
       collectgarbage()
 
       local t = weak_t
@@ -122,24 +123,24 @@ local function connect(host, port, path, args)
       t._readstream:prepare_get()
 
       if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
-        if t.conn then
-          t.conn:pause_read()
+        if conn then
+          conn:pause_read()
         end
       end
 
       t:_onread(t._readstream)
 
       if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
-        if t.conn then
-          t.conn:resume_read()
+        if conn then
+          conn:resume_read()
         end
       end
     end,
-    onsendready = function()
+    onsendready = function(conn)
       local t = weak_t
       t:_onsendready()
     end,
-    ondisconnected = function(msg)
+    ondisconnected = function(conn, msg)
       if config.debug then
         print("client ondisconnected", msg)
       end
@@ -180,6 +181,7 @@ local function bind(host, port, path, args)
     send_buffer_size = config.send_buffer_size,
     host = host,
     port = port,
+    callback_self_first = true,  -- Enable to avoid circular references
     onaccept = function(apt)
       local t = {
         connection_map = weak_connection_map,
@@ -196,14 +198,14 @@ local function bind(host, port, path, args)
       local weak_obj = utils.weakify_object(t._pack)
 
       apt:bind {
-        onread = function(buf)
+        onread = function(conn, buf)
           local t = weak_obj[1]
           t._readstream:prepare_add()
           t._readstream:AddBytes(buf)
           t._readstream:prepare_get()
 
           if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
-            t.conn:pause_read()
+            conn:pause_read()
           end
 
           if not t:_onread(t._readstream) and t.onread then
@@ -213,14 +215,14 @@ local function bind(host, port, path, args)
             end
           end
           if TCP_PAUSE_READ_WRITE_ON_CALLBACK then
-            t.conn:resume_read()
+            conn:resume_read()
           end
         end,
-        onsendready = function()
+        onsendready = function(conn)
           local t = weak_obj[1]
           t:_onsendready()
         end,
-        ondisconnected = function(msg)
+        ondisconnected = function(conn, msg)
           if config.debug then
             print("client ondisconnected", msg)
           end

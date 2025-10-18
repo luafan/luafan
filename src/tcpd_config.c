@@ -37,6 +37,9 @@ int tcpd_config_set_defaults(tcpd_config_t *config) {
     config->ssl_verifyhost = 1;
     config->ssl_verifypeer = 1;
 
+    // Callback behavior settings
+    config->callback_self_first = 0;  // Disabled by default for backward compatibility
+
     return 0;
 }
 
@@ -124,6 +127,11 @@ int tcpd_config_from_lua_table(lua_State *L, int table_index, tcpd_config_t *con
         }
         lua_pop(L, 1);
     }
+
+    // Callback behavior settings
+    lua_getfield(L, table_index, "callback_self_first");
+    config->callback_self_first = lua_toboolean(L, -1);
+    lua_pop(L, 1);
 
     return 0;
 }

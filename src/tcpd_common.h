@@ -48,6 +48,9 @@ typedef struct tcpd_config {
     int ssl_enabled;
     int ssl_verifyhost;
     int ssl_verifypeer;
+
+    // Callback behavior settings
+    int callback_self_first;  // When enabled, pass connection object as first parameter to all callbacks
 } tcpd_config_t;
 
 // Base connection structure - common fields for all connection types
@@ -63,6 +66,7 @@ typedef struct tcpd_base_conn {
     int onSendReadyRef;
     int onDisconnectedRef;
     int onConnectedRef;  // For client connections
+    int selfRef;         // Self-reference for callback_self_first mode
 
     // Configuration
     tcpd_config_t config;
@@ -138,6 +142,9 @@ void tcpd_common_writecb(struct bufferevent *bev, void *ctx);
 void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx);
 void tcpd_shutdown_bufferevent(struct bufferevent *bev);
 void tcpd_connection_cleanup_on_disconnect(tcpd_base_conn_t *conn);
+
+// Helper function to push connection object to Lua stack
+void tcpd_push_connection_object(lua_State *co, tcpd_base_conn_t *conn);
 
 // SSL functions (forward declarations)
 #if FAN_HAS_OPENSSL

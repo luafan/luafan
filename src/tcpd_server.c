@@ -13,7 +13,7 @@
 // Extended structures using the base connection
 typedef struct {
     tcpd_base_conn_t base;
-    int selfRef;  // Self-reference for accept connections
+    // selfRef is now in base structure
 } tcpd_accept_conn_t;
 
 // Forward declarations
@@ -41,7 +41,7 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     // Initialize base connection
     tcpd_base_conn_init(&accept->base, TCPD_CONN_TYPE_ACCEPT, mainthread);
     accept->base.config = server->config;  // Copy server config
-    accept->selfRef = LUA_NOREF;
+    accept->base.selfRef = LUA_NOREF;
 
     luaL_getmetatable(co, LUA_TCPD_ACCEPT_TYPE);
     lua_setmetatable(co, -2);
@@ -85,6 +85,12 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
         struct sockaddr_in6 *addr_in = (struct sockaddr_in6 *)addr;
         inet_ntop(addr_in->sin6_family, (void *)&(addr_in->sin6_addr), accept->base.ip, INET6_ADDRSTRLEN);
         accept->base.port = ntohs(addr_in->sin6_port);
+    }
+
+    // If callback_self_first is enabled, store a self-reference for the accept connection
+    if (accept->base.config.callback_self_first) {
+        lua_pushvalue(co, -1);  // Push the accept connection object
+        accept->base.selfRef = luaL_ref(mainthread, LUA_REGISTRYINDEX);
     }
 
     FAN_RESUME(co, mainthread, 1);
@@ -273,7 +279,7 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
     lua_settop(L, 2);
 
     lua_pushvalue(L, 1);
-    accept->selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    accept->base.selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
 
     // Set callbacks using common function
     tcpd_base_conn_set_callbacks(&accept->base, L, 2);
@@ -288,7 +294,7 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
 static void tcpd_accept_cleanup_on_disconnect(tcpd_accept_conn_t *accept) {
     if (!accept) return;
 
-    CLEAR_REF(accept->base.mainthread, accept->selfRef);
+    CLEAR_REF(accept->base.mainthread, accept->base.selfRef);
     tcpd_base_conn_cleanup(&accept->base);
 }
 
@@ -450,7 +456,7 @@ static int tcpd_accept_conn_gc(lua_State *L) {
 
     // Clear the self-reference
     if (accept->base.mainthread) {
-        CLEAR_REF(accept->base.mainthread, accept->selfRef);
+        CLEAR_REF(accept->base.mainthread, accept->base.selfRef);
     }
 
     // Perform base connection cleanup
