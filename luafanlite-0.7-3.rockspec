@@ -52,6 +52,7 @@ build = {
             "src/udpd_dns.c",
             "src/udpd_dest.c",
             "src/udpd_utils.c",
+            "src/evdns.c",
             "src/stream.c",
             "src/stream_ffi.c",
             "src/objectbuf.c",

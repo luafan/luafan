@@ -100,10 +100,6 @@ typedef struct udpd_dns_request {
     lua_State *mainthread;
     int _ref_;
     int yielded;
-
-    // Callback data
-    void (*callback)(int errcode, struct evutil_addrinfo *addr, void *ctx);
-    void *callback_ctx;
 } udpd_dns_request_t;
 
 // Configuration functions
@@ -159,14 +155,11 @@ LUA_API int lua_udpd_dest_gc(lua_State *L);
 // DNS resolution functions
 udpd_dns_request_t* udpd_dns_request_create(const char *hostname, int port);
 void udpd_dns_request_cleanup(udpd_dns_request_t *request);
-int udpd_dns_resolve_async(udpd_dns_request_t *request,
-                          void (*callback)(int, struct evutil_addrinfo*, void*),
-                          void *ctx);
-int udpd_dns_resolve_sync(const char *hostname, int port,
-                         struct sockaddr_storage *addr, socklen_t *addrlen);
 int udpd_dns_resolve_for_connection(udpd_base_conn_t *conn);
-int udpd_dns_resolve_for_destination(const char *hostname, int port, lua_State *L);
-int udpd_dns_resolve_for_destinations(const char *hostname, int port, lua_State *L);
+int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
+                                                struct evdns_base *dnsbase, lua_State *L);
+int udpd_dns_resolve_for_destinations_with_evdns(const char *hostname, int port,
+                                                 struct evdns_base *dnsbase, lua_State *L);
 
 // Utility functions
 int udpd_socket_set_nonblock(evutil_socket_t fd);

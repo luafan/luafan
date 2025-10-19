@@ -1,4 +1,5 @@
 #include "udpd_common.h"
+#include "evdns.h"
 #include <net/if.h>
 
 // Refactored UDP module using modular components
@@ -159,7 +160,14 @@ LUA_API int udpd_conn_make_dest(lua_State *L) {
 
     const char *host = luaL_checkstring(L, 1);
     int port = (int)luaL_checkinteger(L, 2);
-    lua_settop(L, 2);
+
+    // Check for optional evdns parameter
+    struct evdns_base *custom_dnsbase = NULL;
+    if (lua_gettop(L) >= 3 && !lua_isnil(L, 3)) {
+        custom_dnsbase = evdns_get_base(L, 3);
+    }
+
+    lua_settop(L, 3);
 
     // Try synchronous resolution first (for IP addresses)
     if (udpd_is_ip_address(host)) {
@@ -183,7 +191,7 @@ LUA_API int udpd_conn_make_dest(lua_State *L) {
     }
 
     // Asynchronous DNS resolution for hostnames
-    return udpd_dns_resolve_for_destination(host, port, L);
+    return udpd_dns_resolve_for_destination_with_evdns(host, port, custom_dnsbase, L);
 }
 
 // Create multiple destination objects from host:port string (returns all resolved addresses)
@@ -192,7 +200,14 @@ LUA_API int udpd_conn_make_dests(lua_State *L) {
 
     const char *host = luaL_checkstring(L, 1);
     int port = (int)luaL_checkinteger(L, 2);
-    lua_settop(L, 2);
+
+    // Check for optional evdns parameter
+    struct evdns_base *custom_dnsbase = NULL;
+    if (lua_gettop(L) >= 3 && !lua_isnil(L, 3)) {
+        custom_dnsbase = evdns_get_base(L, 3);
+    }
+
+    lua_settop(L, 3);
 
     // Try synchronous resolution first (for IP addresses)
     if (udpd_is_ip_address(host)) {
@@ -222,7 +237,7 @@ LUA_API int udpd_conn_make_dests(lua_State *L) {
     }
 
     // Asynchronous DNS resolution for hostnames (returns table of destinations)
-    return udpd_dns_resolve_for_destinations(host, port, L);
+    return udpd_dns_resolve_for_destinations_with_evdns(host, port, custom_dnsbase, L);
 }
 
 // Rebind UDP connection

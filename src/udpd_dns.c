@@ -22,8 +22,6 @@ udpd_dns_request_t* udpd_dns_request_create(const char *hostname, int port) {
     request->mainthread = NULL;
     request->_ref_ = 0;
     request->yielded = 0;
-    request->callback = NULL;
-    request->callback_ctx = NULL;
 
     return request;
 }
@@ -243,8 +241,10 @@ int udpd_dns_resolve_for_connection(udpd_base_conn_t *conn) {
     return 0;
 }
 
-// Resolve hostname asynchronously for destination creation
-int udpd_dns_resolve_for_destination(const char *hostname, int port, lua_State *L) {
+
+// Resolve hostname asynchronously for destination creation with evdns
+int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
+                                                struct evdns_base *dnsbase, lua_State *L) {
     if (!hostname || !L) return -1;
 
     // Create DNS request
@@ -266,9 +266,14 @@ int udpd_dns_resolve_for_destination(const char *hostname, int port, lua_State *
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
 
+    // Use provided DNS base or default
+    if (!dnsbase) {
+        dnsbase = event_mgr_dnsbase();
+    }
+
     // Start DNS resolution
     struct evdns_getaddrinfo_request *req =
-        evdns_getaddrinfo(event_mgr_dnsbase(), hostname, portbuf, &hints,
+        evdns_getaddrinfo(dnsbase, hostname, portbuf, &hints,
                          udpd_dest_dns_callback, request);
 
     if (!req) {
@@ -277,9 +282,9 @@ int udpd_dns_resolve_for_destination(const char *hostname, int port, lua_State *
     }
 
     // Check if resolution completed synchronously
-    if (lua_gettop(L) > 2) {
+    if (lua_gettop(L) > 3) {
         // Synchronous completion - don't yield
-        return lua_gettop(L) - 2;
+        return lua_gettop(L) - 3;
     } else {
         // Asynchronous - yield coroutine
         request->yielded = 1;
@@ -287,8 +292,9 @@ int udpd_dns_resolve_for_destination(const char *hostname, int port, lua_State *
     }
 }
 
-// Resolve hostname asynchronously for multiple destination creation
-int udpd_dns_resolve_for_destinations(const char *hostname, int port, lua_State *L) {
+// Resolve hostname asynchronously for multiple destination creation with evdns
+int udpd_dns_resolve_for_destinations_with_evdns(const char *hostname, int port,
+                                                 struct evdns_base *dnsbase, lua_State *L) {
     if (!hostname || !L) return -1;
 
     // Create DNS request
@@ -310,9 +316,14 @@ int udpd_dns_resolve_for_destinations(const char *hostname, int port, lua_State 
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
 
+    // Use provided DNS base or default
+    if (!dnsbase) {
+        dnsbase = event_mgr_dnsbase();
+    }
+
     // Start DNS resolution for multiple addresses
     struct evdns_getaddrinfo_request *req =
-        evdns_getaddrinfo(event_mgr_dnsbase(), hostname, portbuf, &hints,
+        evdns_getaddrinfo(dnsbase, hostname, portbuf, &hints,
                          udpd_dests_dns_callback, request);
 
     if (!req) {
@@ -321,80 +332,15 @@ int udpd_dns_resolve_for_destinations(const char *hostname, int port, lua_State 
     }
 
     // Check if resolution completed synchronously
-    if (lua_gettop(L) > 2) {
+    if (lua_gettop(L) > 3) {
         // Synchronous completion - don't yield
-        return lua_gettop(L) - 2;
+        return lua_gettop(L) - 3;
     } else {
         // Asynchronous - yield coroutine
         request->yielded = 1;
         return lua_yield(L, 0);
     }
 }
-
-// Generic DNS resolution with custom callback
-int udpd_dns_resolve_async(udpd_dns_request_t *request,
-                          void (*callback)(int, struct evutil_addrinfo*, void*),
-                          void *ctx) {
-    if (!request || !callback) return -1;
-
-    request->callback = callback;
-    request->callback_ctx = ctx;
-
-    // Set up port string
-    char portbuf[6];
-    evutil_snprintf(portbuf, sizeof(portbuf), "%d", request->port);
-
-    // Set up hints
-    struct evutil_addrinfo hints = {0};
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_protocol = IPPROTO_UDP;
-    hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
-
-    // Start DNS resolution
-    struct evdns_getaddrinfo_request *req =
-        evdns_getaddrinfo(event_mgr_dnsbase(), request->hostname, portbuf, &hints,
-                         callback, ctx);
-
-    return req ? 0 : -1;
-}
-
-// Synchronous DNS resolution (blocking)
-int udpd_dns_resolve_sync(const char *hostname, int port,
-                         struct sockaddr_storage *addr, socklen_t *addrlen) {
-    if (!hostname || !addr || !addrlen) return -1;
-
-    // Set up port string
-    char portbuf[6];
-    evutil_snprintf(portbuf, sizeof(portbuf), "%d", port);
-
-    // Set up hints
-    struct evutil_addrinfo hints = {0};
-    struct evutil_addrinfo *answer = NULL;
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_protocol = IPPROTO_UDP;
-    hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
-
-    // Perform synchronous resolution
-    int err = evutil_getaddrinfo(hostname, portbuf, &hints, &answer);
-    if (err < 0 || !answer) {
-        return -1;
-    }
-
-    // Copy result
-    if (answer->ai_addr && answer->ai_addrlen <= sizeof(*addr)) {
-        memcpy(addr, answer->ai_addr, answer->ai_addrlen);
-        *addrlen = answer->ai_addrlen;
-    } else {
-        evutil_freeaddrinfo(answer);
-        return -1;
-    }
-
-    evutil_freeaddrinfo(answer);
-    return 0;
-}
-
 
 // Cancel pending DNS resolution
 void udpd_dns_cancel_resolution(udpd_base_conn_t *conn) {

@@ -1,6 +1,7 @@
 #include "tcpd_common.h"
 #include "tcpd_ssl.h"
 #include "tcpd_server.h"
+#include "evdns.h"
 #include <net/if.h>
 
 #ifdef __linux__
@@ -58,6 +59,14 @@ LUA_API int tcpd_connect(lua_State *L) {
     DUP_STR_FROM_TABLE(L, client->base.host, 1, "host");
     SET_INT_FROM_TABLE(L, client->base.port, 1, "port");
 
+    // Extract optional evdns parameter
+    struct evdns_base *custom_dnsbase = NULL;
+    lua_getfield(L, 1, "evdns");
+    if (!lua_isnil(L, -1)) {
+        custom_dnsbase = evdns_get_base(L, -1);
+    }
+    lua_pop(L, 1);
+
     // Set up SSL if enabled
     if (client->base.config.ssl_enabled) {
 #if FAN_HAS_OPENSSL
@@ -93,9 +102,10 @@ LUA_API int tcpd_connect(lua_State *L) {
         return 1;
     }
 
-    // Connect to host
+    // Connect to host (use custom DNS base if provided)
+    struct evdns_base *dnsbase = custom_dnsbase ? custom_dnsbase : event_mgr_dnsbase();
     int rc = bufferevent_socket_connect_hostname(
-        client->base.buf, event_mgr_dnsbase(), AF_UNSPEC,
+        client->base.buf, dnsbase, AF_UNSPEC,
         client->base.host, client->base.port);
 
     if (rc < 0) {
