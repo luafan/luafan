@@ -3,8 +3,61 @@ fan.udpd
 ### `conn = udpd.new(arg:table)`
 create a udp socket.
 
-### `dest = udpd.make_dest(host:string, port:number)`
+### `dest = udpd.make_dest(host:string, port:number[, evdns:evdns_object])`
 create a dest:[UDP_AddrInfo](#udp_addr_info), can be used in `conn:send`, this api is non-blocking.
+
+**Parameters:**
+- `host`: Hostname or IP address to resolve
+- `port`: Port number for the destination
+- `evdns` (optional): Custom DNS resolver for hostname resolution. If not provided, uses system default DNS.
+
+**Examples:**
+```lua
+local udpd = require('fan.udpd')
+local evdns = require('fan.evdns')
+
+-- Using system default DNS
+local dest1 = udpd.make_dest("example.com", 53)
+
+-- Using custom DNS resolver
+local dns = evdns.create("8.8.8.8")
+local dest2 = udpd.make_dest("example.com", 53, dns)
+
+-- Using multiple DNS servers
+local dns_multi = evdns.create({"8.8.8.8", "1.1.1.1"})
+local dest3 = udpd.make_dest("api.example.com", 8080, dns_multi)
+```
+
+### `dests = udpd.make_dests(host:string, port:number[, evdns:evdns_object])`
+create multiple dest objects from host:port string (returns all resolved addresses), this api is non-blocking.
+
+**Parameters:**
+- `host`: Hostname or IP address to resolve
+- `port`: Port number for the destinations
+- `evdns` (optional): Custom DNS resolver for hostname resolution. If not provided, uses system default DNS.
+
+**Returns:**
+- `dests`: Table containing all resolved UDP_AddrInfo objects for the hostname
+
+**Examples:**
+```lua
+local udpd = require('fan.udpd')
+local evdns = require('fan.evdns')
+
+-- Get all resolved addresses using system DNS
+local dests1 = udpd.make_dests("example.com", 53)
+
+-- Get all resolved addresses using custom DNS
+local dns = evdns.create({"1.1.1.1", "8.8.8.8"})
+local dests2 = udpd.make_dests("example.com", 53, dns)
+
+-- Use the destinations
+if dests2 then
+    for i, dest in ipairs(dests2) do
+        print("Destination " .. i .. ": " .. dest:getIP() .. ":" .. dest:getPort())
+    end
+end
+```
 
 ---------
 keys in the `arg`:
@@ -124,3 +177,91 @@ local server = udpd.new({
     end
 })
 ```
+
+## Custom DNS Usage Examples
+
+### Basic Custom DNS with UDP
+
+```lua
+local udpd = require('fan.udpd')
+local evdns = require('fan.evdns')
+
+-- Create custom DNS resolver
+local dns = evdns.create("8.8.8.8")
+
+-- Create UDP connection
+local conn = udpd.new({
+    bind_port = 8080,
+    callback_self_first = true,
+    onread = function(self, data, sender)
+        print("Received:", data)
+    end
+})
+
+-- Create destination using custom DNS
+local dest = udpd.make_dest("api.example.com", 53, dns)
+if dest then
+    conn:send("Hello Server", dest)
+end
+```
+
+### DNS Load Balancing with Multiple Destinations
+
+```lua
+local udpd = require('fan.udpd')
+local evdns = require('fan.evdns')
+
+-- Use multiple DNS servers for redundancy
+local dns = evdns.create({"1.1.1.1", "8.8.8.8", "9.9.9.9"})
+
+-- Get all resolved addresses for load balancing
+local dests = udpd.make_dests("cdn.example.com", 80, dns)
+
+if dests and #dests > 0 then
+    local conn = udpd.new({bind_port = 0})
+
+    -- Round-robin through all destinations
+    for i, dest in ipairs(dests) do
+        local message = "Request #" .. i
+        conn:send(message, dest)
+        print("Sent to " .. dest:getIP() .. ":" .. dest:getPort())
+    end
+end
+```
+
+### DNS Testing and Benchmarking
+
+```lua
+local udpd = require('fan.udpd')
+local evdns = require('fan.evdns')
+
+-- Test different DNS providers
+local dns_providers = {
+    cloudflare = evdns.create("1.1.1.1"),
+    google = evdns.create("8.8.8.8"),
+    quad9 = evdns.create("9.9.9.9"),
+    default = evdns.create()  -- System default
+}
+
+-- Function to test DNS resolution performance
+local function test_dns_resolution(name, dns)
+    local start_time = os.clock()
+
+    local dest = udpd.make_dest("example.com", 53, dns)
+
+    if dest then
+        local end_time = os.clock()
+        local duration = (end_time - start_time) * 1000
+        print(string.format("%s DNS: %.2f ms -> %s", name, duration, dest:getIP()))
+    else
+        print(name .. " DNS: Resolution failed")
+    end
+end
+
+-- Test all DNS providers
+for name, dns in pairs(dns_providers) do
+    test_dns_resolution(name, dns)
+end
+```
+
+**See Also:** [`fan.evdns`](evdns.md) for detailed DNS configuration options and [`fan.tcpd`](tcpd.md) for TCP usage with custom DNS.

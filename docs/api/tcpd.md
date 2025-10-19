@@ -105,6 +105,55 @@ keys in the `arg`:
 	})
 	```
 
+* `evdns: evdns_object?`
+
+	Custom DNS resolver for hostname resolution. If not provided, uses system default DNS configuration.
+	This allows you to specify custom nameservers for DNS lookups.
+
+	**Creating EVDNS objects:**
+	```lua
+	local evdns = require('fan.evdns')
+
+	-- Use system default DNS
+	local dns_default = evdns.create()
+
+	-- Use custom single nameserver
+	local dns_google = evdns.create("8.8.8.8")
+
+	-- Use multiple custom nameservers
+	local dns_multi = evdns.create({"8.8.8.8", "1.1.1.1"})
+	```
+
+	**Usage with tcpd.connect:**
+	```lua
+	local evdns = require('fan.evdns')
+	local tcpd = require('fan.tcpd')
+
+	-- Create custom DNS resolver
+	local dns = evdns.create("8.8.8.8")
+
+	-- Connect using custom DNS
+	local conn = tcpd.connect({
+		host = "api.example.com",
+		port = 443,
+		ssl = true,
+		evdns = dns,  -- Use custom DNS for hostname resolution
+		callback_self_first = true,
+		onconnected = function(self)
+			print("Connected using custom DNS resolver")
+		end
+	})
+	```
+
+	**Use Cases:**
+	- Using public DNS servers (CloudFlare, Google, Quad9)
+	- Bypassing DNS filtering or censorship
+	- Testing with specific DNS configurations
+	- Corporate environments with custom DNS servers
+	- Performance optimization with faster DNS servers
+
+	**See Also:** [`fan.evdns`](evdns.md) for detailed DNS configuration options.
+
 ---------
 `conn` apis:
 

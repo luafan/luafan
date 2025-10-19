@@ -35,6 +35,8 @@ local test_files = {
     "test_tcpd_callback_self_first.lua",
     "test_udpd_callback_self_first.lua",
     "test_udpd_dest_getip.lua",
+    "test_fan_evdns.lua",
+    "test_evdns_integration.lua",
     -- Add more test files here as they are completed
 }
 

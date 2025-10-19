@@ -17,6 +17,18 @@ typedef struct {
 LUA_API int evdns_create(lua_State *L) {
     event_mgr_init();
 
+    // Check arguments first before creating userdata
+    int argc = lua_gettop(L);
+
+    // Validate parameters before creating userdata to avoid memory issues
+    if (argc > 0 && !lua_isnil(L, 1)) {
+        // Only allow actual strings (not numbers) and tables
+        if (lua_type(L, 1) != LUA_TSTRING && lua_type(L, 1) != LUA_TTABLE) {
+            luaL_error(L, "nameservers must be a string or table of strings");
+            return 0;
+        }
+    }
+
     // Create userdata
     lua_evdns_t *dns = lua_newuserdata(L, sizeof(lua_evdns_t));
     dns->dnsbase = NULL;
@@ -27,7 +39,7 @@ LUA_API int evdns_create(lua_State *L) {
     lua_setmetatable(L, -2);
 
     // Check if nameservers parameter is provided
-    if (lua_gettop(L) == 0 || lua_isnil(L, 1)) {
+    if (argc == 0 || lua_isnil(L, 1)) {
         // No nameservers provided, use default DNS base
         dns->dnsbase = event_mgr_dnsbase();
         dns->is_default = 1;
@@ -58,10 +70,6 @@ LUA_API int evdns_create(lua_State *L) {
                 lua_pop(L, 1);
             }
         }
-    } else {
-        if (nameservers) free(nameservers);
-        luaL_error(L, "nameservers must be a string or table of strings");
-        return 0;
     }
 
     // Create new DNS base

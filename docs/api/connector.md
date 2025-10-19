@@ -4,6 +4,8 @@ APIs
 ## Goals
 Connector is used to create tcp/udp/fifo connection quickly with same interface. It simulate block api call for tcp/fifo, so it's easy for you to write functions without callback hell.
 
+**Note:** All TCP and UDP connections created through connector automatically use `callback_self_first = true` to avoid circular references and improve memory safety.
+
 * `cli = connector.connect(url)`
 
  create a logic connection to fifo/tcp/udp
@@ -45,6 +47,8 @@ send buf on background, using embedded private protocol to control squence, buf 
 * `cli.onread = function(cli, buf) end` (udp with embedded private protocol)
 
 input buffer callback, using embedded private protocol to control squence, when all parts of the buffer received, this callback will be invoked.
+
+**Note:** Since connector uses `callback_self_first = true`, the connection object is passed as the first parameter to avoid circular references.
 
 * `cli.onsent = function(cli, package) end` (udp with embedded private protocol)
 

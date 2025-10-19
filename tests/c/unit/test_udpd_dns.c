@@ -19,8 +19,7 @@ TEST_CASE(udpd_dns_request_create) {
     TEST_ASSERT_NULL(request->mainthread);
     TEST_ASSERT_EQUAL(0, request->_ref_);
     TEST_ASSERT_EQUAL(0, request->yielded);
-    TEST_ASSERT_NULL(request->callback);
-    TEST_ASSERT_NULL(request->callback_ctx);
+    // callback and callback_ctx members have been removed
 
     udpd_dns_request_cleanup(request);
 }
@@ -90,6 +89,8 @@ TEST_CASE(udpd_dns_request_edge_cases) {
     }
 }
 
+// udpd_dns_resolve_sync function has been removed - test case disabled
+/*
 TEST_CASE(udpd_dns_resolve_sync_localhost) {
     struct sockaddr_storage addr;
     socklen_t addrlen;
@@ -105,7 +106,10 @@ TEST_CASE(udpd_dns_resolve_sync_localhost) {
         TEST_ASSERT_EQUAL(sizeof(struct sockaddr_in), addrlen);
     }
 }
+*/
 
+// udpd_dns_resolve_sync function has been removed - test case disabled
+/*
 TEST_CASE(udpd_dns_resolve_sync_invalid_params) {
     struct sockaddr_storage addr;
     socklen_t addrlen;
@@ -126,7 +130,10 @@ TEST_CASE(udpd_dns_resolve_sync_invalid_params) {
     result = udpd_dns_resolve_sync("invalid.nonexistent.domain.test", 8080, &addr, &addrlen);
     TEST_ASSERT_EQUAL(-1, result);
 }
+*/
 
+// udpd_dns_resolve_sync function has been removed - test case disabled
+/*
 TEST_CASE(udpd_dns_resolve_sync_various_addresses) {
     struct sockaddr_storage addr;
     socklen_t addrlen;
@@ -150,6 +157,7 @@ TEST_CASE(udpd_dns_resolve_sync_various_addresses) {
         }
     }
 }
+*/
 
 TEST_CASE(udpd_dns_async_request_structure) {
     // Test setting up async request structure
@@ -160,12 +168,12 @@ TEST_CASE(udpd_dns_async_request_structure) {
     void (*mock_callback)(int, struct evutil_addrinfo*, void*) = NULL;
     void *mock_context = (void*)0x12345678;
 
-    // Test setting callback parameters
-    request->callback = mock_callback;
-    request->callback_ctx = mock_context;
+    // Test setting callback parameters - callback functionality has been removed
+    // request->callback = mock_callback;
+    // request->callback_ctx = mock_context;
 
-    TEST_ASSERT_EQUAL(mock_callback, request->callback);
-    TEST_ASSERT_EQUAL(mock_context, request->callback_ctx);
+    // TEST_ASSERT_EQUAL(mock_callback, request->callback);
+    // TEST_ASSERT_EQUAL(mock_context, request->callback_ctx);
 
     udpd_dns_request_cleanup(request);
 }
@@ -258,8 +266,7 @@ TEST_CASE(udpd_dns_initialization_state) {
     TEST_ASSERT_NULL(request->mainthread);
     TEST_ASSERT_EQUAL(0, request->_ref_);
     TEST_ASSERT_EQUAL(0, request->yielded);
-    TEST_ASSERT_NULL(request->callback);
-    TEST_ASSERT_NULL(request->callback_ctx);
+    // callback and callback_ctx members have been removed
 
     udpd_dns_request_cleanup(request);
 }
@@ -285,9 +292,9 @@ TEST_SUITE_BEGIN(udpd_dns)
     TEST_SUITE_ADD(udpd_dns_request_create_invalid_params)
     TEST_SUITE_ADD(udpd_dns_request_cleanup)
     TEST_SUITE_ADD(udpd_dns_request_edge_cases)
-    TEST_SUITE_ADD(udpd_dns_resolve_sync_localhost)
-    TEST_SUITE_ADD(udpd_dns_resolve_sync_invalid_params)
-    TEST_SUITE_ADD(udpd_dns_resolve_sync_various_addresses)
+    // Removed: TEST_SUITE_ADD(udpd_dns_resolve_sync_localhost)
+    // Removed: TEST_SUITE_ADD(udpd_dns_resolve_sync_invalid_params)
+    // Removed: TEST_SUITE_ADD(udpd_dns_resolve_sync_various_addresses)
     TEST_SUITE_ADD(udpd_dns_async_request_structure)
     TEST_SUITE_ADD(udpd_dns_request_memory_management)
     TEST_SUITE_ADD(udpd_dns_port_boundaries)
@@ -299,9 +306,9 @@ TEST_SUITE_ADD_NAME(udpd_dns_request_create)
 TEST_SUITE_ADD_NAME(udpd_dns_request_create_invalid_params)
 TEST_SUITE_ADD_NAME(udpd_dns_request_cleanup)
 TEST_SUITE_ADD_NAME(udpd_dns_request_edge_cases)
-TEST_SUITE_ADD_NAME(udpd_dns_resolve_sync_localhost)
-TEST_SUITE_ADD_NAME(udpd_dns_resolve_sync_invalid_params)
-TEST_SUITE_ADD_NAME(udpd_dns_resolve_sync_various_addresses)
+// Removed: TEST_SUITE_ADD_NAME(udpd_dns_resolve_sync_localhost)
+// Removed: TEST_SUITE_ADD_NAME(udpd_dns_resolve_sync_invalid_params)
+// Removed: TEST_SUITE_ADD_NAME(udpd_dns_resolve_sync_various_addresses)
 TEST_SUITE_ADD_NAME(udpd_dns_async_request_structure)
 TEST_SUITE_ADD_NAME(udpd_dns_request_memory_management)
 TEST_SUITE_ADD_NAME(udpd_dns_port_boundaries)
