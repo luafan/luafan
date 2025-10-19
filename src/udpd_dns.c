@@ -155,6 +155,60 @@ void udpd_dest_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
     udpd_dns_request_cleanup(request);
 }
 
+// DNS resolution callback for multiple destination creation
+void udpd_dests_dns_callback(int errcode, struct evutil_addrinfo *addr_list, void *ptr) {
+    udpd_dns_request_t *request = (udpd_dns_request_t *)ptr;
+    lua_State *L = NULL;
+
+    if (!request) return;
+
+    REF_STATE_GET(request, L);
+
+    if (errcode) {
+        // DNS resolution failed
+        lua_pushnil(L);
+        lua_pushfstring(L, "DNS resolution failed for '%s': %s",
+                       request->hostname, evutil_gai_strerror(errcode));
+
+        if (request->yielded) {
+            FAN_RESUME(L, NULL, 2);
+        }
+    } else {
+        // DNS resolution successful - create table with all destination objects
+        lua_newtable(L);
+        int table_index = 1;
+
+        // Iterate through all resolved addresses
+        struct evutil_addrinfo *addr = addr_list;
+        while (addr) {
+            // Create destination object for each address
+            udpd_dest_t *dest = lua_newuserdata(L, sizeof(udpd_dest_t));
+            luaL_getmetatable(L, LUA_UDPD_DEST_TYPE);
+            lua_setmetatable(L, -2);
+
+            // Initialize destination with resolved address
+            memcpy(&dest->addr, addr->ai_addr, addr->ai_addrlen);
+            dest->addrlen = addr->ai_addrlen;
+            dest->host = strdup(request->hostname);
+            dest->port = request->port;
+
+            // Add to table
+            lua_rawseti(L, -2, table_index++);
+
+            addr = addr->ai_next;
+        }
+
+        evutil_freeaddrinfo(addr_list);
+
+        if (request->yielded) {
+            FAN_RESUME(L, NULL, 1);
+        }
+    }
+
+    REF_STATE_CLEAR(request);
+    udpd_dns_request_cleanup(request);
+}
+
 // Resolve hostname asynchronously for connection
 int udpd_dns_resolve_for_connection(udpd_base_conn_t *conn) {
     if (!conn || !conn->host) return -1;
@@ -216,6 +270,50 @@ int udpd_dns_resolve_for_destination(const char *hostname, int port, lua_State *
     struct evdns_getaddrinfo_request *req =
         evdns_getaddrinfo(event_mgr_dnsbase(), hostname, portbuf, &hints,
                          udpd_dest_dns_callback, request);
+
+    if (!req) {
+        udpd_dns_request_cleanup(request);
+        return -1;
+    }
+
+    // Check if resolution completed synchronously
+    if (lua_gettop(L) > 2) {
+        // Synchronous completion - don't yield
+        return lua_gettop(L) - 2;
+    } else {
+        // Asynchronous - yield coroutine
+        request->yielded = 1;
+        return lua_yield(L, 0);
+    }
+}
+
+// Resolve hostname asynchronously for multiple destination creation
+int udpd_dns_resolve_for_destinations(const char *hostname, int port, lua_State *L) {
+    if (!hostname || !L) return -1;
+
+    // Create DNS request
+    udpd_dns_request_t *request = udpd_dns_request_create(hostname, port);
+    if (!request) return -1;
+
+    // Set up Lua state reference
+    REF_STATE_SET(request, L);
+    request->yielded = 0;
+
+    // Set up port string
+    char portbuf[6];
+    evutil_snprintf(portbuf, sizeof(portbuf), "%d", port);
+
+    // Set up hints for multiple addresses
+    struct evutil_addrinfo hints = {0};
+    hints.ai_family = AF_UNSPEC;  // Allow both IPv4 and IPv6
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
+
+    // Start DNS resolution for multiple addresses
+    struct evdns_getaddrinfo_request *req =
+        evdns_getaddrinfo(event_mgr_dnsbase(), hostname, portbuf, &hints,
+                         udpd_dests_dns_callback, request);
 
     if (!req) {
         udpd_dns_request_cleanup(request);

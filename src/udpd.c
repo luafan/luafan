@@ -186,6 +186,45 @@ LUA_API int udpd_conn_make_dest(lua_State *L) {
     return udpd_dns_resolve_for_destination(host, port, L);
 }
 
+// Create multiple destination objects from host:port string (returns all resolved addresses)
+LUA_API int udpd_conn_make_dests(lua_State *L) {
+    event_mgr_init();
+
+    const char *host = luaL_checkstring(L, 1);
+    int port = (int)luaL_checkinteger(L, 2);
+    lua_settop(L, 2);
+
+    // Try synchronous resolution first (for IP addresses)
+    if (udpd_is_ip_address(host)) {
+        udpd_dest_t *dest = udpd_dest_create_from_string(host, port);
+        if (dest) {
+            // Create table with single destination
+            lua_newtable(L);
+
+            // Push destination to Lua stack
+            udpd_dest_t *lua_dest = lua_newuserdata(L, sizeof(udpd_dest_t));
+            memcpy(lua_dest, dest, sizeof(udpd_dest_t));
+            lua_dest->host = dest->host ? strdup(dest->host) : NULL;
+
+            luaL_getmetatable(L, LUA_UDPD_DEST_TYPE);
+            lua_setmetatable(L, -2);
+
+            // Add to table at index 1
+            lua_rawseti(L, -2, 1);
+
+            udpd_dest_cleanup(dest);  // Clean up temporary dest
+            return 1;
+        } else {
+            lua_pushnil(L);
+            lua_pushstring(L, "Invalid IP address");
+            return 2;
+        }
+    }
+
+    // Asynchronous DNS resolution for hostnames (returns table of destinations)
+    return udpd_dns_resolve_for_destinations(host, port, L);
+}
+
 // Rebind UDP connection
 LUA_API int lua_udpd_conn_rebind(lua_State *L) {
     udpd_conn_t *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
@@ -310,6 +349,7 @@ LUA_API int udpd_conn_close(lua_State *L) {
 static const luaL_Reg udpdlib[] = {
     {"new", udpd_new},
     {"make_dest", udpd_conn_make_dest},
+    {"make_dests", udpd_conn_make_dests},
     {NULL, NULL}
 };
 

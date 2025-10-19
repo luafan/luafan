@@ -166,6 +166,7 @@ int udpd_dns_resolve_sync(const char *hostname, int port,
                          struct sockaddr_storage *addr, socklen_t *addrlen);
 int udpd_dns_resolve_for_connection(udpd_base_conn_t *conn);
 int udpd_dns_resolve_for_destination(const char *hostname, int port, lua_State *L);
+int udpd_dns_resolve_for_destinations(const char *hostname, int port, lua_State *L);
 
 // Utility functions
 int udpd_socket_set_nonblock(evutil_socket_t fd);
