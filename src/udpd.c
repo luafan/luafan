@@ -126,8 +126,10 @@ LUA_API int udpd_new(lua_State *L) {
                 return 2;
             }
 
-            // Store self-reference for async callback
-            conn->base.selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
+            // Store self-reference for async callback only if not already set
+            if (conn->base.selfRef == LUA_NOREF) {
+                conn->base.selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
+            }
             return lua_yield(L, 0);
         }
     } else {
