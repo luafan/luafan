@@ -37,6 +37,8 @@ local test_files = {
     "test_udpd_dest_getip.lua",
     "test_fan_evdns.lua",
     "test_evdns_integration.lua",
+    "test_memory_leak_fix.lua",
+    "test_tcpd_memory_leak_fix.lua",
     -- Add more test files here as they are completed
 }
 

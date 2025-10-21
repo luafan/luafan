@@ -366,9 +366,11 @@ int udpd_base_conn_setup_events(udpd_base_conn_t *conn) {
         conn->read_ev = event_new(event_mgr_base(), conn->socket_fd,
                                  EV_READ | EV_PERSIST, udpd_common_readcb, conn);
         if (!conn->read_ev) {
-            return -1;
+            goto error;
         }
-        event_add(conn->read_ev, NULL);
+        if (event_add(conn->read_ev, NULL) < 0) {
+            goto error;
+        }
     }
 
     // Set up write event if callback is registered
@@ -376,17 +378,26 @@ int udpd_base_conn_setup_events(udpd_base_conn_t *conn) {
         conn->write_ev = event_new(event_mgr_base(), conn->socket_fd,
                                   EV_WRITE, udpd_common_writecb, conn);
         if (!conn->write_ev) {
-            if (conn->read_ev) {
-                event_free(conn->read_ev);
-                conn->read_ev = NULL;
-            }
-            return -1;
+            goto error;
         }
         // Don't add write event initially, only when requested
     }
 
     conn->state = UDPD_CONN_READY;
     return 0;
+
+error:
+    // Clean up any partially created events
+    if (conn->read_ev) {
+        event_free(conn->read_ev);
+        conn->read_ev = NULL;
+    }
+    if (conn->write_ev) {
+        event_free(conn->write_ev);
+        conn->write_ev = NULL;
+    }
+    conn->state = UDPD_CONN_ERROR;
+    return -1;
 }
 
 // Request send ready notification

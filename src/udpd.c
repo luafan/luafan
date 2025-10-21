@@ -246,13 +246,13 @@ LUA_API int udpd_conn_make_dests(lua_State *L) {
 LUA_API int lua_udpd_conn_rebind(lua_State *L) {
     udpd_conn_t *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
 
-    // Close existing socket and events
+    // Clean up existing events and socket completely
     if (conn->base.read_ev) {
-        event_free(conn->base.read_ev);
+        event_free(conn->base.read_ev);  // event_free() internally calls event_del()
         conn->base.read_ev = NULL;
     }
     if (conn->base.write_ev) {
-        event_free(conn->base.write_ev);
+        event_free(conn->base.write_ev);  // event_free() internally calls event_del()
         conn->base.write_ev = NULL;
     }
     if (conn->base.socket_fd >= 0) {
@@ -260,14 +260,36 @@ LUA_API int lua_udpd_conn_rebind(lua_State *L) {
         conn->base.socket_fd = -1;
     }
 
-    // Recreate and rebind
-    if (udpd_base_conn_create_socket(&conn->base) < 0 ||
-        udpd_base_conn_bind(&conn->base) < 0 ||
-        udpd_base_conn_setup_events(&conn->base) < 0) {
-        return 0;
+    // Clean up DNS request if any
+    if (conn->base.dns_request) {
+        udpd_dns_request_cleanup(conn->base.dns_request);
+        conn->base.dns_request = NULL;
     }
 
-    return 0;
+    // Reset connection state
+    conn->base.state = UDPD_CONN_DISCONNECTED;
+
+    // Recreate and rebind
+    if (udpd_base_conn_create_socket(&conn->base) < 0) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "Failed to create socket");
+        return 2;
+    }
+
+    if (udpd_base_conn_bind(&conn->base) < 0) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "Failed to bind socket");
+        return 2;
+    }
+
+    if (udpd_base_conn_setup_events(&conn->base) < 0) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "Failed to setup events");
+        return 2;
+    }
+
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
 // Send UDP data
