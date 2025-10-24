@@ -128,3 +128,51 @@ void server_setup_certs(SSL_CTX *ctx, const char *certificate_chain, const char 
         die_most_horribly_from_openssl_error("SSL_CTX_check_private_key");
 }
 #endif
+
+// Shared weak table functions for TCP/UDP connection self-references
+void utlua_store_self_in_weak_table(lua_State *L, void *conn_ptr, int self_index) {
+    // Get or create weak table for connections (shared by TCP and UDP)
+    lua_pushliteral(L, "LUAFAN_WEAK_REFS");
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        // Create weak table
+        lua_newtable(L);
+        // Set weak metatable
+        lua_newtable(L);
+        lua_pushliteral(L, "v");
+        lua_setfield(L, -2, "__mode");
+        lua_setmetatable(L, -2);
+        // Store in registry
+        lua_pushliteral(L, "LUAFAN_WEAK_REFS");
+        lua_pushvalue(L, -2);
+        lua_rawset(L, LUA_REGISTRYINDEX);
+    }
+
+    // Store connection in weak table with pointer as key
+    lua_pushlightuserdata(L, conn_ptr);
+    lua_pushvalue(L, self_index);
+    lua_rawset(L, -3);
+    lua_pop(L, 1); // pop weak table
+}
+
+void utlua_push_self_from_weak_table(lua_State *L, void *conn_ptr) {
+    // Try to get connection from weak table using conn pointer as key
+    lua_pushliteral(L, "LUAFAN_WEAK_REFS");
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    if (!lua_isnil(L, -1)) {
+        // Get connection from weak table using pointer as key
+        lua_pushlightuserdata(L, conn_ptr);
+        lua_rawget(L, -2);
+        lua_remove(L, -2); // remove weak table
+        if (!lua_isnil(L, -1)) {
+            return; // Successfully retrieved connection
+        }
+        lua_pop(L, 1); // pop nil result
+    } else {
+        lua_pop(L, 1); // pop nil weak table
+    }
+
+    // If lookup failed or no weak table, push nil
+    lua_pushnil(L);
+}

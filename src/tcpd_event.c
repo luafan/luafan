@@ -9,19 +9,15 @@
 static tcpd_error_t tcpd_analyze_event_error(struct bufferevent *bev, short events);
 static void tcpd_call_lua_callback(lua_State *mainthread, int callback_ref, int argc);
 
-// Helper function to push connection object to Lua stack based on stored reference
+// Helper function to push connection object to Lua stack from weak table
 void tcpd_push_connection_object(lua_State *co, tcpd_base_conn_t *conn) {
-    if (!co || !conn) return;
-
-    // Use the selfRef from base connection if available
-    if (conn->selfRef != LUA_NOREF) {
-        lua_rawgeti(co, LUA_REGISTRYINDEX, conn->selfRef);
+    if (!co || !conn) {
+        lua_pushnil(co);
         return;
     }
 
-    // For connections without selfRef (like client connections that don't set it),
-    // push nil for now. This will need to be handled when callback_self_first is enabled
-    lua_pushnil(co);
+    // Use shared weak table function
+    utlua_push_self_from_weak_table(co, conn);
 }
 
 // Common read callback for all connection types
@@ -297,7 +293,6 @@ int tcpd_base_conn_init(tcpd_base_conn_t *conn, tcpd_conn_type_t type, lua_State
     conn->onSendReadyRef = LUA_NOREF;
     conn->onDisconnectedRef = LUA_NOREF;
     conn->onConnectedRef = LUA_NOREF;
-    conn->selfRef = LUA_NOREF;
 
     memset(conn->ip, 0, INET6_ADDRSTRLEN);
 
@@ -320,7 +315,6 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
         CLEAR_REF(conn->mainthread, conn->onSendReadyRef);
         CLEAR_REF(conn->mainthread, conn->onDisconnectedRef);
         CLEAR_REF(conn->mainthread, conn->onConnectedRef);
-        CLEAR_REF(conn->mainthread, conn->selfRef);
     }
 
     // Free host string

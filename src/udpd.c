@@ -11,6 +11,7 @@ typedef struct {
     // Add any connection-specific extensions here if needed
 } udpd_conn_t;
 
+
 // Lua garbage collection for UDP connections
 LUA_API int lua_udpd_conn_gc(lua_State *L) {
     udpd_conn_t *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
@@ -28,6 +29,7 @@ LUA_API int udpd_new(lua_State *L) {
     // Create connection object
     udpd_conn_t *conn = lua_newuserdata(L, sizeof(udpd_conn_t));
     memset(conn, 0, sizeof(udpd_conn_t));
+    int self_index = lua_gettop(L);
 
     // Set metatable
     luaL_getmetatable(L, LUA_UDPD_CONNECTION_TYPE);
@@ -76,14 +78,6 @@ LUA_API int udpd_new(lua_State *L) {
     // Set up Lua state reference for async operations
     REF_STATE_SET((&conn->base), L);
 
-    // Store self-reference if callback_self_first is enabled
-    if (conn->base.config.base.callback_self_first) {
-        lua_pushvalue(L, -1);  // Push the connection object again
-        conn->base.selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
-    } else {
-        conn->base.selfRef = LUA_NOREF;
-    }
-
     // If we have a target host, check if it's an IP address first
     if (conn->base.host && conn->base.port > 0) {
         if (udpd_is_ip_address(conn->base.host)) {
@@ -121,35 +115,45 @@ LUA_API int udpd_new(lua_State *L) {
             int result = udpd_dns_resolve_for_connection(&conn->base);
             if (result < 0) {
                 // DNS resolution setup failed
+                udpd_base_conn_cleanup(&conn->base);
                 lua_pushnil(L);
                 lua_pushstring(L, "Failed to start DNS resolution");
                 return 2;
             }
 
-            // Store self-reference for async callback only if not already set
-            if (conn->base.selfRef == LUA_NOREF) {
-                conn->base.selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
+            // Store self-reference in weak table if callback_self_first is enabled
+            if (conn->base.config.base.callback_self_first) {
+                utlua_store_self_in_weak_table(L, conn, self_index);
             }
+
             return lua_yield(L, 0);
         }
     } else {
         // No target host - just set up for binding
         if (udpd_base_conn_create_socket(&conn->base) < 0) {
+            udpd_base_conn_cleanup(&conn->base);
             lua_pushnil(L);
             lua_pushstring(L, "Failed to create UDP socket");
             return 2;
         }
 
         if (udpd_base_conn_bind(&conn->base) < 0) {
+            udpd_base_conn_cleanup(&conn->base);
             lua_pushnil(L);
             lua_pushstring(L, "Failed to bind UDP socket");
             return 2;
         }
 
         if (udpd_base_conn_setup_events(&conn->base) < 0) {
+            udpd_base_conn_cleanup(&conn->base);
             lua_pushnil(L);
             lua_pushstring(L, "Failed to setup events");
             return 2;
+        }
+
+        // Store self-reference in weak table if callback_self_first is enabled
+        if (conn->base.config.base.callback_self_first) {
+            utlua_store_self_in_weak_table(L, conn, self_index);
         }
 
         return 1;  // Return connection object
@@ -182,6 +186,9 @@ LUA_API int udpd_conn_make_dest(lua_State *L) {
 
             luaL_getmetatable(L, LUA_UDPD_DEST_TYPE);
             lua_setmetatable(L, -2);
+
+            // Store destination in weak table
+            utlua_store_self_in_weak_table(L, lua_dest, lua_gettop(L));
 
             udpd_dest_cleanup(dest);  // Clean up temporary dest
             return 1;
@@ -225,6 +232,9 @@ LUA_API int udpd_conn_make_dests(lua_State *L) {
 
             luaL_getmetatable(L, LUA_UDPD_DEST_TYPE);
             lua_setmetatable(L, -2);
+
+            // Store destination in weak table
+            utlua_store_self_in_weak_table(L, lua_dest, lua_gettop(L));
 
             // Add to table at index 1
             lua_rawseti(L, -2, 1);

@@ -33,7 +33,6 @@ TEST_CASE(udpd_base_conn_init) {
     TEST_ASSERT_EQUAL(UDPD_CONN_DISCONNECTED, conn.state);
     TEST_ASSERT_EQUAL(UDPD_CONN_TYPE_CLIENT, conn.type);
     TEST_ASSERT_EQUAL(L, conn.mainthread);
-    TEST_ASSERT_EQUAL(LUA_NOREF, conn.selfRef);
     TEST_ASSERT_EQUAL(LUA_NOREF, conn.onReadRef);
     TEST_ASSERT_EQUAL(LUA_NOREF, conn.onSendReadyRef);
 

@@ -46,6 +46,7 @@ LUA_API int tcpd_connect(lua_State *L) {
     luaL_getmetatable(L, LUA_TCPD_CONNECTION_TYPE);
     lua_setmetatable(L, -2);
 
+    utlua_store_self_in_weak_table(L, client, lua_absindex(L, -1));
     // Initialize base connection
     tcpd_base_conn_init(&client->base, TCPD_CONN_TYPE_CLIENT, utlua_mainthread(L));
 
@@ -127,12 +128,6 @@ LUA_API int tcpd_connect(lua_State *L) {
     // Set callbacks and enable events
     bufferevent_setcb(client->base.buf, tcpd_common_readcb, tcpd_common_writecb, tcpd_common_eventcb, &client->base);
     bufferevent_enable(client->base.buf, EV_WRITE | EV_READ);
-
-    // If callback_self_first is enabled, store a self-reference to avoid circular references
-    if (client->base.config.callback_self_first) {
-        lua_pushvalue(L, -1);  // Push the client connection object
-        client->base.selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
-    }
 
     return 1;
 }

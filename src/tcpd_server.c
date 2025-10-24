@@ -13,7 +13,6 @@
 // Extended structures using the base connection
 typedef struct {
     tcpd_base_conn_t base;
-    // selfRef is now in base structure
 } tcpd_accept_conn_t;
 
 // Forward declarations
@@ -41,7 +40,6 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     // Initialize base connection
     tcpd_base_conn_init(&accept->base, TCPD_CONN_TYPE_ACCEPT, mainthread);
     accept->base.config = server->config;  // Copy server config
-    accept->base.selfRef = LUA_NOREF;
 
     luaL_getmetatable(co, LUA_TCPD_ACCEPT_TYPE);
     lua_setmetatable(co, -2);
@@ -87,15 +85,18 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
         accept->base.port = ntohs(addr_in->sin6_port);
     }
 
-    // selfRef will be set later in tcpd_accept_bind function to avoid GC issues
 
     // Check if callback_self_first is enabled for the server onaccept callback
     int argc = 1;
-    if (server->config.callback_self_first && server->selfRef != LUA_NOREF) {
+    if (server->config.callback_self_first) {
         // Push server object as first parameter, then accept object
-        lua_rawgeti(co, LUA_REGISTRYINDEX, server->selfRef);
-        lua_insert(co, -2);  // Move server object before accept object
-        argc = 2;
+        utlua_push_self_from_weak_table(co, server);
+        if (!lua_isnil(co, -1)) {
+            lua_insert(co, -2);  // Move server object before accept object
+            argc = 2;
+        } else {
+            lua_pop(co, 1);  // pop nil
+        }
     }
 
     FAN_RESUME(co, mainthread, argc);
@@ -232,8 +233,8 @@ LUA_API int tcpd_bind(lua_State *L) {
     luaL_getmetatable(L, LUA_TCPD_SERVER_TYPE);
     lua_setmetatable(L, -2);
 
+    utlua_store_self_in_weak_table(L, server, lua_absindex(L, -1));
     server->mainthread = utlua_mainthread(L);
-    server->selfRef = LUA_NOREF;
 
     // Set callbacks
     SET_FUNC_REF_FROM_TABLE(L, server->onAcceptRef, 1, "onaccept");
@@ -245,12 +246,6 @@ LUA_API int tcpd_bind(lua_State *L) {
 
     // Extract configuration
     tcpd_config_from_lua_table(L, 1, &server->config);
-
-    // Set server self-reference if callback_self_first is enabled
-    if (server->config.callback_self_first) {
-        lua_pushvalue(L, -1);  // Push server object
-        server->selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
-    }
 
     // Set up SSL if enabled
     if (server->config.ssl_enabled) {
@@ -290,8 +285,7 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
     luaL_checktype(L, 2, LUA_TTABLE);
     lua_settop(L, 2);
 
-    lua_pushvalue(L, 1);
-    accept->base.selfRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    utlua_store_self_in_weak_table(L, accept, 1);  // accept userdata is at index 1
 
     // Set callbacks using common function
     tcpd_base_conn_set_callbacks(&accept->base, L, 2);
@@ -306,7 +300,6 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
 static void tcpd_accept_cleanup_on_disconnect(tcpd_accept_conn_t *accept) {
     if (!accept) return;
 
-    CLEAR_REF(accept->base.mainthread, accept->base.selfRef);
     tcpd_base_conn_cleanup(&accept->base);
 }
 
@@ -439,7 +432,6 @@ static int tcpd_server_gc(lua_State *L) {
     if (server->mainthread) {
         CLEAR_REF(server->mainthread, server->onAcceptRef);
         CLEAR_REF(server->mainthread, server->onSSLHostNameRef);
-        CLEAR_REF(server->mainthread, server->selfRef);
     }
 
     // Clean up listener
@@ -467,9 +459,9 @@ static int tcpd_server_gc(lua_State *L) {
 static int tcpd_accept_conn_gc(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    // Clear the self-reference
+    // Clear references
     if (accept->base.mainthread) {
-        CLEAR_REF(accept->base.mainthread, accept->base.selfRef);
+        // References cleaned up by base connection cleanup
     }
 
     // Perform base connection cleanup

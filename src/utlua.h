@@ -334,6 +334,10 @@ void d2tv(double x, struct timeval *tv);
 int regress_get_socket_port(evutil_socket_t fd);
 void regress_get_socket_host(evutil_socket_t fd, char *host);
 
+// Shared weak table functions for TCP/UDP connection self-references
+void utlua_store_self_in_weak_table(lua_State *L, void *conn_ptr, int self_index);
+void utlua_push_self_from_weak_table(lua_State *L, void *conn_ptr);
+
 #if FAN_HAS_OPENSSL
 void die_most_horribly_from_openssl_error(const char *func);
 

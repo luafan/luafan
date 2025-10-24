@@ -56,7 +56,6 @@ typedef struct udpd_base_conn {
 
     // Lua state and callbacks
     lua_State *mainthread;
-    int selfRef;
     int _ref_;  // Generic Lua reference for REF_STATE macros
     int onReadRef;
     int onSendReadyRef;

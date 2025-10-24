@@ -56,15 +56,12 @@ void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
         // DNS resolution failed
         conn->state = UDPD_CONN_ERROR;
 
-        if (conn->selfRef != LUA_NOREF) {
-            // Return error to Lua
-            lua_pushnil(L);
-            lua_pushfstring(L, "DNS resolution failed for '%s': %s",
-                           conn->host, evutil_gai_strerror(errcode));
+        // Return error to Lua
+        lua_pushnil(L);
+        lua_pushfstring(L, "DNS resolution failed for '%s': %s",
+                       conn->host, evutil_gai_strerror(errcode));
 
-            FAN_RESUME(L, NULL, 2);
-            CLEAR_REF(L, conn->selfRef);
-        }
+        FAN_RESUME(L, NULL, 2);
     } else {
         // DNS resolution successful
         memcpy(&conn->addr, addr->ai_addr, addr->ai_addrlen);
@@ -84,22 +81,23 @@ void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
         if (setup_success) {
             conn->state = UDPD_CONN_READY;
 
-            if (conn->selfRef != LUA_NOREF) {
-                // Return success to Lua - push the connection object
-                lua_rawgeti(L, LUA_REGISTRYINDEX, conn->selfRef);
+            // Return success to Lua - get connection object from weak table
+            utlua_push_self_from_weak_table(L, conn);
+            if (lua_isnil(L, -1)) {
+                lua_pop(L, 1); // pop nil
+                lua_pushnil(L);
+                lua_pushstring(L, "Connection object not found in weak table");
+                FAN_RESUME(L, NULL, 2);
+            } else {
                 FAN_RESUME(L, NULL, 1);
-                CLEAR_REF(L, conn->selfRef);
             }
         } else {
             conn->state = UDPD_CONN_ERROR;
 
-            if (conn->selfRef != LUA_NOREF) {
-                // Return error to Lua
-                lua_pushnil(L);
-                lua_pushstring(L, "Failed to set up UDP connection after DNS resolution");
-                FAN_RESUME(L, NULL, 2);
-                CLEAR_REF(L, conn->selfRef);
-            }
+            // Return error to Lua
+            lua_pushnil(L);
+            lua_pushstring(L, "Failed to set up UDP connection after DNS resolution");
+            FAN_RESUME(L, NULL, 2);
         }
     }
 
@@ -141,6 +139,9 @@ void udpd_dest_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
         dest->addrlen = addr->ai_addrlen;
         dest->host = strdup(request->hostname);
         dest->port = request->port;
+
+        // Store destination in weak table
+        utlua_store_self_in_weak_table(L, dest, lua_gettop(L));
 
         evutil_freeaddrinfo(addr);
 
@@ -189,6 +190,9 @@ void udpd_dests_dns_callback(int errcode, struct evutil_addrinfo *addr_list, voi
             dest->addrlen = addr->ai_addrlen;
             dest->host = strdup(request->hostname);
             dest->port = request->port;
+
+            // Store destination in weak table
+            utlua_store_self_in_weak_table(L, dest, lua_gettop(L));
 
             // Add to table
             lua_rawseti(L, -2, table_index++);

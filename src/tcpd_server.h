@@ -10,7 +10,6 @@ typedef struct tcpd_server {
 
     int onAcceptRef;
     int onSSLHostNameRef;
-    int selfRef;  // Self-reference for callback_self_first mode
 
     char *host;
     int port;

@@ -66,7 +66,6 @@ typedef struct tcpd_base_conn {
     int onSendReadyRef;
     int onDisconnectedRef;
     int onConnectedRef;  // For client connections
-    int selfRef;         // Self-reference for callback_self_first mode
 
     // Configuration
     tcpd_config_t config;

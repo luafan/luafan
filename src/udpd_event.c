@@ -3,18 +3,15 @@
 #include <errno.h>
 #include <unistd.h>
 
-// Helper function to push UDP connection object to Lua stack based on stored reference
+// Helper function to push UDP connection object to Lua stack from weak table
 void udpd_push_connection_object(lua_State *co, udpd_base_conn_t *conn) {
-    if (!co || !conn) return;
-
-    // Use the selfRef from connection if available
-    if (conn->selfRef != LUA_NOREF) {
-        lua_rawgeti(co, LUA_REGISTRYINDEX, conn->selfRef);
+    if (!co || !conn) {
+        lua_pushnil(co);
         return;
     }
 
-    // For connections without selfRef, push nil
-    lua_pushnil(co);
+    // Use shared weak table function
+    utlua_push_self_from_weak_table(co, conn);
 }
 
 // Common read callback for UDP connections
@@ -113,6 +110,10 @@ void udpd_process_received_data(udpd_base_conn_t *conn, const char *data, size_t
     dest->addrlen = from_len;
     dest->host = NULL;  // Will be resolved on demand
     dest->port = udpd_dest_get_port(dest);
+
+    // Store destination in weak table
+    utlua_store_self_in_weak_table(co, dest, lua_gettop(co));
+
     argc++;
 
     // Resume coroutine with data and sender info (and self if enabled)
@@ -153,7 +154,6 @@ int udpd_base_conn_init(udpd_base_conn_t *conn, udpd_conn_type_t type, lua_State
     conn->state = UDPD_CONN_DISCONNECTED;
     conn->type = type;
     conn->mainthread = L;
-    conn->selfRef = LUA_NOREF;
     conn->onReadRef = LUA_NOREF;
     conn->onSendReadyRef = LUA_NOREF;
 
@@ -187,11 +187,10 @@ void udpd_base_conn_cleanup(udpd_base_conn_t *conn) {
 
     // Clear Lua references
     if (conn->mainthread) {
-        CLEAR_REF(conn->mainthread, conn->selfRef);
         CLEAR_REF(conn->mainthread, conn->onReadRef);
         CLEAR_REF(conn->mainthread, conn->onSendReadyRef);
 
-        // Clean up REF_STATE reference - this was the missing piece!
+        // Clean up REF_STATE reference
         REF_STATE_CLEAR(conn);
     }
 
