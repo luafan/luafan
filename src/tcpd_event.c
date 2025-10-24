@@ -331,3 +331,46 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
 
     conn->state = TCPD_CONN_DISCONNECTED;
 }
+
+// Helper function to format TCP connection info
+char* tcpd_format_connection_info(const tcpd_base_conn_t *conn) {
+    if (!conn) return NULL;
+
+    const char *host = conn->host ? conn->host : "unknown";
+    const char *local_ip = "unknown";
+    int local_port = 0;
+    evutil_socket_t fd = -1;
+
+    // Get socket info if available
+    if (conn->buf) {
+        fd = bufferevent_getfd(conn->buf);
+        if (fd >= 0) {
+            struct sockaddr_storage ss;
+            socklen_t len = sizeof(ss);
+            if (getsockname(fd, (struct sockaddr*)&ss, &len) == 0) {
+                if (ss.ss_family == AF_INET) {
+                    struct sockaddr_in *addr = (struct sockaddr_in*)&ss;
+                    inet_ntop(AF_INET, &addr->sin_addr, (char*)conn->ip, sizeof(conn->ip));
+                    local_ip = conn->ip;
+                    local_port = ntohs(addr->sin_port);
+                } else if (ss.ss_family == AF_INET6) {
+                    struct sockaddr_in6 *addr = (struct sockaddr_in6*)&ss;
+                    inet_ntop(AF_INET6, &addr->sin6_addr, (char*)conn->ip, sizeof(conn->ip));
+                    local_ip = conn->ip;
+                    local_port = ntohs(addr->sin6_port);
+                }
+            }
+        }
+    }
+
+    size_t len = strlen(host) + strlen(local_ip) + 128;
+    char *info = malloc(len);
+
+    if (info) {
+        snprintf(info, len,
+                "<TCP: target=%s:%d, local=%s:%d, fd=%d, state=%d>",
+                host, conn->port, local_ip, local_port, fd, conn->state);
+    }
+
+    return info;
+}

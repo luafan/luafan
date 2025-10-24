@@ -145,6 +145,9 @@ void tcpd_connection_cleanup_on_disconnect(tcpd_base_conn_t *conn);
 // Helper function to push connection object to Lua stack
 void tcpd_push_connection_object(lua_State *co, tcpd_base_conn_t *conn);
 
+// Helper function to format TCP connection info
+char* tcpd_format_connection_info(const tcpd_base_conn_t *conn);
+
 // SSL functions (forward declarations)
 #if FAN_HAS_OPENSSL
 struct tcpd_ssl_context;

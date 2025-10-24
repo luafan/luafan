@@ -278,6 +278,20 @@ LUA_API int tcpd_conn_getpeername(lua_State *L) {
     return 2;
 }
 
+// Get connection string representation
+LUA_API int tcpd_conn_tostring(lua_State *L) {
+    tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
+    char *info = tcpd_format_connection_info(&client->base);
+
+    if (info) {
+        lua_pushstring(L, info);
+        free(info);
+        return 1;
+    }
+
+    lua_pushstring(L, "<TCP connection>");
+    return 1;
+}
 
 // Garbage collection functions for preventing Lua registry leaks
 
@@ -318,6 +332,8 @@ LUA_API int luaopen_fan_tcpd(lua_State *L) {
     lua_setfield(L, -2, "getsockname");
     lua_pushcfunction(L, tcpd_conn_getpeername);
     lua_setfield(L, -2, "getpeername");
+    lua_pushcfunction(L, tcpd_conn_tostring);
+    lua_setfield(L, -2, "__tostring");
     lua_pushcfunction(L, tcpd_client_conn_gc);
     lua_setfield(L, -2, "__gc");
     lua_pushstring(L, "connection");
