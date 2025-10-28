@@ -1,24 +1,60 @@
+#include "luamariadb_query.h"
+
 static int real_query_result(lua_State *L, DB_CTX *ctx)
 {
   MYSQL_RES *res = mysql_store_result(&ctx->my_conn);
   unsigned int num_cols = mysql_field_count(&ctx->my_conn);
+  int return_count = 0;
 
+  // Push first result set to stack
   if (res)
   {
-    return create_cursor(L, ctx, res, num_cols);
+    return_count += create_cursor(L, ctx, res, num_cols);
   }
   else
   {
     if (num_cols == 0)
     {
       lua_pushnumber(L, mysql_affected_rows(&ctx->my_conn));
-      return 1;
+      return_count = 1;
     }
     else
     {
       return luamariadb_push_errno(L, ctx);
     }
   }
+
+  // Process additional result sets (for stored procedures)
+  while (mysql_more_results(&ctx->my_conn)) {
+    int next_result = mysql_next_result(&ctx->my_conn);
+    if (next_result == 0) {
+      // Successfully moved to next result
+      MYSQL_RES *next_res = mysql_store_result(&ctx->my_conn);
+      unsigned int next_cols = mysql_field_count(&ctx->my_conn);
+
+      if (next_res) {
+        return_count += create_cursor(L, ctx, next_res, next_cols);
+      } else if (next_cols == 0) {
+        lua_pushnumber(L, mysql_affected_rows(&ctx->my_conn));
+        return_count++;
+      } else {
+        // Error case - push nil and error message
+        lua_pushnil(L);
+        lua_pushstring(L, mysql_error(&ctx->my_conn));
+        return_count += 2;
+        break;
+      }
+    } else if (next_result > 0) {
+      // Error occurred while getting next result
+      printf("mysql_next_result error: %s\n", mysql_error(&ctx->my_conn));
+      break;
+    } else {
+      // next_result < 0, no more results
+      break;
+    }
+  }
+
+  return return_count;
 }
 
 static void real_query_cont(int fd, short event, void *_userdata)
