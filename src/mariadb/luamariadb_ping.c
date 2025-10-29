@@ -1,3 +1,5 @@
+#include "luamariadb_ping.h"
+
 static int conn_ping_result(lua_State *L, DB_CTX *ctx)
 {
   lua_pushboolean(L, true);

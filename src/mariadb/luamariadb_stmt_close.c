@@ -1,3 +1,5 @@
+#include "luamariadb_stmt_close.h"
+
 static void stmt_close_cont(int fd, short event, void *_userdata)
 {
   DB_STATUS *bag = (DB_STATUS *)_userdata;

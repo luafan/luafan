@@ -1,3 +1,5 @@
+#include "luamariadb_prepare.h"
+
 static void stmt_prepare_result(lua_State *L, STMT_CTX *st)
 {
   unsigned long param_count = mysql_stmt_param_count(st->my_stmt);

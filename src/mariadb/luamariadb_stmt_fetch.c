@@ -1,3 +1,5 @@
+#include "luamariadb_stmt_fetch.h"
+
 static int stmt_fetch_result(lua_State *L, STMT_CTX *st)
 {
   MYSQL_RES *prepare_meta_result = mysql_stmt_result_metadata(st->my_stmt);

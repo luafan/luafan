@@ -1,4 +1,6 @@
-static STMT_CTX *getstatement(lua_State *L)
+#include "luamariadb_stmt.h"
+
+STMT_CTX *getstatement(lua_State *L)
 {
   STMT_CTX *st = (STMT_CTX *)luaL_checkudata(L, 1, MARIADB_STATEMENT_METATABLE);
   luaL_argcheck(L, st != NULL, 1, "statement expected");
@@ -6,8 +8,8 @@ static STMT_CTX *getstatement(lua_State *L)
   return st;
 }
 
-static void *get_or_create_ud(lua_State *L, int tableidx, int *ref,
-                              size_t size)
+void *get_or_create_ud(lua_State *L, int tableidx, int *ref,
+                       size_t size)
 {
   void *ud = NULL;
   if (*ref == LUA_NOREF || *ref == 0)
@@ -26,7 +28,7 @@ static void *get_or_create_ud(lua_State *L, int tableidx, int *ref,
   return ud;
 }
 
-static int luamariadb_push_stmt_error(lua_State *L, STMT_CTX *st)
+int luamariadb_push_stmt_error(lua_State *L, STMT_CTX *st)
 {
   lua_pushnil(L);
   lua_pushfstring(L, "stmt_error: %d: %s",
@@ -120,11 +122,7 @@ LUA_API int _st_bind(lua_State *L, int cache_bind)
   return 1;
 }
 
-#include "luamariadb_stmt_close.c"
-#include "luamariadb_stmt_fetch.c"
-#include "luamariadb_stmt_storeresult.c"
-#include "luamariadb_stmt_sendlongdata.c"
-#include "luamariadb_stmt_execute.c"
+// Sub-modules are now compiled separately and included via headers in luamariadb_stmt.h
 
 LUA_API int st_gc(lua_State *L)
 {

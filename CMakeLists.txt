@@ -39,6 +39,8 @@ SET (OUTPUT_NAME   "fan")
 file(GLOB MODULE_SOURCE
     "src/*.h"
     "src/*.c"
+    "src/mariadb/*.h"
+    "src/mariadb/*.c"
 )
 
 add_library(${MODULE_NAME} MODULE ${MODULE_SOURCE})

@@ -1,3 +1,5 @@
+#include "luamariadb_stmt_storeresult.h"
+
 static void stmt_store_result_cont(int fd, short event, void *_userdata)
 {
   DB_STATUS *bag = (DB_STATUS *)_userdata;
@@ -36,7 +38,7 @@ static void stmt_store_result_cont(int fd, short event, void *_userdata)
   free(bag);
 }
 
-static int stmt_store_result_start(lua_State *L)
+LUA_API int stmt_store_result_start(lua_State *L)
 {
   STMT_CTX *st = getstatement(L);
 

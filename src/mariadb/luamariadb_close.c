@@ -1,3 +1,5 @@
+#include "luamariadb_close.h"
+
 LUA_API void conn_close_cont(int fd, short event, void *_userdata)
 {
   DB_STATUS *bag = (DB_STATUS *)_userdata;

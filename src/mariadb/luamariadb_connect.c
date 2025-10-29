@@ -1,3 +1,5 @@
+#include "luamariadb_connect.h"
+
 static void real_connect_cont(int fd, short event, void *_userdata)
 {
   DB_STATUS *bag = (DB_STATUS *)_userdata;

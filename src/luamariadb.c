@@ -1,194 +1,13 @@
 #define true 1
 #define false 0
 
-#include "utlua.h"
+#include "mariadb/luamariadb_common.h"
 
-#include "luasql.h"
-#include <mysql/mysql.h>
+// Global variable definition
+int LONG_DATA = 0; // &LONG_DATA used as mariadb const.
 
-static int LONG_DATA = 0; // &LONG_DATA used as mariadb const.
-
-#define MYSQL_SET_VARSTRING(bind, buff, length)  \
-  {                                              \
-    (bind)->buffer_type = MYSQL_TYPE_VAR_STRING; \
-    (bind)->buffer = (buff);                     \
-    (bind)->buffer_length = (length);            \
-    (bind)->is_null = 0;                         \
-  }
-
-#define MYSQL_SET_LONGLONG(bind, buff)        \
-  {                                            \
-    (bind)->buffer_type = MYSQL_TYPE_LONGLONG; \
-    (bind)->buffer = (buff);                   \
-    (bind)->buffer_length = sizeof(uint64_t);  \
-    (bind)->is_null = 0;                       \
-  }
-
-#define MYSQL_SET_DOUBLE(bind, buff)         \
-  {                                          \
-    (bind)->buffer_type = MYSQL_TYPE_DOUBLE; \
-    (bind)->buffer = (buff);                 \
-    (bind)->is_unsigned = false;             \
-    (bind)->buffer_length = sizeof(double);  \
-    (bind)->is_null = 0;                     \
-  }
-
-#define MYSQL_SET_LONG(bind, buff)         \
-  {                                        \
-    (bind)->buffer_type = MYSQL_TYPE_LONG; \
-    (bind)->buffer = (buff);               \
-    (bind)->is_unsigned = false;           \
-    (bind)->buffer_length = sizeof(long);  \
-    (bind)->is_null = 0;                   \
-  }
-
-#define MYSQL_SET_TIMESTAMP(bind, buff)         \
-  {                                             \
-    (bind)->buffer_type = MYSQL_TYPE_TIMESTAMP; \
-    (bind)->buffer = (buff);                    \
-    (bind)->is_unsigned = true;                 \
-    (bind)->buffer_length = sizeof(MYSQL_TIME); \
-    (bind)->is_null = 0;                        \
-  }
-
-#define MYSQL_SET_ULONG(bind, buff)           \
-  {                                           \
-    (bind)->buffer_type = MYSQL_TYPE_LONG;    \
-    (bind)->buffer = (buff);                  \
-    (bind)->is_unsigned = true;               \
-    (bind)->buffer_length = sizeof(uint32_t); \
-    (bind)->is_null = 0;                      \
-  }
-
-#define MYSQL_SET_UINT(bind, buff)                \
-  {                                               \
-    (bind)->buffer_type = MYSQL_TYPE_LONG;        \
-    (bind)->buffer = (buff);                      \
-    (bind)->is_unsigned = true;                   \
-    (bind)->buffer_length = sizeof(unsigned int); \
-    (bind)->is_null = 0;                          \
-  }
-
-#define MYSQL_SET_SHORT(bind, buff)         \
-  {                                         \
-    (bind)->buffer_type = MYSQL_TYPE_SHORT; \
-    (bind)->buffer = (buff);                \
-    (bind)->is_unsigned = false;            \
-    (bind)->buffer_length = sizeof(short);  \
-    (bind)->is_null = 0;                    \
-  }
-
-#define MYSQL_SET_USHORT(bind, buff)                \
-  {                                                 \
-    (bind)->buffer_type = MYSQL_TYPE_SHORT;         \
-    (bind)->buffer = (buff);                        \
-    (bind)->is_unsigned = true;                     \
-    (bind)->buffer_length = sizeof(unsigned short); \
-    (bind)->is_null = 0;                            \
-  }
-
-#define MYSQL_SET_TINYINT(bind, buff)       \
-  {                                         \
-    (bind)->buffer_type = MYSQL_TYPE_TINY;  \
-    (bind)->buffer = (buff);                \
-    (bind)->is_unsigned = false;            \
-    (bind)->buffer_length = sizeof(int8_t); \
-    (bind)->is_null = 0;                    \
-  }
-
-#define MYSQL_SET_UTINYINT(bind, buff)       \
-  {                                          \
-    (bind)->buffer_type = MYSQL_TYPE_TINY;   \
-    (bind)->buffer = (buff);                 \
-    (bind)->is_unsigned = true;              \
-    (bind)->buffer_length = sizeof(uint8_t); \
-    (bind)->is_null = 0;                     \
-  }
-
-LUA_API int luaopen_mariadb(lua_State *L);
-
-typedef struct
-{
-  short closed;
-  MYSQL my_conn;
-  int coref;
-  int coref_count;
-} DB_CTX;
-
-typedef struct
-{
-  lua_State *L;
-  void *data;
-  int status;
-  struct event *event;
-  DB_CTX *ctx;
-  int extra;
-} DB_STATUS;
-
-typedef struct
-{
-  short closed;
-  int numcols;            /* number of columns */
-  int colnames, coltypes; // ref in registry
-  MYSQL_RES *my_res;
-  DB_CTX *ctx;
-  int coref;
-  int coref_count;
-} CURSOR_CTX;
-
-typedef struct
-{
-  short closed;
-  int table; // ref in registry
-  int bind;  // index in table
-  int nums;  // index in table
-  int has_bind_param;
-
-  int rbind;      // index in table
-  int buffers;    // index in table
-  int bufferlens; // index in table
-  int is_nulls;   // index in table
-
-  MYSQL_STMT *my_stmt;
-  DB_CTX *ctx;
-  int coref;
-  int coref_count;
-} STMT_CTX;
-
-#define REF_CO(x)                              \
-  if (x->coref == LUA_NOREF)                   \
-  {                                            \
-    lua_pushthread(L);                         \
-    x->coref = luaL_ref(L, LUA_REGISTRYINDEX); \
-    x->coref_count = 1;                        \
-  }                                            \
-  else                                         \
-  {                                            \
-    x->coref_count++;                          \
-  }
-
-#define UNREF_CO(x)                               \
-  if (x->coref != LUA_NOREF)                      \
-  {                                               \
-    x->coref_count--;                             \
-    if (x->coref_count == 0)                      \
-    {                                             \
-      luaL_unref(L, LUA_REGISTRYINDEX, x->coref); \
-      x->coref = LUA_NOREF;                       \
-    }                                             \
-  }
-
-static void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
-                            int status, event_callback_fn callback, int extra);
-
-#define MARIADB_CONNECTION_METATABLE "MARIADB_CONNECTION_METATABLE"
-#define MARIADB_STATEMENT_METATABLE "MARIADB_STATEMENT_METATABLE"
-#define MARIADB_CURSOR_METATABLE "MARIADB_CURSOR_METATABLE"
-
-#define CONTINUE_YIELD -1
-
-static void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
-                            int status, event_callback_fn callback, int extra)
+void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
+                     int status, event_callback_fn callback, int extra)
 {
   DB_STATUS *bag = malloc(sizeof(DB_STATUS));
   bag->data = data;
@@ -226,7 +45,7 @@ static void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
   event_add(bag->event, ptv);
 }
 
-static DB_CTX *getconnection(lua_State *L)
+DB_CTX *getconnection(lua_State *L)
 {
   DB_CTX *ctx = (DB_CTX *)luaL_checkudata(L, 1, MARIADB_CONNECTION_METATABLE);
   luaL_argcheck(L, ctx != NULL, 1, "connection expected");
@@ -234,7 +53,7 @@ static DB_CTX *getconnection(lua_State *L)
   return ctx;
 }
 
-static int luamariadb_push_errno(lua_State *L, DB_CTX *ctx)
+int luamariadb_push_errno(lua_State *L, DB_CTX *ctx)
 {
   int errorcode = mysql_errno(&ctx->my_conn);
   if (errorcode)
@@ -250,19 +69,18 @@ static int luamariadb_push_errno(lua_State *L, DB_CTX *ctx)
   }
 }
 
-#include "mariadb/luamariadb_stmt.c"
-#include "mariadb/luamariadb_cursor.c"
-
-#include "mariadb/luamariadb_close.c"
-#include "mariadb/luamariadb_prepare.c"
-
-#include "mariadb/luamariadb_ping.c"
-#include "mariadb/luamariadb_query.c"
-#include "mariadb/luamariadb_commit.c"
-#include "mariadb/luamariadb_rollback.c"
-#include "mariadb/luamariadb_autocommit.c"
-#include "mariadb/luamariadb_setcharset.c"
-#include "mariadb/luamariadb_connect.c"
+// Include all module headers
+#include "mariadb/luamariadb_stmt.h"
+#include "mariadb/luamariadb_cursor.h"
+#include "mariadb/luamariadb_close.h"
+#include "mariadb/luamariadb_prepare.h"
+#include "mariadb/luamariadb_ping.h"
+#include "mariadb/luamariadb_query.h"
+#include "mariadb/luamariadb_commit.h"
+#include "mariadb/luamariadb_rollback.h"
+#include "mariadb/luamariadb_autocommit.h"
+#include "mariadb/luamariadb_setcharset.h"
+#include "mariadb/luamariadb_connect.h"
 /*
 ** Get Last auto-increment id generated
 */

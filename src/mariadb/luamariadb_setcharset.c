@@ -1,3 +1,5 @@
+#include "luamariadb_setcharset.h"
+
 static void set_character_set_cont(int fd, short event, void *_userdata)
 {
   DB_STATUS *bag = (DB_STATUS *)_userdata;

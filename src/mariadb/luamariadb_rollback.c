@@ -1,3 +1,5 @@
+#include "luamariadb_rollback.h"
+
 static void conn_rollback_event(int fd, short event, void *_userdata)
 {
   DB_STATUS *bag = (DB_STATUS *)_userdata;

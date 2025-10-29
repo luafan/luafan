@@ -1,3 +1,5 @@
+#include "luamariadb_stmt_sendlongdata.h"
+
 static int stmt_send_long_data_result(lua_State *L, STMT_CTX *st)
 {
   lua_pushboolean(L, true);

@@ -1,4 +1,6 @@
-static CURSOR_CTX *getcursor(lua_State *L)
+#include "luamariadb_cursor.h"
+
+CURSOR_CTX *getcursor(lua_State *L)
 {
   CURSOR_CTX *cur = (CURSOR_CTX *)luaL_checkudata(L, 1, MARIADB_CURSOR_METATABLE);
   luaL_argcheck(L, cur != NULL, 1, "cursor expected");
@@ -6,12 +8,34 @@ static CURSOR_CTX *getcursor(lua_State *L)
   return cur;
 }
 
-static void pushvalue(lua_State *L, void *row, long int len)
+static void pushvalue(lua_State *L, void *row, long int len, enum enum_field_types field_type)
 {
-  if (row == NULL)
+  if (row == NULL) {
     lua_pushnil(L);
-  else
-    lua_pushlstring(L, row, len);
+  } else {
+    switch (field_type) {
+      case MYSQL_TYPE_TINY:
+      case MYSQL_TYPE_SHORT:
+      case MYSQL_TYPE_LONG:
+      case MYSQL_TYPE_LONGLONG:
+      case MYSQL_TYPE_INT24:
+      case MYSQL_TYPE_YEAR:
+        // Integer types - convert to Lua integer
+        lua_pushinteger(L, strtoll((char*)row, NULL, 10));
+        break;
+      case MYSQL_TYPE_FLOAT:
+      case MYSQL_TYPE_DOUBLE:
+      case MYSQL_TYPE_DECIMAL:
+      case MYSQL_TYPE_NEWDECIMAL:
+        // Floating point types - convert to Lua number
+        lua_pushnumber(L, strtod((char*)row, NULL));
+        break;
+      default:
+        // All other types (strings, dates, blobs, etc.) - keep as string
+        lua_pushlstring(L, row, len);
+        break;
+    }
+  }
 }
 
 static char *getcolumntype(enum enum_field_types type)
@@ -145,6 +169,7 @@ static int fetch_row_result(lua_State *L, CURSOR_CTX *cur, MYSQL_ROW row)
   else
   {
     unsigned long *lengths = mysql_fetch_lengths(cur->my_res);
+    MYSQL_FIELD *fields = mysql_fetch_fields(cur->my_res);
 
     int i;
     if (cur->colnames == LUA_NOREF)
@@ -160,7 +185,7 @@ static int fetch_row_result(lua_State *L, CURSOR_CTX *cur, MYSQL_ROW row)
     for (i = 0; i < cur->numcols; i++)
     {
       lua_rawgeti(L, -1, i + 1);
-      pushvalue(L, row[i], lengths[i]);
+      pushvalue(L, row[i], lengths[i], fields[i].type);
       lua_rawset(L, 1);
     }
 
@@ -326,8 +351,8 @@ LUA_API int cur_numrows(lua_State *L)
 /*
 ** Create a new Cursor object and push it on top of the stack.
 */
-static int create_cursor(lua_State *L, DB_CTX *ctx, MYSQL_RES *result,
-                         int cols)
+int create_cursor(lua_State *L, DB_CTX *ctx, MYSQL_RES *result,
+                  int cols)
 {
   CURSOR_CTX *cur = (CURSOR_CTX *)lua_newuserdata(L, sizeof(CURSOR_CTX));
   luasql_setmeta(L, MARIADB_CURSOR_METATABLE);
