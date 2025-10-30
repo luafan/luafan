@@ -5,7 +5,7 @@
 -- Now supports parameterized execution
 
 -- Set up LUA_PATH and LUA_CPATH for proper module loading
-package.path = "../modules/?.lua;../modules/?/init.lua;./lua/framework/?.lua;;" .. package.path
+package.path = "../modules/?.lua;../modules/?/init.lua;./lua/framework/?.lua;./lua/?.lua;;" .. package.path
 package.cpath = "../?.so;;" .. package.cpath
 
 local TestFramework = require('test_framework')
@@ -137,7 +137,15 @@ local test_files = {
     "test_mariadb_phase2b.lua",   -- Phase 2B: Basic CRUD operations
     "test_mariadb_phase2c.lua",   -- Phase 2C: Constraints and indexes
     "test_mariadb_real.lua",      -- Full integration tests
-    "test_mariadb_comprehensive.lua",   -- Comprehensive advanced features testing
+    -- Original comprehensive test (now split into phases)
+    "test_mariadb_comprehensive.lua",   -- Comprehensive advanced features testing (LEGACY)
+    -- New split comprehensive tests
+    "test_mariadb_phase1_prepared.lua",    -- Phase 1: Prepared Statements Advanced Testing
+    "test_mariadb_phase2_transactions.lua", -- Phase 2: Transaction Processing Detailed Testing
+    "test_mariadb_phase3_pooling.lua",     -- Phase 3: Connection Pool and Concurrent Testing
+    "test_mariadb_phase4_charset.lua",     -- Phase 4: Character Set and Collation Support
+    "test_mariadb_phase5_memory.lua",      -- Phase 5: Cursor and Memory Management
+    "test_mariadb_phase6_performance.lua", -- Phase 6: Performance and Security Testing
     "test_mariadb_simple_debug.lua",
     "test_sqlite3_orm.lua",
     "test_integration_http_server.lua",
