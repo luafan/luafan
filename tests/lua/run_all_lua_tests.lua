@@ -131,6 +131,7 @@ local test_files = {
     "test_fan_stream.lua",
     "test_fan_connector.lua",
     "test_mariadb_orm.lua",
+    "test_mariadb_basic.lua",     -- Basic consolidated MariaDB core tests
     "test_mariadb_phase1.lua",    -- Phase 1: Connection and basic table operations
     "test_mariadb_phase2a.lua",   -- Phase 2A: Data types testing
     "test_mariadb_phase2b.lua",   -- Phase 2B: Basic CRUD operations
