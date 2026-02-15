@@ -128,6 +128,50 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
 
     // Handle disconnection events
     if (events & (BEV_EVENT_ERROR | BEV_EVENT_EOF | BEV_EVENT_TIMEOUT)) {
+        // Critical: When receiving EOF, we must read all remaining data from input buffer BEFORE cleanup
+        // The peer has sent FIN, but there may still be data in our receive buffer
+        if ((events & BEV_EVENT_EOF) && conn->buf && conn->onReadRef != LUA_NOREF) {
+            struct evbuffer *input = bufferevent_get_input(conn->buf);
+            size_t pending = evbuffer_get_length(input);
+
+            if (pending > 0) {
+                // Read all remaining data from buffer
+                char buf[BUFLEN];
+                int n;
+                BYTEARRAY ba = {0};
+                bytearray_alloc(&ba, pending + BUFLEN);
+
+                while ((n = evbuffer_remove(input, buf, sizeof(buf))) > 0) {
+                    bytearray_writebuffer(&ba, buf, n);
+                }
+                bytearray_read_ready(&ba);
+
+                // Call onRead callback with remaining data
+                lua_State *mainthread = conn->mainthread;
+                lua_lock(mainthread);
+                lua_State *co = lua_newthread(mainthread);
+                PUSH_REF(mainthread);
+                lua_unlock(mainthread);
+
+                lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
+
+                int argc = 1;
+                if (conn->config.callback_self_first) {
+                    tcpd_push_connection_object(co, conn);
+                    lua_pushlstring(co, (const char *)ba.buffer, ba.total);
+                    argc = 2;
+                } else {
+                    lua_pushlstring(co, (const char *)ba.buffer, ba.total);
+                    argc = 1;
+                }
+
+                FAN_RESUME(co, mainthread, argc);
+                POP_REF(mainthread);
+
+                bytearray_dealloc(&ba);
+            }
+        }
+
         // Update connection state
         if (events & BEV_EVENT_ERROR) {
             conn->state = TCPD_CONN_ERROR;

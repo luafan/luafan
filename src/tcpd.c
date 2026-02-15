@@ -184,6 +184,39 @@ LUA_API int tcpd_conn_close(lua_State *L) {
     return 0;
 }
 
+// Connection shutdown function - closes write end but keeps read end open
+LUA_API int tcpd_conn_shutdown(lua_State *L) {
+    tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
+
+    if (!client || !client->base.buf) {
+        return 0;
+    }
+
+    // Check if there's still data in the output buffer
+    struct evbuffer *output = bufferevent_get_output(client->base.buf);
+    size_t pending = evbuffer_get_length(output);
+
+    // Return the pending bytes count to Lua
+    // Lua can decide whether to defer shutdown
+    lua_pushinteger(L, pending);
+
+    // Only shutdown if buffer is empty
+    if (pending == 0) {
+        // Get the underlying socket file descriptor
+        evutil_socket_t fd = bufferevent_getfd(client->base.buf);
+        if (fd >= 0) {
+            // Shutdown write end: SHUT_WR = 1 on Unix systems
+            #ifdef _WIN32
+                shutdown(fd, SD_SEND);
+            #else
+                shutdown(fd, SHUT_WR);
+            #endif
+        }
+    }
+
+    return 1;
+}
+
 // Connection read pause function
 LUA_API int tcpd_conn_read_pause(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
@@ -324,6 +357,8 @@ LUA_API int luaopen_fan_tcpd(lua_State *L) {
     lua_setfield(L, -2, "send");
     lua_pushcfunction(L, tcpd_conn_close);
     lua_setfield(L, -2, "close");
+    lua_pushcfunction(L, tcpd_conn_shutdown);
+    lua_setfield(L, -2, "shutdown");
     lua_pushcfunction(L, tcpd_conn_read_pause);
     lua_setfield(L, -2, "pause_read");
     lua_pushcfunction(L, tcpd_conn_read_resume);
