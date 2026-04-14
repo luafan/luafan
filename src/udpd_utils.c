@@ -63,11 +63,13 @@ tcpd_error_t udpd_error_bind_failed(const char *host, int port) {
     error.type = TCPD_ERROR_CONNECTION_RESET;  // Reuse existing error type
     error.system_error = errno;
 
+    const char *safe_host = host ? host : "(null)";
+
     // Create descriptive message
-    size_t msg_len = strlen(host) + 64;
+    size_t msg_len = strlen(safe_host) + 64;
     error.message = malloc(msg_len);
     if (error.message) {
-        snprintf(error.message, msg_len, "Failed to bind UDP socket to %s:%d", host, port);
+        snprintf(error.message, msg_len, "Failed to bind UDP socket to %s:%d", safe_host, port);
     }
 
     return error;

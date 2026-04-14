@@ -79,14 +79,16 @@ int udpd_dest_equal(const udpd_dest_t *dest1, const udpd_dest_t *dest2) {
 }
 
 // Get host string from destination
+// NOTE: When host is NULL, returns pointer to a thread-local buffer
+// that is overwritten on each call. Caller must copy if needed.
 const char* udpd_dest_get_host_string(const udpd_dest_t *dest) {
     if (!dest) return NULL;
 
     // Return cached hostname if available
     if (dest->host) return dest->host;
 
-    // Convert address to string
-    static char host_buf[INET6_ADDRSTRLEN];
+    // Convert address to string using thread-local storage
+    static _Thread_local char host_buf[INET6_ADDRSTRLEN];
     const char *result = NULL;
 
     if (dest->addr.ss_family == AF_INET) {

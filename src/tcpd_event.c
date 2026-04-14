@@ -260,6 +260,13 @@ static tcpd_error_t tcpd_analyze_event_error(struct bufferevent *bev, short even
             error.type = TCPD_ERROR_CONNECTION_RESET;
             error.message = strdup(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
             error.system_error = EVUTIL_SOCKET_ERROR();
+#if FAN_HAS_OPENSSL
+        } else if (ERR_peek_error()) {
+            // SSL error (no socket error, but OpenSSL error queue has entries)
+            error.type = TCPD_ERROR_SSL_ERROR;
+            char *ssl_err = tcpd_ssl_get_error_string();
+            error.message = ssl_err ? ssl_err : strdup("SSL error");
+#endif
         } else {
             error.type = TCPD_ERROR_UNKNOWN;
             error.message = strdup("unknown error");
@@ -288,6 +295,8 @@ void tcpd_shutdown_bufferevent(struct bufferevent *bev) {
         if (SSL_shutdown(ssl) == 0) {
             SSL_shutdown(ssl);
         }
+        // Mark as fully shut down so bufferevent_free won't attempt again
+        SSL_set_shutdown(ssl, SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN);
     }
 #endif
     bufferevent_free(bev);

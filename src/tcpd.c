@@ -78,16 +78,24 @@ LUA_API int tcpd_connect(lua_State *L) {
         if (cache_key) {
             client->base.ssl_ctx = tcpd_ssl_context_get_or_create(L, cache_key);
             if (client->base.ssl_ctx) {
-                tcpd_ssl_context_configure(client->base.ssl_ctx, L, 1);
+                if (tcpd_ssl_context_configure(client->base.ssl_ctx, L, 1) != 0) {
+                    LOGE("SSL context configuration failed for %s:%d",
+                         client->base.host ? client->base.host : "?", client->base.port);
+                    free(cache_key);
+                    return 1;
+                }
 
                 // Get SSL hostname override
                 lua_getfield(L, 1, "ssl_host");
                 const char *ssl_host = lua_tostring(L, -1);
-                lua_pop(L, 1);
 
                 client->base.buf = tcpd_ssl_create_client_bufferevent(
                     event_mgr_base(), client->base.ssl_ctx,
                     ssl_host ? ssl_host : client->base.host, client);
+                lua_pop(L, 1);
+            } else {
+                LOGE("SSL context creation failed for %s:%d",
+                     client->base.host ? client->base.host : "?", client->base.port);
             }
             free(cache_key);
         }
@@ -332,8 +340,9 @@ LUA_API int tcpd_conn_tostring(lua_State *L) {
 static int tcpd_client_conn_gc(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    // Perform base connection cleanup (handles all references)
-    tcpd_base_conn_cleanup(&client->base);
+    // Perform full client cleanup (SSL fields + base connection)
+    // tcpd_client_cleanup_on_disconnect is idempotent (all fields NULL-checked)
+    tcpd_client_cleanup_on_disconnect(client);
 
     return 0;
 }

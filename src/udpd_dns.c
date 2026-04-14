@@ -46,11 +46,25 @@ void udpd_dns_request_cleanup(udpd_dns_request_t *request) {
 // DNS resolution callback for connection establishment
 void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr) {
     udpd_base_conn_t *conn = (udpd_base_conn_t *)ptr;
-    lua_State *L = NULL;
 
     if (!conn) return;
 
+    // If the connection was cleaned up (GC or close) while DNS was pending,
+    // the state will have been set to DISCONNECTED and refs cleared.
+    // In that case, just free the DNS result and bail out.
+    if (conn->state == UDPD_CONN_DISCONNECTED) {
+        if (addr) evutil_freeaddrinfo(addr);
+        return;
+    }
+
+    lua_State *L = NULL;
     REF_STATE_GET(conn, L);
+
+    if (!L) {
+        // Lua state no longer available (connection was collected)
+        if (addr) evutil_freeaddrinfo(addr);
+        return;
+    }
 
     if (errcode) {
         // DNS resolution failed
@@ -257,7 +271,10 @@ int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
 
     // Set up Lua state reference
     REF_STATE_SET(request, L);
-    request->yielded = 0;
+
+    // Mark as yielded BEFORE calling evdns_getaddrinfo, because
+    // the callback may fire synchronously and free the request.
+    request->yielded = 1;
 
     // Set up port string
     char portbuf[6];
@@ -275,23 +292,27 @@ int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
         dnsbase = event_mgr_dnsbase();
     }
 
-    // Start DNS resolution
+    // Start DNS resolution (callback may fire synchronously)
     struct evdns_getaddrinfo_request *req =
         evdns_getaddrinfo(dnsbase, hostname, portbuf, &hints,
                          udpd_dest_dns_callback, request);
 
     if (!req) {
-        udpd_dns_request_cleanup(request);
+        // If req is NULL, either the callback already fired (sync completion)
+        // or there was an error. Check if the callback pushed results.
+        if (lua_gettop(L) > 3) {
+            return lua_gettop(L) - 3;
+        }
+        // Callback didn't fire — error. request already cleaned up if callback ran.
         return -1;
     }
 
-    // Check if resolution completed synchronously
+    // Check if resolution completed synchronously (callback already ran)
     if (lua_gettop(L) > 3) {
         // Synchronous completion - don't yield
         return lua_gettop(L) - 3;
     } else {
         // Asynchronous - yield coroutine
-        request->yielded = 1;
         return lua_yield(L, 0);
     }
 }
@@ -307,7 +328,10 @@ int udpd_dns_resolve_for_destinations_with_evdns(const char *hostname, int port,
 
     // Set up Lua state reference
     REF_STATE_SET(request, L);
-    request->yielded = 0;
+
+    // Mark as yielded BEFORE calling evdns_getaddrinfo, because
+    // the callback may fire synchronously and free the request.
+    request->yielded = 1;
 
     // Set up port string
     char portbuf[6];
@@ -325,23 +349,27 @@ int udpd_dns_resolve_for_destinations_with_evdns(const char *hostname, int port,
         dnsbase = event_mgr_dnsbase();
     }
 
-    // Start DNS resolution for multiple addresses
+    // Start DNS resolution for multiple addresses (callback may fire synchronously)
     struct evdns_getaddrinfo_request *req =
         evdns_getaddrinfo(dnsbase, hostname, portbuf, &hints,
                          udpd_dests_dns_callback, request);
 
     if (!req) {
-        udpd_dns_request_cleanup(request);
+        // If req is NULL, either the callback already fired (sync completion)
+        // or there was an error. Check if the callback pushed results.
+        if (lua_gettop(L) > 3) {
+            return lua_gettop(L) - 3;
+        }
+        // Callback didn't fire — error. request already cleaned up if callback ran.
         return -1;
     }
 
-    // Check if resolution completed synchronously
+    // Check if resolution completed synchronously (callback already ran)
     if (lua_gettop(L) > 3) {
         // Synchronous completion - don't yield
         return lua_gettop(L) - 3;
     } else {
         // Asynchronous - yield coroutine
-        request->yielded = 1;
         return lua_yield(L, 0);
     }
 }

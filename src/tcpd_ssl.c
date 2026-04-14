@@ -188,12 +188,15 @@ static char* tcpd_ssl_generate_cache_key(tcpd_ssl_context_t *ctx) {
     if (ctx->ca_info) {
         bytearray_writebuffer(&ba, ctx->ca_info, strlen(ctx->ca_info));
     }
+    bytearray_write8(&ba, 0x1F);
     if (ctx->ca_path) {
         bytearray_writebuffer(&ba, ctx->ca_path, strlen(ctx->ca_path));
     }
+    bytearray_write8(&ba, 0x1F);
     if (ctx->pkcs12_path) {
         bytearray_writebuffer(&ba, ctx->pkcs12_path, strlen(ctx->pkcs12_path));
     }
+    bytearray_write8(&ba, 0x1F);
     if (ctx->pkcs12_password) {
         bytearray_writebuffer(&ba, ctx->pkcs12_password, strlen(ctx->pkcs12_password));
     }
@@ -226,6 +229,9 @@ char* tcpd_ssl_generate_cache_key_from_table(lua_State *L, int table_index) {
     }
     lua_pop(L, 1);
 
+    // Field separator to prevent key collisions
+    bytearray_write8(&ba, 0x1F);
+
     // Add capath to cache key
     lua_getfield(L, table_index, "capath");
     const char *capath = lua_tostring(L, -1);
@@ -234,6 +240,8 @@ char* tcpd_ssl_generate_cache_key_from_table(lua_State *L, int table_index) {
     }
     lua_pop(L, 1);
 
+    bytearray_write8(&ba, 0x1F);
+
     // Add PKCS12 path to cache key
     lua_getfield(L, table_index, "pkcs12.path");
     const char *p12path = lua_tostring(L, -1);
@@ -241,6 +249,8 @@ char* tcpd_ssl_generate_cache_key_from_table(lua_State *L, int table_index) {
         bytearray_writebuffer(&ba, p12path, strlen(p12path));
     }
     lua_pop(L, 1);
+
+    bytearray_write8(&ba, 0x1F);
 
     // Add PKCS12 password to cache key
     lua_getfield(L, table_index, "pkcs12.password");
@@ -454,7 +464,10 @@ int tcpd_ssl_load_pkcs12(SSL_CTX *ctx, const char *p12_path, const char *passwor
         }
         if (ca) {
             for (int i = 0; i < sk_X509_num(ca); i++) {
-                SSL_CTX_use_certificate(ctx, sk_X509_value(ca, i));
+                X509 *ca_cert = sk_X509_value(ca, i);
+                // add_extra_chain_cert takes ownership, so up-ref first
+                X509_up_ref(ca_cert);
+                SSL_CTX_add_extra_chain_cert(ctx, ca_cert);
             }
         }
         result = 0;
@@ -489,11 +502,15 @@ int tcpd_ssl_cert_verify_callback(X509_STORE_CTX *ctx, void *arg) {
     int preverify_ok = X509_verify_cert(ctx);
     if (!preverify_ok) {
         SSL *ssl = X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
+        int err = X509_STORE_CTX_get_error(ctx);
+
         if (ssl) {
             tcpd_client_conn_t *client = SSL_get_ex_data(ssl, ssl_conn_index);
-            int err = X509_STORE_CTX_get_error(ctx);
             if (client) {
                 tcpd_ssl_set_client_error(client, X509_verify_cert_error_string(err));
+            } else {
+                // Server-side connection: log the error since no client structure is available
+                LOGE("SSL verify error (server): %s", X509_verify_cert_error_string(err));
             }
         }
     }
@@ -505,11 +522,16 @@ int tcpd_ssl_cert_verify_callback(X509_STORE_CTX *ctx, void *arg) {
 int tcpd_ssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx) {
     if (!preverify_ok) {
         SSL *ssl = X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
-        tcpd_client_conn_t *client = SSL_get_ex_data(ssl, ssl_conn_index);
-
         int err = X509_STORE_CTX_get_error(ctx);
-        if (client) {
-            tcpd_ssl_set_client_error(client, X509_verify_cert_error_string(err));
+
+        if (ssl) {
+            tcpd_client_conn_t *client = SSL_get_ex_data(ssl, ssl_conn_index);
+            if (client) {
+                tcpd_ssl_set_client_error(client, X509_verify_cert_error_string(err));
+            } else {
+                // Server-side connection: log the error since no client structure is available
+                LOGE("SSL verify error (server): %s", X509_verify_cert_error_string(err));
+            }
         }
     }
 

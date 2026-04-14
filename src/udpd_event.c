@@ -14,6 +14,11 @@ void udpd_push_connection_object(lua_State *co, udpd_base_conn_t *conn) {
     utlua_push_self_from_weak_table(co, conn);
 }
 
+// Reasonable receive buffer size to avoid stack overflow on mobile platforms.
+// Actual UDP payloads rarely exceed 1500 bytes (Ethernet MTU).
+// Packets larger than this are still received; recvfrom returns what fits.
+#define UDPD_RECV_BUFFER_SIZE 8192
+
 // Common read callback for UDP connections
 void udpd_common_readcb(evutil_socket_t fd, short what, void *ctx) {
     udpd_base_conn_t *conn = (udpd_base_conn_t *)ctx;
@@ -24,10 +29,10 @@ void udpd_common_readcb(evutil_socket_t fd, short what, void *ctx) {
 
     struct sockaddr_storage client_addr;
     socklen_t client_len = sizeof(client_addr);
-    char buffer[UDPD_MAX_PACKET_SIZE];
+    char buffer[UDPD_RECV_BUFFER_SIZE];
 
-    // Receive UDP packet
-    ssize_t len = recvfrom(fd, buffer, sizeof(buffer), 0,
+    // Receive UDP packet; MSG_TRUNC lets us detect truncation
+    ssize_t len = recvfrom(fd, buffer, sizeof(buffer), MSG_TRUNC,
                           (struct sockaddr *)&client_addr, &client_len);
 
     if (len < 0) {
@@ -41,6 +46,13 @@ void udpd_common_readcb(evutil_socket_t fd, short what, void *ctx) {
     if (len == 0) {
         // UDP doesn't have connection close concept, but handle gracefully
         return;
+    }
+
+    if (len > (ssize_t)sizeof(buffer)) {
+        // Packet was truncated; log and deliver what we have
+        LOGE("UDP packet truncated: received %zd bytes, buffer %zu bytes",
+             len, sizeof(buffer));
+        len = sizeof(buffer);
     }
 
     // Process received data
@@ -262,8 +274,14 @@ int udpd_base_conn_set_callbacks(udpd_base_conn_t *conn, lua_State *L, int table
 int udpd_base_conn_create_socket(udpd_base_conn_t *conn) {
     if (!conn) return -1;
 
+    // Determine address family from resolved target address, fallback to AF_INET
+    int af = AF_INET;
+    if (conn->addrlen > 0) {
+        af = conn->addr.ss_family;
+    }
+
     // Create UDP socket
-    evutil_socket_t fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    evutil_socket_t fd = socket(af, SOCK_DGRAM, IPPROTO_UDP);
     if (fd < 0) {
         return -1;
     }
@@ -306,7 +324,7 @@ int udpd_base_conn_bind(udpd_base_conn_t *conn) {
 
         struct evutil_addrinfo hints = {0};
         struct evutil_addrinfo *answer = NULL;
-        hints.ai_family = AF_INET;
+        hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_DGRAM;
         hints.ai_protocol = IPPROTO_UDP;
         hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
@@ -323,15 +341,28 @@ int udpd_base_conn_bind(udpd_base_conn_t *conn) {
         bind_addr = (struct sockaddr *)&conn->bind_addr;
         bind_addrlen = conn->bind_addrlen;
     } else {
-        // Bind to INADDR_ANY
-        struct sockaddr_in *addr = (struct sockaddr_in *)&conn->bind_addr;
-        memset(addr, 0, sizeof(*addr));
-        addr->sin_family = AF_INET;
-        addr->sin_port = htons(conn->bind_port);
-        addr->sin_addr.s_addr = htonl(INADDR_ANY);
+        // Bind to any address, matching socket's address family
+        struct sockaddr_storage *sa = &conn->bind_addr;
+        memset(sa, 0, sizeof(*sa));
 
-        conn->bind_addrlen = sizeof(*addr);
-        bind_addr = (struct sockaddr *)addr;
+        // Determine AF from target address or default to AF_INET
+        int af = (conn->addrlen > 0) ? conn->addr.ss_family : AF_INET;
+
+        if (af == AF_INET6) {
+            struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)sa;
+            addr6->sin6_family = AF_INET6;
+            addr6->sin6_port = htons(conn->bind_port);
+            addr6->sin6_addr = in6addr_any;
+            conn->bind_addrlen = sizeof(*addr6);
+        } else {
+            struct sockaddr_in *addr4 = (struct sockaddr_in *)sa;
+            addr4->sin_family = AF_INET;
+            addr4->sin_port = htons(conn->bind_port);
+            addr4->sin_addr.s_addr = htonl(INADDR_ANY);
+            conn->bind_addrlen = sizeof(*addr4);
+        }
+
+        bind_addr = (struct sockaddr *)sa;
         bind_addrlen = conn->bind_addrlen;
     }
 
@@ -342,10 +373,14 @@ int udpd_base_conn_bind(udpd_base_conn_t *conn) {
 
     // Get actual bound port if it was 0
     if (conn->bind_port == 0) {
-        struct sockaddr_in addr;
-        socklen_t len = sizeof(addr);
-        if (getsockname(conn->socket_fd, (struct sockaddr *)&addr, &len) == 0) {
-            conn->bind_port = ntohs(addr.sin_port);
+        struct sockaddr_storage sa;
+        socklen_t sa_len = sizeof(sa);
+        if (getsockname(conn->socket_fd, (struct sockaddr *)&sa, &sa_len) == 0) {
+            if (sa.ss_family == AF_INET) {
+                conn->bind_port = ntohs(((struct sockaddr_in *)&sa)->sin_port);
+            } else if (sa.ss_family == AF_INET6) {
+                conn->bind_port = ntohs(((struct sockaddr_in6 *)&sa)->sin6_port);
+            }
         }
     }
 

@@ -84,6 +84,7 @@ LUA_API int udpd_new(lua_State *L) {
             // Direct IP address - create address directly
             if (udpd_create_address_from_string(conn->base.host, conn->base.port,
                                               &conn->base.addr, &conn->base.addrlen) < 0) {
+                udpd_base_conn_cleanup(&conn->base);
                 lua_pushnil(L);
                 lua_pushstring(L, "Failed to create address from IP");
                 return 2;
@@ -91,18 +92,21 @@ LUA_API int udpd_new(lua_State *L) {
 
             // Create socket and set up connection
             if (udpd_base_conn_create_socket(&conn->base) < 0) {
+                udpd_base_conn_cleanup(&conn->base);
                 lua_pushnil(L);
                 lua_pushstring(L, "Failed to create UDP socket");
                 return 2;
             }
 
             if (conn->base.bind_host && udpd_base_conn_bind(&conn->base) < 0) {
+                udpd_base_conn_cleanup(&conn->base);
                 lua_pushnil(L);
                 lua_pushstring(L, "Failed to bind UDP socket");
                 return 2;
             }
 
             if (udpd_base_conn_setup_events(&conn->base) < 0) {
+                udpd_base_conn_cleanup(&conn->base);
                 lua_pushnil(L);
                 lua_pushstring(L, "Failed to setup events");
                 return 2;
@@ -287,12 +291,20 @@ LUA_API int lua_udpd_conn_rebind(lua_State *L) {
     }
 
     if (udpd_base_conn_bind(&conn->base) < 0) {
+        // Close the newly created socket to avoid fd leak
+        EVUTIL_CLOSESOCKET(conn->base.socket_fd);
+        conn->base.socket_fd = -1;
+        conn->base.state = UDPD_CONN_ERROR;
         lua_pushboolean(L, 0);
         lua_pushstring(L, "Failed to bind socket");
         return 2;
     }
 
     if (udpd_base_conn_setup_events(&conn->base) < 0) {
+        // Close the socket to avoid fd leak
+        EVUTIL_CLOSESOCKET(conn->base.socket_fd);
+        conn->base.socket_fd = -1;
+        conn->base.state = UDPD_CONN_ERROR;
         lua_pushboolean(L, 0);
         lua_pushstring(L, "Failed to setup events");
         return 2;
