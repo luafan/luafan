@@ -80,6 +80,9 @@ typedef struct udpd_base_conn {
     struct event *read_ev;
     struct event *write_ev;
 
+    // Worker thread assignment (-1 = main event_base)
+    int worker_id;
+
     // DNS resolution
     struct udpd_dns_request *dns_request;
 } udpd_base_conn_t;

@@ -75,6 +75,13 @@ LUA_API int udpd_new(lua_State *L) {
     conn->base.interface = udpd_extract_interface_from_lua(L, 1);
     conn->base.config.base.interface = conn->base.interface;
 
+    // Extract optional worker parameter for multi-threaded event base
+    lua_getfield(L, 1, "worker");
+    if (lua_isinteger(L, -1)) {
+        conn->base.worker_id = (int)lua_tointeger(L, -1);
+    }
+    lua_pop(L, 1);
+
     // Set up Lua state reference for async operations
     REF_STATE_SET((&conn->base), L);
 

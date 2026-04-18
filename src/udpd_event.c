@@ -188,6 +188,7 @@ int udpd_base_conn_init(udpd_base_conn_t *conn, udpd_conn_type_t type, lua_State
     // Initialize event pointers
     conn->read_ev = NULL;
     conn->write_ev = NULL;
+    conn->worker_id = -1;
     conn->dns_request = NULL;
 
     return 0;
@@ -395,9 +396,17 @@ int udpd_base_conn_bind(udpd_base_conn_t *conn) {
 int udpd_base_conn_setup_events(udpd_base_conn_t *conn) {
     if (!conn || conn->socket_fd < 0) return -1;
 
+    // Use worker event_base if assigned, otherwise main
+    struct event_base *ev_base;
+    if (conn->worker_id >= 0 && event_mgr_worker_count() > 0) {
+        ev_base = event_mgr_worker_base(conn->worker_id);
+    } else {
+        ev_base = event_mgr_base();
+    }
+
     // Set up read event if callback is registered
     if (conn->onReadRef != LUA_NOREF) {
-        conn->read_ev = event_new(event_mgr_base(), conn->socket_fd,
+        conn->read_ev = event_new(ev_base, conn->socket_fd,
                                  EV_READ | EV_PERSIST, udpd_common_readcb, conn);
         if (!conn->read_ev) {
             goto error;
@@ -409,7 +418,7 @@ int udpd_base_conn_setup_events(udpd_base_conn_t *conn) {
 
     // Set up write event if callback is registered
     if (conn->onSendReadyRef != LUA_NOREF) {
-        conn->write_ev = event_new(event_mgr_base(), conn->socket_fd,
+        conn->write_ev = event_new(ev_base, conn->socket_fd,
                                   EV_WRITE, udpd_common_writecb, conn);
         if (!conn->write_ev) {
             goto error;

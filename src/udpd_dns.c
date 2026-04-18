@@ -244,9 +244,15 @@ int udpd_dns_resolve_for_connection(udpd_base_conn_t *conn) {
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
 
-    // Start DNS resolution
+    // Start DNS resolution using worker dnsbase if assigned
+    struct evdns_base *resolve_dnsbase;
+    if (conn->worker_id >= 0 && event_mgr_worker_count() > 0) {
+        resolve_dnsbase = event_mgr_worker_dnsbase(conn->worker_id);
+    } else {
+        resolve_dnsbase = event_mgr_dnsbase();
+    }
     struct evdns_getaddrinfo_request *req =
-        evdns_getaddrinfo(event_mgr_dnsbase(), conn->host, portbuf, &hints,
+        evdns_getaddrinfo(resolve_dnsbase, conn->host, portbuf, &hints,
                          udpd_conn_dns_callback, conn);
 
     if (!req) {
