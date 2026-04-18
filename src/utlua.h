@@ -227,6 +227,7 @@ if (obj->_ref_ != LUA_NOREF) {\
 
 #if DEBUG_THREAD_TRACKING
 #define SET_FUNC_REF_FROM_TABLE(L, REF, IDX, KEY)                                                                      \
+    lua_lock(L);                                                                                                       \
     lua_getfield(L, IDX, KEY);                                                                                         \
     if (lua_isfunction(L, -1)) {                                                                                       \
         REF = luaL_ref(L, LUA_REGISTRYINDEX);                                                                          \
@@ -234,16 +235,19 @@ if (obj->_ref_ != LUA_NOREF) {\
     } else {                                                                                                           \
         REF = LUA_NOREF;                                                                                               \
         lua_pop(L, 1);                                                                                                 \
-    }
+    }                                                                                                                  \
+    lua_unlock(L);
 #else
 #define SET_FUNC_REF_FROM_TABLE(L, REF, IDX, KEY)                                                                      \
+    lua_lock(L);                                                                                                       \
     lua_getfield(L, IDX, KEY);                                                                                         \
     if (lua_isfunction(L, -1)) {                                                                                       \
         REF = luaL_ref(L, LUA_REGISTRYINDEX);                                                                          \
     } else {                                                                                                           \
         REF = LUA_NOREF;                                                                                               \
         lua_pop(L, 1);                                                                                                 \
-    }
+    }                                                                                                                  \
+    lua_unlock(L);
 #endif
 
 #if DEBUG_THREAD_TRACKING
