@@ -214,13 +214,13 @@ void thread_tracker_register_lua_functions(lua_State *L);
 #endif
 
 #define REF_STATE_GET(obj, L)                                                                                          \
-    lua_lock(L);                                                                                                       \
+    lua_lock(obj->mainthread);                                                                                         \
 if (obj->_ref_ != LUA_NOREF) {\
     lua_rawgeti(obj->mainthread, LUA_REGISTRYINDEX, obj->_ref_);\
     L = lua_tothread(obj->mainthread, -1);\
     lua_pop(obj->mainthread, 1);\
 }\
-    lua_unlock(L);
+    lua_unlock(obj->mainthread);
 
 #define REF_STATE_CLEAR(obj)                                                                                                     \
     CLEAR_REF(obj->mainthread, obj->_ref_);
