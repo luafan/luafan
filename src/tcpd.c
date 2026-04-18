@@ -68,6 +68,24 @@ LUA_API int tcpd_connect(lua_State *L) {
     }
     lua_pop(L, 1);
 
+    // Extract optional worker parameter for multi-threaded event base
+    int worker_id = -1; // -1 means use main event_base
+    lua_getfield(L, 1, "worker");
+    if (lua_isinteger(L, -1)) {
+        worker_id = (int)lua_tointeger(L, -1);
+    }
+    lua_pop(L, 1);
+
+    struct event_base *conn_base;
+    struct evdns_base *conn_dnsbase;
+    if (worker_id >= 0 && event_mgr_worker_count() > 0) {
+        conn_base = event_mgr_worker_base(worker_id);
+        conn_dnsbase = custom_dnsbase ? custom_dnsbase : event_mgr_worker_dnsbase(worker_id);
+    } else {
+        conn_base = event_mgr_base();
+        conn_dnsbase = custom_dnsbase ? custom_dnsbase : event_mgr_dnsbase();
+    }
+
     // Set up SSL if enabled
     if (client->base.config.ssl_enabled) {
 #if FAN_HAS_OPENSSL
@@ -90,7 +108,7 @@ LUA_API int tcpd_connect(lua_State *L) {
                 const char *ssl_host = lua_tostring(L, -1);
 
                 client->base.buf = tcpd_ssl_create_client_bufferevent(
-                    event_mgr_base(), client->base.ssl_ctx,
+                    conn_base, client->base.ssl_ctx,
                     ssl_host ? ssl_host : client->base.host, client);
                 lua_pop(L, 1);
             } else {
@@ -104,17 +122,16 @@ LUA_API int tcpd_connect(lua_State *L) {
 #endif
     } else {
         client->base.buf = bufferevent_socket_new(
-            event_mgr_base(), -1, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
+            conn_base, -1, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
     }
 
     if (!client->base.buf) {
         return 1;
     }
 
-    // Connect to host (use custom DNS base if provided)
-    struct evdns_base *dnsbase = custom_dnsbase ? custom_dnsbase : event_mgr_dnsbase();
+    // Connect to host
     int rc = bufferevent_socket_connect_hostname(
-        client->base.buf, dnsbase, AF_UNSPEC,
+        client->base.buf, conn_dnsbase, AF_UNSPEC,
         client->base.host, client->base.port);
 
     if (rc < 0) {

@@ -44,14 +44,20 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     luaL_getmetatable(co, LUA_TCPD_ACCEPT_TYPE);
     lua_setmetatable(co, -2);
 
-    struct event_base *base = evconnlistener_get_base(listener);
+    struct event_base *accept_base;
+    if (event_mgr_worker_count() > 0) {
+        int wid = event_mgr_next_worker();
+        accept_base = event_mgr_worker_base(wid);
+    } else {
+        accept_base = evconnlistener_get_base(listener);
+    }
     struct bufferevent *bev;
 
     // Create bufferevent (SSL or regular)
     if (server->ssl_ctx) {
-        bev = tcpd_ssl_create_server_bufferevent(base, fd, server->ssl_ctx);
+        bev = tcpd_ssl_create_server_bufferevent(accept_base, fd, server->ssl_ctx);
     } else {
-        bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
+        bev = bufferevent_socket_new(accept_base, fd, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
     }
 
     if (!bev) {
