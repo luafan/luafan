@@ -21,4 +21,15 @@ void event_mgr_loop_cleanup(void);
 int event_mgr_is_looping(void);
 void event_mgr_start(void);
 
+// Worker pool for multi-threaded event processing
+#define EVENT_MGR_MAX_WORKERS 4
+#define EVENT_MGR_DEFAULT_WORKERS 2
+
+int event_mgr_workers_init(int num_workers);
+void event_mgr_workers_shutdown(void);
+struct event_base *event_mgr_worker_base(int worker_id);
+struct evdns_base *event_mgr_worker_dnsbase(int worker_id);
+int event_mgr_next_worker(void);
+int event_mgr_worker_count(void);
+
 #endif

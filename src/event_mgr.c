@@ -5,6 +5,8 @@
 #include <lua.h>
 
 #include <signal.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 static struct event_base *base = NULL;
 static struct evdns_base *dnsbase = NULL;
@@ -15,6 +17,101 @@ static struct event signal_pipe;
 
 static int looping = 0;
 static int initialized = 0;
+
+// Worker pool for multi-threaded event processing
+struct event_worker {
+    struct event_base *base;
+    struct evdns_base *dnsbase;
+    pthread_t thread;
+    int running;
+    int id;
+};
+
+static struct event_worker workers[EVENT_MGR_MAX_WORKERS];
+static int num_workers = 0;
+static _Atomic int next_worker_idx = 0;
+
+static void *worker_thread_func(void *arg) {
+    struct event_worker *w = (struct event_worker *)arg;
+    // Block SIGPIPE on worker threads
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
+
+    event_base_loop(w->base, EVLOOP_NO_EXIT_ON_EMPTY);
+    w->running = 0;
+    return NULL;
+}
+
+int event_mgr_workers_init(int count) {
+    if (count <= 0 || count > EVENT_MGR_MAX_WORKERS) {
+        count = EVENT_MGR_DEFAULT_WORKERS;
+    }
+    num_workers = count;
+
+    for (int i = 0; i < num_workers; i++) {
+        workers[i].id = i;
+        workers[i].base = event_base_new();
+        if (!workers[i].base) return -1;
+
+        workers[i].dnsbase = evdns_base_new(workers[i].base, 0);
+        if (!workers[i].dnsbase) return -1;
+        evdns_base_set_option(workers[i].dnsbase, "randomize-case:", "0");
+
+        workers[i].running = 1;
+        int rc = pthread_create(&workers[i].thread, NULL, worker_thread_func, &workers[i]);
+        if (rc != 0) return -1;
+    }
+    return 0;
+}
+
+void event_mgr_workers_shutdown(void) {
+    for (int i = 0; i < num_workers; i++) {
+        if (workers[i].running && workers[i].base) {
+            event_base_loopbreak(workers[i].base);
+        }
+    }
+    for (int i = 0; i < num_workers; i++) {
+        if (workers[i].thread) {
+            pthread_join(workers[i].thread, NULL);
+            workers[i].thread = 0;
+        }
+        if (workers[i].dnsbase) {
+            evdns_base_free(workers[i].dnsbase, 0);
+            workers[i].dnsbase = NULL;
+        }
+        if (workers[i].base) {
+            event_base_free(workers[i].base);
+            workers[i].base = NULL;
+        }
+    }
+    num_workers = 0;
+}
+
+struct event_base *event_mgr_worker_base(int worker_id) {
+    if (worker_id < 0 || worker_id >= num_workers) {
+        return event_mgr_base(); // fallback to main
+    }
+    return workers[worker_id].base;
+}
+
+struct evdns_base *event_mgr_worker_dnsbase(int worker_id) {
+    if (worker_id < 0 || worker_id >= num_workers) {
+        return event_mgr_dnsbase();
+    }
+    return workers[worker_id].dnsbase;
+}
+
+int event_mgr_next_worker(void) {
+    if (num_workers <= 0) return -1;
+    int idx = next_worker_idx++;
+    return idx % num_workers;
+}
+
+int event_mgr_worker_count(void) {
+    return num_workers;
+}
 
 struct event_base *event_mgr_base() {
     if (!base) {
@@ -70,6 +167,7 @@ static void signal_cb(evutil_socket_t fd, short event, void *arg) {
 }
 
 void event_mgr_break() {
+    event_mgr_workers_shutdown();
     if (base) {
         event_base_loopbreak(base);
     }
@@ -125,6 +223,7 @@ static void full_cleanup() {
     cleanup_signal_events();
     cleanup_openssl();
     cleanup_dnsbase();
+    event_mgr_workers_shutdown();
     cleanup_eventbase();
     reset_state();
 }
@@ -189,6 +288,7 @@ int event_mgr_loop_later_cleanup() {
         cleanup_signal_events();
         cleanup_openssl();
         cleanup_dnsbase();
+        event_mgr_workers_shutdown();
 
         looping = 0;
         initialized = 0;
