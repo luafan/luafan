@@ -52,7 +52,7 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     } else {
         accept_base = evconnlistener_get_base(listener);
     }
-    int extra_bev_flags = use_worker ? BEV_OPT_THREADSAFE : 0;
+    int extra_bev_flags = use_worker ? BEV_OPT_THREADSAFE | BEV_OPT_UNLOCK_CALLBACKS : 0;
     struct bufferevent *bev;
 
     // Create bufferevent (SSL or regular)

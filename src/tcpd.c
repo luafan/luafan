@@ -110,7 +110,7 @@ LUA_API int tcpd_connect(lua_State *L) {
                 client->base.buf = tcpd_ssl_create_client_bufferevent(
                     conn_base, client->base.ssl_ctx,
                     ssl_host ? ssl_host : client->base.host, client,
-                    worker_id >= 0 ? BEV_OPT_THREADSAFE : 0);
+                    worker_id >= 0 ? BEV_OPT_THREADSAFE | BEV_OPT_UNLOCK_CALLBACKS : 0);
                 lua_pop(L, 1);
             } else {
                 LOGE("SSL context creation failed for %s:%d",
@@ -124,7 +124,7 @@ LUA_API int tcpd_connect(lua_State *L) {
     } else {
         int bev_flags = BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS;
         if (worker_id >= 0) {
-            bev_flags |= BEV_OPT_THREADSAFE;
+            bev_flags |= BEV_OPT_THREADSAFE | BEV_OPT_UNLOCK_CALLBACKS;
         }
         client->base.buf = bufferevent_socket_new(conn_base, -1, bev_flags);
     }
