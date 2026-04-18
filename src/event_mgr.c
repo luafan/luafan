@@ -23,13 +23,13 @@ struct event_worker {
     struct event_base *base;
     struct evdns_base *dnsbase;
     pthread_t thread;
-    int running;
+    _Atomic int running;
     int id;
 };
 
 static struct event_worker workers[EVENT_MGR_MAX_WORKERS];
 static int num_workers = 0;
-static _Atomic int next_worker_idx = 0;
+static _Atomic unsigned int next_worker_idx = 0;
 
 static void *worker_thread_func(void *arg) {
     struct event_worker *w = (struct event_worker *)arg;
@@ -105,8 +105,8 @@ struct evdns_base *event_mgr_worker_dnsbase(int worker_id) {
 
 int event_mgr_next_worker(void) {
     if (num_workers <= 0) return -1;
-    int idx = next_worker_idx++;
-    return idx % num_workers;
+    unsigned int idx = next_worker_idx++;
+    return (int)(idx % (unsigned int)num_workers);
 }
 
 int event_mgr_worker_count(void) {

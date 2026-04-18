@@ -76,7 +76,13 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
 
     // Set callbacks
     bufferevent_setcb(bev, tcpd_common_readcb, tcpd_common_writecb, tcpd_common_eventcb, &accept->base);
-    bufferevent_enable(bev, EV_READ | EV_WRITE);
+    if (use_worker) {
+        // With workers, defer EV_READ until tcpd_accept_bind sets onReadRef,
+        // avoiding a race where the worker fires readcb before Lua setup.
+        bufferevent_enable(bev, EV_WRITE);
+    } else {
+        bufferevent_enable(bev, EV_READ | EV_WRITE);
+    }
 
     // Apply configuration
     tcpd_config_apply_buffers(&server->config, bev, fd);
@@ -298,6 +304,11 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
 
     // Set callbacks using common function
     tcpd_base_conn_set_callbacks(&accept->base, L, 2);
+
+    // Enable EV_READ now that onReadRef is set (may have been deferred for worker threads)
+    if (accept->base.buf) {
+        bufferevent_enable(accept->base.buf, EV_READ);
+    }
 
     lua_pushstring(L, accept->base.ip);
     lua_pushinteger(L, accept->base.port);
