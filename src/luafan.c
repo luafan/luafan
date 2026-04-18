@@ -100,7 +100,9 @@ static void clock_handler(const int fd, const short which, void *arg) {
 
     evtimer_del(&args->clockevent);
 
-    FAN_RESUME(L, NULL, 0);
+    if (L) {
+        FAN_RESUME(L, NULL, 0);
+    }
 
     REF_STATE_CLEAR(args);
     free(args);

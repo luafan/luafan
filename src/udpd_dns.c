@@ -133,6 +133,12 @@ void udpd_dest_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
 
     REF_STATE_GET(request, L);
 
+    if (!L) {
+        if (addr) evutil_freeaddrinfo(addr);
+        udpd_dns_request_cleanup(request);
+        return;
+    }
+
     if (errcode) {
         // DNS resolution failed
         lua_pushnil(L);
@@ -176,6 +182,12 @@ void udpd_dests_dns_callback(int errcode, struct evutil_addrinfo *addr_list, voi
     if (!request) return;
 
     REF_STATE_GET(request, L);
+
+    if (!L) {
+        if (addr_list) evutil_freeaddrinfo(addr_list);
+        udpd_dns_request_cleanup(request);
+        return;
+    }
 
     if (errcode) {
         // DNS resolution failed
