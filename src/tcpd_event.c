@@ -41,6 +41,12 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
 
     lua_State *mainthread = conn->mainthread;
     lua_lock(mainthread);
+    // Recheck ref under lock — may have been cleared by another thread
+    if (conn->onReadRef == LUA_NOREF) {
+        lua_unlock(mainthread);
+        bytearray_dealloc(&ba);
+        return;
+    }
     lua_State *co = lua_newthread(mainthread);
     PUSH_REF(mainthread);
     lua_unlock(mainthread);
@@ -76,6 +82,11 @@ void tcpd_common_writecb(struct bufferevent *bev, void *ctx) {
     if (evbuffer_get_length(bufferevent_get_output(bev)) == 0) {
         lua_State *mainthread = conn->mainthread;
         lua_lock(mainthread);
+        // Recheck ref under lock — may have been cleared by another thread
+        if (conn->onSendReadyRef == LUA_NOREF) {
+            lua_unlock(mainthread);
+            return;
+        }
         lua_State *co = lua_newthread(mainthread);
         PUSH_REF(mainthread);
         lua_unlock(mainthread);
@@ -107,6 +118,11 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
         if (conn->onConnectedRef != LUA_NOREF) {
             lua_State *mainthread = conn->mainthread;
             lua_lock(mainthread);
+            // Recheck ref under lock — may have been cleared by another thread
+            if (conn->onConnectedRef == LUA_NOREF) {
+                lua_unlock(mainthread);
+                return;
+            }
             lua_State *co = lua_newthread(mainthread);
             PUSH_REF(mainthread);
             lua_unlock(mainthread);
@@ -149,6 +165,12 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
                 // Call onRead callback with remaining data
                 lua_State *mainthread = conn->mainthread;
                 lua_lock(mainthread);
+                // Recheck ref under lock — may have been cleared by another thread
+                if (conn->onReadRef == LUA_NOREF) {
+                    lua_unlock(mainthread);
+                    bytearray_dealloc(&ba);
+                    goto after_eof_read;
+                }
                 lua_State *co = lua_newthread(mainthread);
                 PUSH_REF(mainthread);
                 lua_unlock(mainthread);
@@ -171,6 +193,7 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
                 bytearray_dealloc(&ba);
             }
         }
+after_eof_read:
 
         // Update connection state
         if (events & BEV_EVENT_ERROR) {
@@ -199,6 +222,11 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
         if (conn->onDisconnectedRef != LUA_NOREF) {
             lua_State *mainthread = conn->mainthread;
             lua_lock(mainthread);
+            // Recheck ref under lock — may have been cleared by another thread
+            if (conn->onDisconnectedRef == LUA_NOREF) {
+                lua_unlock(mainthread);
+                goto after_disconnect_cb;
+            }
             lua_State *co = lua_newthread(mainthread);
             PUSH_REF(mainthread);
             lua_unlock(mainthread);
@@ -226,6 +254,7 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
             FAN_RESUME(co, mainthread, argc);
             POP_REF(mainthread);
         }
+after_disconnect_cb:
 
         // Clean up error
         tcpd_error_cleanup(&error);
