@@ -51,13 +51,15 @@ struct bufferevent* tcpd_ssl_create_client_bufferevent(
     struct event_base *base,
     tcpd_ssl_context_t *ctx,
     const char *hostname,
-    tcpd_client_conn_t *client
+    tcpd_client_conn_t *client,
+    int extra_bev_flags
 );
 
 struct bufferevent* tcpd_ssl_create_server_bufferevent(
     struct event_base *base,
     evutil_socket_t fd,
-    tcpd_ssl_context_t *ctx
+    tcpd_ssl_context_t *ctx,
+    int extra_bev_flags
 );
 
 // SSL certificate validation

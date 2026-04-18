@@ -340,7 +340,8 @@ struct bufferevent* tcpd_ssl_create_client_bufferevent(
     struct event_base *base,
     tcpd_ssl_context_t *ctx,
     const char *hostname,
-    tcpd_client_conn_t *client) {
+    tcpd_client_conn_t *client,
+    int extra_bev_flags) {
 
     if (!base || !ctx || !ctx->ssl_ctx || !client) return NULL;
 
@@ -373,7 +374,7 @@ struct bufferevent* tcpd_ssl_create_client_bufferevent(
 
     struct bufferevent *bev = bufferevent_openssl_socket_new(
         base, -1, client->ssl, BUFFEREVENT_SSL_CONNECTING,
-        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS
+        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS | extra_bev_flags
     );
 
     if (!bev) {
@@ -398,7 +399,8 @@ struct bufferevent* tcpd_ssl_create_client_bufferevent(
 struct bufferevent* tcpd_ssl_create_server_bufferevent(
     struct event_base *base,
     evutil_socket_t fd,
-    tcpd_ssl_context_t *ctx) {
+    tcpd_ssl_context_t *ctx,
+    int extra_bev_flags) {
 
     if (!base || !ctx || !ctx->ssl_ctx) return NULL;
 
@@ -407,7 +409,7 @@ struct bufferevent* tcpd_ssl_create_server_bufferevent(
 
     struct bufferevent *bev = bufferevent_openssl_socket_new(
         base, fd, ssl, BUFFEREVENT_SSL_ACCEPTING,
-        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS
+        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS | extra_bev_flags
     );
 
     if (!bev) {
