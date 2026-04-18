@@ -329,9 +329,10 @@ LUA_API int tcpd_accept_send(lua_State *L) {
     size_t len = 0;
     const char *data = luaL_checklstring(L, 2, &len);
 
-    if (data && len > 0 && accept->base.buf) {
-        bufferevent_write(accept->base.buf, data, len);
-        size_t total = evbuffer_get_length(bufferevent_get_output(accept->base.buf));
+    struct bufferevent *buf = accept ? accept->base.buf : NULL;
+    if (data && len > 0 && buf) {
+        bufferevent_write(buf, data, len);
+        size_t total = evbuffer_get_length(bufferevent_get_output(buf));
         lua_pushinteger(L, total);
     } else {
         lua_pushinteger(L, -1);
@@ -354,8 +355,9 @@ LUA_API int tcpd_accept_close(lua_State *L) {
 LUA_API int tcpd_accept_read_pause(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    if (accept->base.buf) {
-        bufferevent_disable(accept->base.buf, EV_READ);
+    struct bufferevent *buf = accept ? accept->base.buf : NULL;
+    if (buf) {
+        bufferevent_disable(buf, EV_READ);
     }
 
     return 0;
@@ -365,8 +367,9 @@ LUA_API int tcpd_accept_read_pause(lua_State *L) {
 LUA_API int tcpd_accept_read_resume(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    if (accept->base.buf) {
-        bufferevent_enable(accept->base.buf, EV_READ);
+    struct bufferevent *buf = accept ? accept->base.buf : NULL;
+    if (buf) {
+        bufferevent_enable(buf, EV_READ);
     }
 
     return 0;
@@ -376,8 +379,9 @@ LUA_API int tcpd_accept_read_resume(lua_State *L) {
 LUA_API int tcpd_accept_getsockname(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    if (accept->base.buf) {
-        evutil_socket_t fd = bufferevent_getfd(accept->base.buf);
+    struct bufferevent *buf = accept ? accept->base.buf : NULL;
+    if (buf) {
+        evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
             struct sockaddr_storage ss;
             socklen_t len = sizeof(ss);
@@ -412,8 +416,9 @@ LUA_API int tcpd_accept_getsockname(lua_State *L) {
 LUA_API int tcpd_accept_getpeername(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    if (accept->base.buf) {
-        evutil_socket_t fd = bufferevent_getfd(accept->base.buf);
+    struct bufferevent *buf = accept ? accept->base.buf : NULL;
+    if (buf) {
+        evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
             struct sockaddr_storage ss;
             socklen_t len = sizeof(ss);

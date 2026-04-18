@@ -190,11 +190,12 @@ LUA_API int tcpd_conn_send(lua_State *L) {
     size_t len = 0;
     const char *data = luaL_checklstring(L, 2, &len);
 
-    if (data && len > 0 && client->base.buf) {
-        tcpd_config_apply_timeouts(&client->base.config, client->base.buf);
-        bufferevent_write(client->base.buf, data, len);
+    struct bufferevent *buf = client ? client->base.buf : NULL;
+    if (data && len > 0 && buf) {
+        tcpd_config_apply_timeouts(&client->base.config, buf);
+        bufferevent_write(buf, data, len);
 
-        size_t total = evbuffer_get_length(bufferevent_get_output(client->base.buf));
+        size_t total = evbuffer_get_length(bufferevent_get_output(buf));
         lua_pushinteger(L, total);
     } else {
         lua_pushinteger(L, -1);
@@ -217,12 +218,14 @@ LUA_API int tcpd_conn_close(lua_State *L) {
 LUA_API int tcpd_conn_shutdown(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    if (!client || !client->base.buf) {
-        return 0;
+    struct bufferevent *buf = client ? client->base.buf : NULL;
+    if (!buf) {
+        lua_pushinteger(L, 0);
+        return 1;
     }
 
     // Check if there's still data in the output buffer
-    struct evbuffer *output = bufferevent_get_output(client->base.buf);
+    struct evbuffer *output = bufferevent_get_output(buf);
     size_t pending = evbuffer_get_length(output);
 
     // Return the pending bytes count to Lua
@@ -232,7 +235,7 @@ LUA_API int tcpd_conn_shutdown(lua_State *L) {
     // Only shutdown if buffer is empty
     if (pending == 0) {
         // Get the underlying socket file descriptor
-        evutil_socket_t fd = bufferevent_getfd(client->base.buf);
+        evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
             // Shutdown write end: SHUT_WR = 1 on Unix systems
             #ifdef _WIN32
@@ -250,8 +253,9 @@ LUA_API int tcpd_conn_shutdown(lua_State *L) {
 LUA_API int tcpd_conn_read_pause(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    if (client->base.buf) {
-        bufferevent_disable(client->base.buf, EV_READ);
+    struct bufferevent *buf = client ? client->base.buf : NULL;
+    if (buf) {
+        bufferevent_disable(buf, EV_READ);
     }
 
     return 0;
@@ -261,8 +265,9 @@ LUA_API int tcpd_conn_read_pause(lua_State *L) {
 LUA_API int tcpd_conn_read_resume(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    if (client->base.buf) {
-        bufferevent_enable(client->base.buf, EV_READ);
+    struct bufferevent *buf = client ? client->base.buf : NULL;
+    if (buf) {
+        bufferevent_enable(buf, EV_READ);
     }
 
     return 0;
@@ -272,8 +277,9 @@ LUA_API int tcpd_conn_read_resume(lua_State *L) {
 LUA_API int tcpd_conn_getsockname(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    if (client->base.buf) {
-        evutil_socket_t fd = bufferevent_getfd(client->base.buf);
+    struct bufferevent *buf = client ? client->base.buf : NULL;
+    if (buf) {
+        evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
             struct sockaddr_storage ss;
             socklen_t len = sizeof(ss);
@@ -308,8 +314,9 @@ LUA_API int tcpd_conn_getsockname(lua_State *L) {
 LUA_API int tcpd_conn_getpeername(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    if (client->base.buf) {
-        evutil_socket_t fd = bufferevent_getfd(client->base.buf);
+    struct bufferevent *buf = client ? client->base.buf : NULL;
+    if (buf) {
+        evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
             struct sockaddr_storage ss;
             socklen_t len = sizeof(ss);
