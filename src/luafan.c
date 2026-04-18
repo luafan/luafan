@@ -232,6 +232,11 @@ LUA_API int luafan_gettop(lua_State *L) {
     return 1;
 }
 
+LUA_API int luafan_worker_count(lua_State *L) {
+    lua_pushinteger(L, event_mgr_worker_count());
+    return 1;
+}
+
 static const struct luaL_Reg fanlib[] = {
     {"loop", luafan_start},
     {"loopbreak", luafan_stop},
@@ -260,6 +265,7 @@ static const struct luaL_Reg fanlib[] = {
     {"getcpucount", luafan_getcpucount},
 #endif
     {"getinterfaces", luafan_getinterfaces},
+    {"worker_count", luafan_worker_count},
 
     {NULL, NULL},
 };
