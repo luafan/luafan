@@ -40,6 +40,10 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
     bytearray_read_ready(&ba);
 
     lua_State *mainthread = conn->mainthread;
+    if (!mainthread) {
+        bytearray_dealloc(&ba);
+        return;
+    }
     lua_lock(mainthread);
     // Recheck ref under lock — may have been cleared by another thread
     if (conn->onReadRef == LUA_NOREF) {
@@ -51,6 +55,17 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
     PUSH_REF(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
+
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(co, -1)) {
+        LOGE("tcpd_common_readcb: onReadRef=%d resolved to %s, expected function\n",
+             conn->onReadRef, luaL_typename(co, -1));
+        lua_pop(co, 1);
+        lua_unlock(mainthread);
+        POP_REF(mainthread);
+        bytearray_dealloc(&ba);
+        return;
+    }
 
     // Check if callback_self_first is enabled
     int argc = 1;
@@ -81,6 +96,7 @@ void tcpd_common_writecb(struct bufferevent *bev, void *ctx) {
     // Only call the callback when output buffer is empty
     if (evbuffer_get_length(bufferevent_get_output(bev)) == 0) {
         lua_State *mainthread = conn->mainthread;
+        if (!mainthread) return;
         lua_lock(mainthread);
         // Recheck ref under lock — may have been cleared by another thread
         if (conn->onSendReadyRef == LUA_NOREF) {
@@ -91,6 +107,16 @@ void tcpd_common_writecb(struct bufferevent *bev, void *ctx) {
         PUSH_REF(mainthread);
 
         lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
+
+        // Guard: verify the registry slot still holds a function
+        if (!lua_isfunction(co, -1)) {
+            LOGE("tcpd_common_writecb: onSendReadyRef=%d resolved to %s, expected function\n",
+                 conn->onSendReadyRef, luaL_typename(co, -1));
+            lua_pop(co, 1);
+            lua_unlock(mainthread);
+            POP_REF(mainthread);
+            return;
+        }
 
         // Check if callback_self_first is enabled
         int argc = 0;
@@ -117,6 +143,7 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
 
         if (conn->onConnectedRef != LUA_NOREF) {
             lua_State *mainthread = conn->mainthread;
+            if (!mainthread) return;
             lua_lock(mainthread);
             // Recheck ref under lock — may have been cleared by another thread
             if (conn->onConnectedRef == LUA_NOREF) {
@@ -127,6 +154,16 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
             PUSH_REF(mainthread);
 
             lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onConnectedRef);
+
+            // Guard: verify the registry slot still holds a function
+            if (!lua_isfunction(co, -1)) {
+                LOGE("tcpd_common_eventcb(CONNECTED): onConnectedRef=%d resolved to %s, expected function\n",
+                     conn->onConnectedRef, luaL_typename(co, -1));
+                lua_pop(co, 1);
+                lua_unlock(mainthread);
+                POP_REF(mainthread);
+                return;
+            }
 
             // Check if callback_self_first is enabled
             int argc = 0;
@@ -164,6 +201,10 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
 
                 // Call onRead callback with remaining data
                 lua_State *mainthread = conn->mainthread;
+                if (!mainthread) {
+                    bytearray_dealloc(&ba);
+                    goto after_eof_read;
+                }
                 lua_lock(mainthread);
                 // Recheck ref under lock — may have been cleared by another thread
                 if (conn->onReadRef == LUA_NOREF) {
@@ -175,6 +216,17 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
                 PUSH_REF(mainthread);
 
                 lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
+
+                // Guard: verify the registry slot still holds a function
+                if (!lua_isfunction(co, -1)) {
+                    LOGE("tcpd_common_eventcb(EOF read): onReadRef=%d resolved to %s, expected function\n",
+                         conn->onReadRef, luaL_typename(co, -1));
+                    lua_pop(co, 1);
+                    lua_unlock(mainthread);
+                    POP_REF(mainthread);
+                    bytearray_dealloc(&ba);
+                    goto after_eof_read;
+                }
 
                 int argc = 1;
                 if (conn->config.callback_self_first) {
@@ -221,6 +273,7 @@ after_eof_read:
         // Call the disconnected callback if set
         if (conn->onDisconnectedRef != LUA_NOREF) {
             lua_State *mainthread = conn->mainthread;
+            if (!mainthread) goto after_disconnect_cb;
             lua_lock(mainthread);
             // Recheck ref under lock — may have been cleared by another thread
             if (conn->onDisconnectedRef == LUA_NOREF) {
@@ -231,6 +284,16 @@ after_eof_read:
             PUSH_REF(mainthread);
 
             lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onDisconnectedRef);
+
+            // Guard: verify the registry slot still holds a function
+            if (!lua_isfunction(co, -1)) {
+                LOGE("tcpd_common_eventcb(DISCONNECT): onDisconnectedRef=%d resolved to %s, expected function\n",
+                     conn->onDisconnectedRef, luaL_typename(co, -1));
+                lua_pop(co, 1);
+                lua_unlock(mainthread);
+                POP_REF(mainthread);
+                goto after_disconnect_cb;
+            }
 
             // Check if callback_self_first is enabled
             int argc = 1;
@@ -317,6 +380,11 @@ static tcpd_error_t tcpd_analyze_event_error(struct bufferevent *bev, short even
 void tcpd_shutdown_bufferevent(struct bufferevent *bev) {
     if (!bev) return;
 
+    // Clear callbacks before freeing to prevent deferred callbacks from firing
+    // after the owning connection struct has been freed (use-after-free).
+    bufferevent_setcb(bev, NULL, NULL, NULL, NULL);
+    bufferevent_disable(bev, EV_READ | EV_WRITE);
+
 #if FAN_HAS_OPENSSL && OPENSSL_VERSION_NUMBER < 0x1010000fL
     SSL *ssl = bufferevent_openssl_get_ssl(bev);
     if (ssl) {
@@ -392,11 +460,12 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
     }
 
     // Clear callback references
-    if (conn->mainthread) {
-        CLEAR_REF(conn->mainthread, conn->onReadRef);
-        CLEAR_REF(conn->mainthread, conn->onSendReadyRef);
-        CLEAR_REF(conn->mainthread, conn->onDisconnectedRef);
-        CLEAR_REF(conn->mainthread, conn->onConnectedRef);
+    lua_State *mt = conn->mainthread;
+    if (mt) {
+        CLEAR_REF(mt, conn->onReadRef);
+        CLEAR_REF(mt, conn->onSendReadyRef);
+        CLEAR_REF(mt, conn->onDisconnectedRef);
+        CLEAR_REF(mt, conn->onConnectedRef);
     }
 
     // Free host string
@@ -407,11 +476,12 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
 
     // Clean up SSL context (will be implemented in SSL module)
     if (conn->ssl_ctx) {
-        tcpd_ssl_context_release(conn->ssl_ctx, conn->mainthread);
+        tcpd_ssl_context_release(conn->ssl_ctx, mt);
         conn->ssl_ctx = NULL;
     }
 
     conn->state = TCPD_CONN_DISCONNECTED;
+    conn->mainthread = NULL;
 }
 
 // Helper function to format TCP connection info

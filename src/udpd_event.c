@@ -75,6 +75,16 @@ void udpd_common_writecb(evutil_socket_t fd, short what, void *ctx) {
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
 
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(co, -1)) {
+        LOGE("udpd_common_writecb: onSendReadyRef=%d resolved to %s, expected function\n",
+             conn->onSendReadyRef, luaL_typename(co, -1));
+        lua_pop(co, 1);
+        lua_unlock(mainthread);
+        POP_REF(mainthread);
+        return;
+    }
+
     int argc = 0;
     // Check if callback_self_first is enabled
     if (conn->config.base.callback_self_first) {
@@ -99,6 +109,16 @@ void udpd_process_received_data(udpd_base_conn_t *conn, const char *data, size_t
 
     // Push read callback function
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
+
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(co, -1)) {
+        LOGE("udpd_process_received_data: onReadRef=%d resolved to %s, expected function\n",
+             conn->onReadRef, luaL_typename(co, -1));
+        lua_pop(co, 1);
+        lua_unlock(mainthread);
+        POP_REF(mainthread);
+        return;
+    }
 
     int argc = 0;
     // Check if callback_self_first is enabled

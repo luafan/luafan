@@ -501,6 +501,18 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata) {
         PUSH_REF(L);
 
         lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onheaderref);
+
+        // Guard: verify the registry slot still holds a function
+        if (!lua_isfunction(co, -1)) {
+            LOGE("http onheader: onheaderref=%d resolved to %s, expected function\n",
+                 conn->onheaderref, luaL_typename(co, -1));
+            lua_pop(co, 1);
+            lua_pop(L, 1); // pop header table
+            lua_unlock(L);
+            POP_REF(L);
+            return size * nmemb;
+        }
+
         lua_xmove(L, co, 1);
 
         FAN_RESUME(co, L, 1);
@@ -524,6 +536,16 @@ static int onprogress(void *clientp, double dltotal, double dlnow, double ultota
     PUSH_REF(L);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onprogressref);
+
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(co, -1)) {
+        LOGE("http onprogress: onprogressref=%d resolved to %s, expected function\n",
+             conn->onprogressref, luaL_typename(co, -1));
+        lua_pop(co, 1);
+        lua_unlock(L);
+        POP_REF(L);
+        return 0;
+    }
 
     lua_pushinteger(co, dltotal);
     lua_pushinteger(co, dlnow);
@@ -552,6 +574,16 @@ static size_t onwrite(char *ptr, size_t size, size_t nmemb, void *userdata) {
     lua_State *co = lua_newthread(L);
     PUSH_REF(L);
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onwriteref);
+
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(co, -1)) {
+        LOGE("http onwrite: onwriteref=%d resolved to %s, expected function\n",
+             conn->onwriteref, luaL_typename(co, -1));
+        lua_pop(co, 1);
+        lua_unlock(L);
+        POP_REF(L);
+        return size * nmemb;
+    }
 
     lua_pushlstring(co, ptr, size * nmemb);
 
@@ -582,6 +614,16 @@ static size_t onread(void *ptr, size_t size, size_t nmemb, void *userdata) {
     size_t accept_size = size * nmemb;
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onreadref);
+
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(co, -1)) {
+        LOGE("http onread: onreadref=%d resolved to %s, expected function\n",
+             conn->onreadref, luaL_typename(co, -1));
+        lua_pop(co, 1);
+        lua_unlock(L);
+        POP_REF(L);
+        return 0;
+    }
 
     lua_pushinteger(co, accept_size);
 

@@ -24,13 +24,16 @@ void tcpd_connection_cleanup_on_disconnect(tcpd_base_conn_t *conn) {
             tcpd_client_cleanup_on_disconnect(client);
             break;
         }
-        default:
+        default: {
             // Basic cleanup
-            if (conn->mainthread) {
-                CLEAR_REF(conn->mainthread, conn->onReadRef);
-                CLEAR_REF(conn->mainthread, conn->onSendReadyRef);
+            lua_State *mt = conn->mainthread;
+            if (mt) {
+                CLEAR_REF(mt, conn->onReadRef);
+                CLEAR_REF(mt, conn->onSendReadyRef);
             }
+            conn->mainthread = NULL;
             break;
+        }
     }
 }
 

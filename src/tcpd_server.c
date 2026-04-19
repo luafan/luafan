@@ -32,6 +32,16 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, server->onAcceptRef);
 
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(co, -1)) {
+        LOGE("tcpd_server_listener_cb: onAcceptRef=%d resolved to %s, expected function\n",
+             server->onAcceptRef, luaL_typename(co, -1));
+        lua_pop(co, 1);
+        lua_unlock(mainthread);
+        POP_REF(mainthread);
+        return;
+    }
+
     // Create accept connection object
     tcpd_accept_conn_t *accept = lua_newuserdata(co, sizeof(tcpd_accept_conn_t));
     memset(accept, 0, sizeof(tcpd_accept_conn_t));

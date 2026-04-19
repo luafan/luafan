@@ -512,6 +512,17 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req, LuaServer *server)
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, server->onServiceRef);
 
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(co, -1)) {
+        LOGE("httpd gen_cb: onServiceRef=%d resolved to %s, expected function\n",
+             server->onServiceRef, luaL_typename(co, -1));
+        lua_pop(co, 1);
+        lua_unlock(mainthread);
+        POP_REF(mainthread);
+        evhttp_send_error(req, 500, "Internal Server Error");
+        return;
+    }
+
     newtable_from_req(co, req);
 
     luaL_getmetatable(co, LUA_EVHTTP_REQUEST_TYPE);
