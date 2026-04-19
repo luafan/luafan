@@ -49,7 +49,6 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
     }
     lua_State *co = lua_newthread(mainthread);
     PUSH_REF(mainthread);
-    lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
 
@@ -64,6 +63,7 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
         argc = 1;
     }
 
+    lua_unlock(mainthread);
     FAN_RESUME(co, mainthread, argc);
     POP_REF(mainthread);
 
@@ -89,7 +89,6 @@ void tcpd_common_writecb(struct bufferevent *bev, void *ctx) {
         }
         lua_State *co = lua_newthread(mainthread);
         PUSH_REF(mainthread);
-        lua_unlock(mainthread);
 
         lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
 
@@ -100,6 +99,7 @@ void tcpd_common_writecb(struct bufferevent *bev, void *ctx) {
             argc = 1;
         }
 
+        lua_unlock(mainthread);
         FAN_RESUME(co, mainthread, argc);
         POP_REF(mainthread);
     }
@@ -125,7 +125,6 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
             }
             lua_State *co = lua_newthread(mainthread);
             PUSH_REF(mainthread);
-            lua_unlock(mainthread);
 
             lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onConnectedRef);
 
@@ -136,6 +135,7 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
                 argc = 1;
             }
 
+            lua_unlock(mainthread);
             FAN_RESUME(co, mainthread, argc);
             POP_REF(mainthread);
         }
@@ -173,7 +173,6 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
                 }
                 lua_State *co = lua_newthread(mainthread);
                 PUSH_REF(mainthread);
-                lua_unlock(mainthread);
 
                 lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
 
@@ -187,6 +186,7 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
                     argc = 1;
                 }
 
+                lua_unlock(mainthread);
                 FAN_RESUME(co, mainthread, argc);
                 POP_REF(mainthread);
 
@@ -229,7 +229,6 @@ after_eof_read:
             }
             lua_State *co = lua_newthread(mainthread);
             PUSH_REF(mainthread);
-            lua_unlock(mainthread);
 
             lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onDisconnectedRef);
 
@@ -251,6 +250,7 @@ after_eof_read:
             // Clear the callback reference
             CLEAR_REF(mainthread, conn->onDisconnectedRef);
 
+            lua_unlock(mainthread);
             FAN_RESUME(co, mainthread, argc);
             POP_REF(mainthread);
         }

@@ -29,7 +29,6 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     lua_lock(mainthread);
     lua_State *co = lua_newthread(mainthread);
     PUSH_REF(mainthread);
-    lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, server->onAcceptRef);
 
@@ -66,6 +65,7 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     if (!bev) {
         // Handle error
         lua_pushnil(co);
+        lua_unlock(mainthread);
         FAN_RESUME(co, mainthread, 1);
         POP_REF(mainthread);
         return;
@@ -114,6 +114,7 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
         }
     }
 
+    lua_unlock(mainthread);
     FAN_RESUME(co, mainthread, argc);
     POP_REF(mainthread);
 }

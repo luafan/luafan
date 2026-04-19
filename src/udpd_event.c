@@ -72,7 +72,6 @@ void udpd_common_writecb(evutil_socket_t fd, short what, void *ctx) {
     lua_lock(mainthread);
     lua_State *co = lua_newthread(mainthread);
     PUSH_REF(mainthread);
-    lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
 
@@ -83,6 +82,7 @@ void udpd_common_writecb(evutil_socket_t fd, short what, void *ctx) {
         argc = 1;
     }
 
+    lua_unlock(mainthread);
     FAN_RESUME(co, mainthread, argc);
     POP_REF(mainthread);
 }
@@ -96,7 +96,6 @@ void udpd_process_received_data(udpd_base_conn_t *conn, const char *data, size_t
     lua_lock(mainthread);
     lua_State *co = lua_newthread(mainthread);
     PUSH_REF(mainthread);
-    lua_unlock(mainthread);
 
     // Push read callback function
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
@@ -129,6 +128,7 @@ void udpd_process_received_data(udpd_base_conn_t *conn, const char *data, size_t
     argc++;
 
     // Resume coroutine with data and sender info (and self if enabled)
+    lua_unlock(mainthread);
     FAN_RESUME(co, mainthread, argc);
     POP_REF(mainthread);
 }

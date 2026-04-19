@@ -524,13 +524,13 @@ static int onprogress(void *clientp, double dltotal, double dlnow, double ultota
     PUSH_REF(L);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onprogressref);
-    lua_unlock(L);
 
     lua_pushinteger(co, dltotal);
     lua_pushinteger(co, dlnow);
     lua_pushinteger(co, ultotal);
     lua_pushinteger(co, ulnow);
 
+    lua_unlock(L);
     int status = FAN_RESUME(co, L, 4);
     long ret = 0;
     if (status == 0 && lua_gettop(co) > 0) {
@@ -552,10 +552,10 @@ static size_t onwrite(char *ptr, size_t size, size_t nmemb, void *userdata) {
     lua_State *co = lua_newthread(L);
     PUSH_REF(L);
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onwriteref);
-    lua_unlock(L);
 
     lua_pushlstring(co, ptr, size * nmemb);
 
+    lua_unlock(L);
     int status = FAN_RESUME(co, L, 1);
     long ret = 0;
     if (status == 0 && lua_gettop(co) > 0) {
@@ -582,10 +582,10 @@ static size_t onread(void *ptr, size_t size, size_t nmemb, void *userdata) {
     size_t accept_size = size * nmemb;
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onreadref);
-    lua_unlock(L);
 
     lua_pushinteger(co, accept_size);
 
+    lua_unlock(L);
     int status = FAN_RESUME(co, L, 1);
     long ret = 0;
     if (status == 0 && lua_gettop(co) > 0) {

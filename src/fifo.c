@@ -29,9 +29,9 @@ static void fifo_write_cb(evutil_socket_t fd, short event, void *arg) {
         lua_lock(mainthread);
         lua_State *co = lua_newthread(mainthread);
         PUSH_REF(mainthread);
-        lua_unlock(mainthread);
 
         lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onSendReadyRef);
+        lua_unlock(mainthread);
         FAN_RESUME(co, mainthread, 0);
         POP_REF(mainthread);
     }
@@ -53,12 +53,12 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
             lua_lock(mainthread);
             lua_State *co = lua_newthread(mainthread);
             PUSH_REF(mainthread);
-            lua_unlock(mainthread);
 
             lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
 
             lua_pushstring(co, len < 0 && errno ? strerror(errno) : "pipe closed.");
 
+            lua_unlock(mainthread);
             FAN_RESUME(co, mainthread, 1);
             POP_REF(mainthread);
         } else {
@@ -77,10 +77,10 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
         lua_lock(mainthread);
         lua_State *co = lua_newthread(mainthread);
         PUSH_REF(mainthread);
-        lua_unlock(mainthread);
 
         lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onReadRef);
         lua_pushlstring(co, buf, len);
+        lua_unlock(mainthread);
         FAN_RESUME(co, mainthread, 1);
         POP_REF(mainthread);
     }
@@ -225,12 +225,12 @@ LUA_API int luafan_fifo_send(lua_State *L) {
                 lua_lock(mainthread);
                 lua_State *co = lua_newthread(mainthread);
                 PUSH_REF(mainthread);
-                lua_unlock(mainthread);
 
                 lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
 
                 lua_pushstring(co, len < 0 && errno ? strerror(errno) : "pipe closed.");
 
+                lua_unlock(mainthread);
                 FAN_RESUME(co, mainthread, 1);
                 POP_REF(mainthread);
             } else {

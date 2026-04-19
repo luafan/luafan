@@ -509,7 +509,6 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req, LuaServer *server)
     lua_lock(mainthread);
     lua_State *co = lua_newthread(mainthread);
     PUSH_REF(mainthread);
-    lua_unlock(mainthread);
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, server->onServiceRef);
 
@@ -520,6 +519,7 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req, LuaServer *server)
 
     lua_pushvalue(co, -1); // duplicate for req,resp
 
+    lua_unlock(mainthread);
     FAN_RESUME(co, mainthread, 2);
     POP_REF(mainthread);
 }
