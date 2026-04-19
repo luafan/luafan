@@ -27,31 +27,32 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
 
     lua_State *mainthread = server->mainthread;
     lua_lock(mainthread);
-    lua_State *co = lua_newthread(mainthread);
-    PUSH_REF(mainthread);
-
-    lua_rawgeti(co, LUA_REGISTRYINDEX, server->onAcceptRef);
+    fan_cb_setup_t cbs = fan_cb_setup(mainthread, server->onAcceptRef);
+    if (!cbs.co) {
+        lua_unlock(mainthread);
+        return;
+    }
 
     // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(co, -1)) {
+    if (!lua_isfunction(cbs.co, -1)) {
         LOGE("tcpd_server_listener_cb: onAcceptRef=%d resolved to %s, expected function\n",
-             server->onAcceptRef, luaL_typename(co, -1));
-        lua_pop(co, 1);
+             server->onAcceptRef, luaL_typename(cbs.co, -1));
+        lua_pop(cbs.co, 1);
         lua_unlock(mainthread);
-        POP_REF(mainthread);
+        FAN_CB_CLEANUP(mainthread, cbs);
         return;
     }
 
     // Create accept connection object
-    tcpd_accept_conn_t *accept = lua_newuserdata(co, sizeof(tcpd_accept_conn_t));
+    tcpd_accept_conn_t *accept = lua_newuserdata(cbs.co, sizeof(tcpd_accept_conn_t));
     memset(accept, 0, sizeof(tcpd_accept_conn_t));
 
     // Initialize base connection
     tcpd_base_conn_init(&accept->base, TCPD_CONN_TYPE_ACCEPT, mainthread);
     accept->base.config = server->config;  // Copy server config
 
-    luaL_getmetatable(co, LUA_TCPD_ACCEPT_TYPE);
-    lua_setmetatable(co, -2);
+    luaL_getmetatable(cbs.co, LUA_TCPD_ACCEPT_TYPE);
+    lua_setmetatable(cbs.co, -2);
 
     struct event_base *accept_base;
     int use_worker = (event_mgr_worker_count() > 0);
@@ -74,10 +75,10 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
 
     if (!bev) {
         // Handle error
-        lua_pushnil(co);
+        lua_pushnil(cbs.co);
         lua_unlock(mainthread);
-        FAN_RESUME(co, mainthread, 1);
-        POP_REF(mainthread);
+        FAN_RESUME(cbs.co, mainthread, 1);
+        FAN_CB_CLEANUP(mainthread, cbs);
         return;
     }
 
@@ -115,18 +116,18 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     int argc = 1;
     if (server->config.callback_self_first) {
         // Push server object as first parameter, then accept object
-        utlua_push_self_from_weak_table(co, server);
-        if (!lua_isnil(co, -1)) {
-            lua_insert(co, -2);  // Move server object before accept object
+        utlua_push_self_from_weak_table(cbs.co, server);
+        if (!lua_isnil(cbs.co, -1)) {
+            lua_insert(cbs.co, -2);  // Move server object before accept object
             argc = 2;
         } else {
-            lua_pop(co, 1);  // pop nil
+            lua_pop(cbs.co, 1);  // pop nil
         }
     }
 
     lua_unlock(mainthread);
-    FAN_RESUME(co, mainthread, argc);
-    POP_REF(mainthread);
+    FAN_RESUME(cbs.co, mainthread, argc);
+    FAN_CB_CLEANUP(mainthread, cbs);
 }
 
 // Server rebind function implementation

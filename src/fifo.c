@@ -27,24 +27,25 @@ static void fifo_write_cb(evutil_socket_t fd, short event, void *arg) {
     if (fifo->onSendReadyRef != LUA_NOREF) {
         lua_State *mainthread = fifo->mainthread;
         lua_lock(mainthread);
-        lua_State *co = lua_newthread(mainthread);
-        PUSH_REF(mainthread);
-
-        lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onSendReadyRef);
+        fan_cb_setup_t cbs = fan_cb_setup(mainthread, fifo->onSendReadyRef);
+        if (!cbs.co) {
+            lua_unlock(mainthread);
+            return;
+        }
 
         // Guard: verify the registry slot still holds a function
-        if (!lua_isfunction(co, -1)) {
+        if (!lua_isfunction(cbs.co, -1)) {
             LOGE("fifo_write_cb: onSendReadyRef=%d resolved to %s, expected function\n",
-                 fifo->onSendReadyRef, luaL_typename(co, -1));
-            lua_pop(co, 1);
+                 fifo->onSendReadyRef, luaL_typename(cbs.co, -1));
+            lua_pop(cbs.co, 1);
             lua_unlock(mainthread);
-            POP_REF(mainthread);
+            FAN_CB_CLEANUP(mainthread, cbs);
             return;
         }
 
         lua_unlock(mainthread);
-        FAN_RESUME(co, mainthread, 0);
-        POP_REF(mainthread);
+        FAN_RESUME(cbs.co, mainthread, 0);
+        FAN_CB_CLEANUP(mainthread, cbs);
     }
 }
 
@@ -62,26 +63,27 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
         if (fifo->onDisconnectedRef != LUA_NOREF) {
             lua_State *mainthread = fifo->mainthread;
             lua_lock(mainthread);
-            lua_State *co = lua_newthread(mainthread);
-            PUSH_REF(mainthread);
-
-            lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
-
-            // Guard: verify the registry slot still holds a function
-            if (!lua_isfunction(co, -1)) {
-                LOGE("fifo_read_cb(disconnect): onDisconnectedRef=%d resolved to %s, expected function\n",
-                     fifo->onDisconnectedRef, luaL_typename(co, -1));
-                lua_pop(co, 1);
+            fan_cb_setup_t cbs = fan_cb_setup(mainthread, fifo->onDisconnectedRef);
+            if (!cbs.co) {
                 lua_unlock(mainthread);
-                POP_REF(mainthread);
                 return;
             }
 
-            lua_pushstring(co, len < 0 && errno ? strerror(errno) : "pipe closed.");
+            // Guard: verify the registry slot still holds a function
+            if (!lua_isfunction(cbs.co, -1)) {
+                LOGE("fifo_read_cb(disconnect): onDisconnectedRef=%d resolved to %s, expected function\n",
+                     fifo->onDisconnectedRef, luaL_typename(cbs.co, -1));
+                lua_pop(cbs.co, 1);
+                lua_unlock(mainthread);
+                FAN_CB_CLEANUP(mainthread, cbs);
+                return;
+            }
+
+            lua_pushstring(cbs.co, len < 0 && errno ? strerror(errno) : "pipe closed.");
 
             lua_unlock(mainthread);
-            FAN_RESUME(co, mainthread, 1);
-            POP_REF(mainthread);
+            FAN_RESUME(cbs.co, mainthread, 1);
+            FAN_CB_CLEANUP(mainthread, cbs);
         } else {
             printf("fifo_read_cb:%s: %s\n", fifo->name, len < 0 && errno ? strerror(errno) : "pipe closed.");
         }
@@ -96,25 +98,26 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
     if (fifo->onReadRef != LUA_NOREF) {
         lua_State *mainthread = fifo->mainthread;
         lua_lock(mainthread);
-        lua_State *co = lua_newthread(mainthread);
-        PUSH_REF(mainthread);
-
-        lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onReadRef);
-
-        // Guard: verify the registry slot still holds a function
-        if (!lua_isfunction(co, -1)) {
-            LOGE("fifo_read_cb(data): onReadRef=%d resolved to %s, expected function\n",
-                 fifo->onReadRef, luaL_typename(co, -1));
-            lua_pop(co, 1);
+        fan_cb_setup_t cbs = fan_cb_setup(mainthread, fifo->onReadRef);
+        if (!cbs.co) {
             lua_unlock(mainthread);
-            POP_REF(mainthread);
             return;
         }
 
-        lua_pushlstring(co, buf, len);
+        // Guard: verify the registry slot still holds a function
+        if (!lua_isfunction(cbs.co, -1)) {
+            LOGE("fifo_read_cb(data): onReadRef=%d resolved to %s, expected function\n",
+                 fifo->onReadRef, luaL_typename(cbs.co, -1));
+            lua_pop(cbs.co, 1);
+            lua_unlock(mainthread);
+            FAN_CB_CLEANUP(mainthread, cbs);
+            return;
+        }
+
+        lua_pushlstring(cbs.co, buf, len);
         lua_unlock(mainthread);
-        FAN_RESUME(co, mainthread, 1);
-        POP_REF(mainthread);
+        FAN_RESUME(cbs.co, mainthread, 1);
+        FAN_CB_CLEANUP(mainthread, cbs);
     }
 }
 
@@ -255,26 +258,27 @@ LUA_API int luafan_fifo_send(lua_State *L) {
             if (fifo->onDisconnectedRef != LUA_NOREF) {
                 lua_State *mainthread = fifo->mainthread;
                 lua_lock(mainthread);
-                lua_State *co = lua_newthread(mainthread);
-                PUSH_REF(mainthread);
-
-                lua_rawgeti(co, LUA_REGISTRYINDEX, fifo->onDisconnectedRef);
-
-                // Guard: verify the registry slot still holds a function
-                if (!lua_isfunction(co, -1)) {
-                    LOGE("luafan_fifo_send(disconnect): onDisconnectedRef=%d resolved to %s, expected function\n",
-                         fifo->onDisconnectedRef, luaL_typename(co, -1));
-                    lua_pop(co, 1);
+                fan_cb_setup_t cbs = fan_cb_setup(mainthread, fifo->onDisconnectedRef);
+                if (!cbs.co) {
                     lua_unlock(mainthread);
-                    POP_REF(mainthread);
                     goto after_send_disconnect;
                 }
 
-                lua_pushstring(co, len < 0 && errno ? strerror(errno) : "pipe closed.");
+                // Guard: verify the registry slot still holds a function
+                if (!lua_isfunction(cbs.co, -1)) {
+                    LOGE("luafan_fifo_send(disconnect): onDisconnectedRef=%d resolved to %s, expected function\n",
+                         fifo->onDisconnectedRef, luaL_typename(cbs.co, -1));
+                    lua_pop(cbs.co, 1);
+                    lua_unlock(mainthread);
+                    FAN_CB_CLEANUP(mainthread, cbs);
+                    goto after_send_disconnect;
+                }
+
+                lua_pushstring(cbs.co, len < 0 && errno ? strerror(errno) : "pipe closed.");
 
                 lua_unlock(mainthread);
-                FAN_RESUME(co, mainthread, 1);
-                POP_REF(mainthread);
+                FAN_RESUME(cbs.co, mainthread, 1);
+                FAN_CB_CLEANUP(mainthread, cbs);
             } else {
                 printf("luafan_fifo_send:%s: %s\n", fifo->name, len < 0 && errno ? strerror(errno) : "pipe closed.");
             }

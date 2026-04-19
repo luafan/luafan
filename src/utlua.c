@@ -1,5 +1,11 @@
 #include "utlua.h"
 
+#if TARGET_OS_IPHONE
+#include <lua53/luauser.h>
+#else
+#include <luauser.h>
+#endif
+
 int GLOBAL_VERBOSE = 0;
 
 #if (LUA_VERSION_NUM < 502)
@@ -128,6 +134,47 @@ void server_setup_certs(SSL_CTX *ctx, const char *certificate_chain, const char 
         die_most_horribly_from_openssl_error("SSL_CTX_check_private_key");
 }
 #endif
+
+// Protected callback setup implementation.
+// Upvalue 1: callback_ref (integer)
+static int fan_cb_setup_inner(lua_State *L) {
+    int callback_ref = (int)lua_tointeger(L, lua_upvalueindex(1));
+    lua_State *co = lua_newthread(L);
+    // luaL_ref the thread (dup it first so the thread stays on the stack)
+    lua_pushvalue(L, -1);
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    // Load the callback function onto co
+    lua_rawgeti(co, LUA_REGISTRYINDEX, callback_ref);
+    // Return thread and ref integer
+    lua_pushinteger(L, ref);
+    return 2;  // returns: thread, ref_integer
+}
+
+fan_cb_setup_t fan_cb_setup(lua_State *L, int callback_ref) {
+    fan_cb_setup_t result = { NULL, LUA_NOREF };
+    int saved_depth = LuaLockDepthGet();
+
+    // Push inner function with callback_ref as upvalue
+    lua_pushinteger(L, callback_ref);
+    lua_pushcclosure(L, fan_cb_setup_inner, 1);
+
+    int status = lua_pcall(L, 0, 2, 0);
+    if (status != LUA_OK) {
+        // OOM or other error — restore lock depth
+        LOGE("[fan_cb_setup] protected setup failed: %s\n",
+             lua_tostring(L, -1));
+        lua_pop(L, 1);
+        LuaLockDepthSet(saved_depth);
+        return result;
+    }
+
+    // Extract results: stack has [thread, ref_integer]
+    result.thread_ref = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    result.co = lua_tothread(L, -1);
+    lua_pop(L, 1);
+    return result;
+}
 
 // Shared weak table functions for TCP/UDP connection self-references
 void utlua_store_self_in_weak_table(lua_State *L, void *conn_ptr, int self_index) {

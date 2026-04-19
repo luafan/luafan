@@ -507,32 +507,34 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req, LuaServer *server)
 
     lua_State *mainthread = server->mainthread;
     lua_lock(mainthread);
-    lua_State *co = lua_newthread(mainthread);
-    PUSH_REF(mainthread);
-
-    lua_rawgeti(co, LUA_REGISTRYINDEX, server->onServiceRef);
-
-    // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(co, -1)) {
-        LOGE("httpd gen_cb: onServiceRef=%d resolved to %s, expected function\n",
-             server->onServiceRef, luaL_typename(co, -1));
-        lua_pop(co, 1);
+    fan_cb_setup_t cbs = fan_cb_setup(mainthread, server->onServiceRef);
+    if (!cbs.co) {
         lua_unlock(mainthread);
-        POP_REF(mainthread);
         evhttp_send_error(req, 500, "Internal Server Error");
         return;
     }
 
-    newtable_from_req(co, req);
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(cbs.co, -1)) {
+        LOGE("httpd gen_cb: onServiceRef=%d resolved to %s, expected function\n",
+             server->onServiceRef, luaL_typename(cbs.co, -1));
+        lua_pop(cbs.co, 1);
+        lua_unlock(mainthread);
+        FAN_CB_CLEANUP(mainthread, cbs);
+        evhttp_send_error(req, 500, "Internal Server Error");
+        return;
+    }
 
-    luaL_getmetatable(co, LUA_EVHTTP_REQUEST_TYPE);
-    lua_setmetatable(co, -2);
+    newtable_from_req(cbs.co, req);
 
-    lua_pushvalue(co, -1); // duplicate for req,resp
+    luaL_getmetatable(cbs.co, LUA_EVHTTP_REQUEST_TYPE);
+    lua_setmetatable(cbs.co, -2);
+
+    lua_pushvalue(cbs.co, -1); // duplicate for req,resp
 
     lua_unlock(mainthread);
-    FAN_RESUME(co, mainthread, 2);
-    POP_REF(mainthread);
+    FAN_RESUME(cbs.co, mainthread, 2);
+    FAN_CB_CLEANUP(mainthread, cbs);
 }
 
 static void request_push_body(lua_State *L, int idx) {

@@ -216,19 +216,16 @@ TEST_CASE(test_utlua_lua_version_compatibility) {
     lua_close(L);
 }
 
-/* Test debug tracking macros (basic functionality) */
+/* Test thread ref management (formerly PUSH_REF/POP_REF) */
 TEST_CASE(test_utlua_debug_macros) {
     lua_State *L = luaL_newstate();
     TEST_ASSERT_NOT_NULL(L);
 
     luaL_openlibs(L);
 
-    // Test PUSH_REF and POP_REF macros
+    // Test direct luaL_ref / luaL_unref for thread pinning
     lua_pushstring(L, "test_string");
-
-    // These macros expand differently based on DEBUG_THREAD_TRACKING
-    // We'll test that they work regardless of debug mode
-    PUSH_REF(L);
+    int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX);
 
     // Verify the reference was created
     lua_rawgeti(L, LUA_REGISTRYINDEX, _ref_);
@@ -238,7 +235,7 @@ TEST_CASE(test_utlua_debug_macros) {
     lua_pop(L, 1);
 
     // Clean up the reference
-    POP_REF(L);
+    luaL_unref(L, LUA_REGISTRYINDEX, _ref_);
 
     lua_close(L);
 }

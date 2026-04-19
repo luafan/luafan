@@ -51,18 +51,20 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
         bytearray_dealloc(&ba);
         return;
     }
-    lua_State *co = lua_newthread(mainthread);
-    PUSH_REF(mainthread);
-
-    lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
+    fan_cb_setup_t cbs = fan_cb_setup(mainthread, conn->onReadRef);
+    if (!cbs.co) {
+        lua_unlock(mainthread);
+        bytearray_dealloc(&ba);
+        return;
+    }
 
     // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(co, -1)) {
+    if (!lua_isfunction(cbs.co, -1)) {
         LOGE("tcpd_common_readcb: onReadRef=%d resolved to %s, expected function\n",
-             conn->onReadRef, luaL_typename(co, -1));
-        lua_pop(co, 1);
+             conn->onReadRef, luaL_typename(cbs.co, -1));
+        lua_pop(cbs.co, 1);
         lua_unlock(mainthread);
-        POP_REF(mainthread);
+        FAN_CB_CLEANUP(mainthread, cbs);
         bytearray_dealloc(&ba);
         return;
     }
@@ -70,17 +72,17 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
     // Check if callback_self_first is enabled
     int argc = 1;
     if (conn->config.callback_self_first) {
-        tcpd_push_connection_object(co, conn);
-        lua_pushlstring(co, (const char *)ba.buffer, ba.total);
+        tcpd_push_connection_object(cbs.co, conn);
+        lua_pushlstring(cbs.co, (const char *)ba.buffer, ba.total);
         argc = 2;
     } else {
-        lua_pushlstring(co, (const char *)ba.buffer, ba.total);
+        lua_pushlstring(cbs.co, (const char *)ba.buffer, ba.total);
         argc = 1;
     }
 
     lua_unlock(mainthread);
-    FAN_RESUME(co, mainthread, argc);
-    POP_REF(mainthread);
+    FAN_RESUME(cbs.co, mainthread, argc);
+    FAN_CB_CLEANUP(mainthread, cbs);
 
     bytearray_dealloc(&ba);
 }
@@ -103,31 +105,32 @@ void tcpd_common_writecb(struct bufferevent *bev, void *ctx) {
             lua_unlock(mainthread);
             return;
         }
-        lua_State *co = lua_newthread(mainthread);
-        PUSH_REF(mainthread);
-
-        lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
+        fan_cb_setup_t cbs = fan_cb_setup(mainthread, conn->onSendReadyRef);
+        if (!cbs.co) {
+            lua_unlock(mainthread);
+            return;
+        }
 
         // Guard: verify the registry slot still holds a function
-        if (!lua_isfunction(co, -1)) {
+        if (!lua_isfunction(cbs.co, -1)) {
             LOGE("tcpd_common_writecb: onSendReadyRef=%d resolved to %s, expected function\n",
-                 conn->onSendReadyRef, luaL_typename(co, -1));
-            lua_pop(co, 1);
+                 conn->onSendReadyRef, luaL_typename(cbs.co, -1));
+            lua_pop(cbs.co, 1);
             lua_unlock(mainthread);
-            POP_REF(mainthread);
+            FAN_CB_CLEANUP(mainthread, cbs);
             return;
         }
 
         // Check if callback_self_first is enabled
         int argc = 0;
         if (conn->config.callback_self_first) {
-            tcpd_push_connection_object(co, conn);
+            tcpd_push_connection_object(cbs.co, conn);
             argc = 1;
         }
 
         lua_unlock(mainthread);
-        FAN_RESUME(co, mainthread, argc);
-        POP_REF(mainthread);
+        FAN_RESUME(cbs.co, mainthread, argc);
+        FAN_CB_CLEANUP(mainthread, cbs);
     }
 }
 
@@ -150,31 +153,32 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
                 lua_unlock(mainthread);
                 return;
             }
-            lua_State *co = lua_newthread(mainthread);
-            PUSH_REF(mainthread);
-
-            lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onConnectedRef);
+            fan_cb_setup_t cbs = fan_cb_setup(mainthread, conn->onConnectedRef);
+            if (!cbs.co) {
+                lua_unlock(mainthread);
+                return;
+            }
 
             // Guard: verify the registry slot still holds a function
-            if (!lua_isfunction(co, -1)) {
+            if (!lua_isfunction(cbs.co, -1)) {
                 LOGE("tcpd_common_eventcb(CONNECTED): onConnectedRef=%d resolved to %s, expected function\n",
-                     conn->onConnectedRef, luaL_typename(co, -1));
-                lua_pop(co, 1);
+                     conn->onConnectedRef, luaL_typename(cbs.co, -1));
+                lua_pop(cbs.co, 1);
                 lua_unlock(mainthread);
-                POP_REF(mainthread);
+                FAN_CB_CLEANUP(mainthread, cbs);
                 return;
             }
 
             // Check if callback_self_first is enabled
             int argc = 0;
             if (conn->config.callback_self_first) {
-                tcpd_push_connection_object(co, conn);
+                tcpd_push_connection_object(cbs.co, conn);
                 argc = 1;
             }
 
             lua_unlock(mainthread);
-            FAN_RESUME(co, mainthread, argc);
-            POP_REF(mainthread);
+            FAN_RESUME(cbs.co, mainthread, argc);
+            FAN_CB_CLEANUP(mainthread, cbs);
         }
         return;
     }
@@ -212,35 +216,37 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
                     bytearray_dealloc(&ba);
                     goto after_eof_read;
                 }
-                lua_State *co = lua_newthread(mainthread);
-                PUSH_REF(mainthread);
-
-                lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
+                fan_cb_setup_t cbs = fan_cb_setup(mainthread, conn->onReadRef);
+                if (!cbs.co) {
+                    lua_unlock(mainthread);
+                    bytearray_dealloc(&ba);
+                    goto after_eof_read;
+                }
 
                 // Guard: verify the registry slot still holds a function
-                if (!lua_isfunction(co, -1)) {
+                if (!lua_isfunction(cbs.co, -1)) {
                     LOGE("tcpd_common_eventcb(EOF read): onReadRef=%d resolved to %s, expected function\n",
-                         conn->onReadRef, luaL_typename(co, -1));
-                    lua_pop(co, 1);
+                         conn->onReadRef, luaL_typename(cbs.co, -1));
+                    lua_pop(cbs.co, 1);
                     lua_unlock(mainthread);
-                    POP_REF(mainthread);
+                    FAN_CB_CLEANUP(mainthread, cbs);
                     bytearray_dealloc(&ba);
                     goto after_eof_read;
                 }
 
                 int argc = 1;
                 if (conn->config.callback_self_first) {
-                    tcpd_push_connection_object(co, conn);
-                    lua_pushlstring(co, (const char *)ba.buffer, ba.total);
+                    tcpd_push_connection_object(cbs.co, conn);
+                    lua_pushlstring(cbs.co, (const char *)ba.buffer, ba.total);
                     argc = 2;
                 } else {
-                    lua_pushlstring(co, (const char *)ba.buffer, ba.total);
+                    lua_pushlstring(cbs.co, (const char *)ba.buffer, ba.total);
                     argc = 1;
                 }
 
                 lua_unlock(mainthread);
-                FAN_RESUME(co, mainthread, argc);
-                POP_REF(mainthread);
+                FAN_RESUME(cbs.co, mainthread, argc);
+                FAN_CB_CLEANUP(mainthread, cbs);
 
                 bytearray_dealloc(&ba);
             }
@@ -280,42 +286,43 @@ after_eof_read:
                 lua_unlock(mainthread);
                 goto after_disconnect_cb;
             }
-            lua_State *co = lua_newthread(mainthread);
-            PUSH_REF(mainthread);
-
-            lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onDisconnectedRef);
+            fan_cb_setup_t cbs = fan_cb_setup(mainthread, conn->onDisconnectedRef);
+            if (!cbs.co) {
+                lua_unlock(mainthread);
+                goto after_disconnect_cb;
+            }
 
             // Guard: verify the registry slot still holds a function
-            if (!lua_isfunction(co, -1)) {
+            if (!lua_isfunction(cbs.co, -1)) {
                 LOGE("tcpd_common_eventcb(DISCONNECT): onDisconnectedRef=%d resolved to %s, expected function\n",
-                     conn->onDisconnectedRef, luaL_typename(co, -1));
-                lua_pop(co, 1);
+                     conn->onDisconnectedRef, luaL_typename(cbs.co, -1));
+                lua_pop(cbs.co, 1);
                 lua_unlock(mainthread);
-                POP_REF(mainthread);
+                FAN_CB_CLEANUP(mainthread, cbs);
                 goto after_disconnect_cb;
             }
 
             // Check if callback_self_first is enabled
             int argc = 1;
             if (conn->config.callback_self_first) {
-                tcpd_push_connection_object(co, conn);
+                tcpd_push_connection_object(cbs.co, conn);
                 argc = 2;
             }
 
             // Push error message
             const char *error_msg = tcpd_error_to_string(&error);
             if (error_msg) {
-                lua_pushstring(co, error_msg);
+                lua_pushstring(cbs.co, error_msg);
             } else {
-                lua_pushnil(co);
+                lua_pushnil(cbs.co);
             }
 
             // Clear the callback reference
             CLEAR_REF(mainthread, conn->onDisconnectedRef);
 
             lua_unlock(mainthread);
-            FAN_RESUME(co, mainthread, argc);
-            POP_REF(mainthread);
+            FAN_RESUME(cbs.co, mainthread, argc);
+            FAN_CB_CLEANUP(mainthread, cbs);
         }
 after_disconnect_cb:
 

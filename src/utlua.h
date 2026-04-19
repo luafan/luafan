@@ -172,29 +172,7 @@ void thread_tracker_register_lua_functions(lua_State *L);
 #define TOSTRING(x) STRINGIFY(x)
 #endif
 
-#if DEBUG_THREAD_TRACKING
-#define PUSH_REF(L)                                                                                                    \
-    lua_lock(L);                                                                                                       \
-    int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                                                        \
-    thread_tracker_log_create(__FILE__ ":" TOSTRING(__LINE__), _ref_);                                                \
-    lua_unlock(L);
-
-#define POP_REF(L)                                                                                                     \
-    lua_lock(L);                                                                                                       \
-    thread_tracker_log_destroy(__FILE__ ":" TOSTRING(__LINE__), _ref_);                                               \
-    luaL_unref(L, LUA_REGISTRYINDEX, _ref_);                                                                           \
-    lua_unlock(L);
-#else
-#define PUSH_REF(L)                                                                                                    \
-    lua_lock(L);                                                                                                       \
-    int _ref_ = luaL_ref(L, LUA_REGISTRYINDEX);                                                                        \
-    lua_unlock(L);
-
-#define POP_REF(L)                                                                                                     \
-    lua_lock(L);                                                                                                       \
-    luaL_unref(L, LUA_REGISTRYINDEX, _ref_);                                                                           \
-    lua_unlock(L);
-#endif
+// PUSH_REF/POP_REF removed — all sites now use fan_cb_setup/FAN_CB_CLEANUP
 
 #if DEBUG_THREAD_TRACKING
 #define REF_STATE_SET(obj, L)                                                                                          \
@@ -341,6 +319,25 @@ void regress_get_socket_host(evutil_socket_t fd, char *host);
 // Shared weak table functions for TCP/UDP connection self-references
 void utlua_store_self_in_weak_table(lua_State *L, void *conn_ptr, int self_index);
 void utlua_push_self_from_weak_table(lua_State *L, void *conn_ptr);
+
+// Protected callback setup — runs lua_newthread + luaL_ref + lua_rawgeti
+// inside lua_pcall so that OOM longjmp cannot leak the lua_lock.
+typedef struct {
+    lua_State *co;    // the new coroutine thread (NULL on failure)
+    int thread_ref;   // registry ref for the thread (LUA_NOREF on failure)
+} fan_cb_setup_t;
+
+fan_cb_setup_t fan_cb_setup(lua_State *L, int callback_ref);
+
+#define FAN_CB_CLEANUP(L, cbs) \
+    do { \
+        lua_lock(L); \
+        if ((cbs).thread_ref != LUA_NOREF) { \
+            luaL_unref(L, LUA_REGISTRYINDEX, (cbs).thread_ref); \
+            (cbs).thread_ref = LUA_NOREF; \
+        } \
+        lua_unlock(L); \
+    } while(0)
 
 #if FAN_HAS_OPENSSL
 void die_most_horribly_from_openssl_error(const char *func);

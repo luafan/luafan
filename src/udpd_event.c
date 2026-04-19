@@ -70,31 +70,32 @@ void udpd_common_writecb(evutil_socket_t fd, short what, void *ctx) {
     // Call Lua send ready callback
     lua_State *mainthread = conn->mainthread;
     lua_lock(mainthread);
-    lua_State *co = lua_newthread(mainthread);
-    PUSH_REF(mainthread);
-
-    lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onSendReadyRef);
+    fan_cb_setup_t cbs = fan_cb_setup(mainthread, conn->onSendReadyRef);
+    if (!cbs.co) {
+        lua_unlock(mainthread);
+        return;
+    }
 
     // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(co, -1)) {
+    if (!lua_isfunction(cbs.co, -1)) {
         LOGE("udpd_common_writecb: onSendReadyRef=%d resolved to %s, expected function\n",
-             conn->onSendReadyRef, luaL_typename(co, -1));
-        lua_pop(co, 1);
+             conn->onSendReadyRef, luaL_typename(cbs.co, -1));
+        lua_pop(cbs.co, 1);
         lua_unlock(mainthread);
-        POP_REF(mainthread);
+        FAN_CB_CLEANUP(mainthread, cbs);
         return;
     }
 
     int argc = 0;
     // Check if callback_self_first is enabled
     if (conn->config.base.callback_self_first) {
-        udpd_push_connection_object(co, conn);
+        udpd_push_connection_object(cbs.co, conn);
         argc = 1;
     }
 
     lua_unlock(mainthread);
-    FAN_RESUME(co, mainthread, argc);
-    POP_REF(mainthread);
+    FAN_RESUME(cbs.co, mainthread, argc);
+    FAN_CB_CLEANUP(mainthread, cbs);
 }
 
 // Process received UDP data
@@ -104,37 +105,37 @@ void udpd_process_received_data(udpd_base_conn_t *conn, const char *data, size_t
 
     lua_State *mainthread = conn->mainthread;
     lua_lock(mainthread);
-    lua_State *co = lua_newthread(mainthread);
-    PUSH_REF(mainthread);
-
-    // Push read callback function
-    lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onReadRef);
+    fan_cb_setup_t cbs = fan_cb_setup(mainthread, conn->onReadRef);
+    if (!cbs.co) {
+        lua_unlock(mainthread);
+        return;
+    }
 
     // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(co, -1)) {
+    if (!lua_isfunction(cbs.co, -1)) {
         LOGE("udpd_process_received_data: onReadRef=%d resolved to %s, expected function\n",
-             conn->onReadRef, luaL_typename(co, -1));
-        lua_pop(co, 1);
+             conn->onReadRef, luaL_typename(cbs.co, -1));
+        lua_pop(cbs.co, 1);
         lua_unlock(mainthread);
-        POP_REF(mainthread);
+        FAN_CB_CLEANUP(mainthread, cbs);
         return;
     }
 
     int argc = 0;
     // Check if callback_self_first is enabled
     if (conn->config.base.callback_self_first) {
-        udpd_push_connection_object(co, conn);
+        udpd_push_connection_object(cbs.co, conn);
         argc++;
     }
 
     // Push received data
-    lua_pushlstring(co, data, len);
+    lua_pushlstring(cbs.co, data, len);
     argc++;
 
     // Create destination object for sender
-    udpd_dest_t *dest = lua_newuserdata(co, sizeof(udpd_dest_t));
-    luaL_getmetatable(co, LUA_UDPD_DEST_TYPE);
-    lua_setmetatable(co, -2);
+    udpd_dest_t *dest = lua_newuserdata(cbs.co, sizeof(udpd_dest_t));
+    luaL_getmetatable(cbs.co, LUA_UDPD_DEST_TYPE);
+    lua_setmetatable(cbs.co, -2);
 
     // Initialize destination with sender's address
     memcpy(&dest->addr, from_addr, from_len);
@@ -143,14 +144,14 @@ void udpd_process_received_data(udpd_base_conn_t *conn, const char *data, size_t
     dest->port = udpd_dest_get_port(dest);
 
     // Store destination in weak table
-    utlua_store_self_in_weak_table(co, dest, lua_gettop(co));
+    utlua_store_self_in_weak_table(cbs.co, dest, lua_gettop(cbs.co));
 
     argc++;
 
     // Resume coroutine with data and sender info (and self if enabled)
     lua_unlock(mainthread);
-    FAN_RESUME(co, mainthread, argc);
-    POP_REF(mainthread);
+    FAN_RESUME(cbs.co, mainthread, argc);
+    FAN_CB_CLEANUP(mainthread, cbs);
 }
 
 // Handle read errors

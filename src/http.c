@@ -497,27 +497,29 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata) {
         lua_pushinteger(L, responseCode);
         lua_rawset(L, -3); // header table
 
-        lua_State *co = lua_newthread(L);
-        PUSH_REF(L);
-
-        lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onheaderref);
-
-        // Guard: verify the registry slot still holds a function
-        if (!lua_isfunction(co, -1)) {
-            LOGE("http onheader: onheaderref=%d resolved to %s, expected function\n",
-                 conn->onheaderref, luaL_typename(co, -1));
-            lua_pop(co, 1);
+        fan_cb_setup_t cbs = fan_cb_setup(L, conn->onheaderref);
+        if (!cbs.co) {
             lua_pop(L, 1); // pop header table
             lua_unlock(L);
-            POP_REF(L);
             return size * nmemb;
         }
 
-        lua_xmove(L, co, 1);
+        // Guard: verify the registry slot still holds a function
+        if (!lua_isfunction(cbs.co, -1)) {
+            LOGE("http onheader: onheaderref=%d resolved to %s, expected function\n",
+                 conn->onheaderref, luaL_typename(cbs.co, -1));
+            lua_pop(cbs.co, 1);
+            lua_pop(L, 1); // pop header table
+            lua_unlock(L);
+            FAN_CB_CLEANUP(L, cbs);
+            return size * nmemb;
+        }
 
-        FAN_RESUME(co, L, 1);
+        lua_xmove(L, cbs.co, 1);
 
-        POP_REF(L);
+        FAN_RESUME(cbs.co, L, 1);
+
+        FAN_CB_CLEANUP(L, cbs);
     } else {
         lua_pop(L, 1); // pop header table
     }
@@ -532,36 +534,37 @@ static int onprogress(void *clientp, double dltotal, double dlnow, double ultota
     lua_State *L = conn->mainthread;
 
     lua_lock(L);
-    lua_State *co = lua_newthread(L);
-    PUSH_REF(L);
-
-    lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onprogressref);
-
-    // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(co, -1)) {
-        LOGE("http onprogress: onprogressref=%d resolved to %s, expected function\n",
-             conn->onprogressref, luaL_typename(co, -1));
-        lua_pop(co, 1);
+    fan_cb_setup_t cbs = fan_cb_setup(L, conn->onprogressref);
+    if (!cbs.co) {
         lua_unlock(L);
-        POP_REF(L);
         return 0;
     }
 
-    lua_pushinteger(co, dltotal);
-    lua_pushinteger(co, dlnow);
-    lua_pushinteger(co, ultotal);
-    lua_pushinteger(co, ulnow);
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(cbs.co, -1)) {
+        LOGE("http onprogress: onprogressref=%d resolved to %s, expected function\n",
+             conn->onprogressref, luaL_typename(cbs.co, -1));
+        lua_pop(cbs.co, 1);
+        lua_unlock(L);
+        FAN_CB_CLEANUP(L, cbs);
+        return 0;
+    }
+
+    lua_pushinteger(cbs.co, dltotal);
+    lua_pushinteger(cbs.co, dlnow);
+    lua_pushinteger(cbs.co, ultotal);
+    lua_pushinteger(cbs.co, ulnow);
 
     lua_unlock(L);
-    int status = FAN_RESUME(co, L, 4);
+    int status = FAN_RESUME(cbs.co, L, 4);
     long ret = 0;
-    if (status == 0 && lua_gettop(co) > 0) {
-        if (lua_type(co, 1) == LUA_TNUMBER) {
-            ret = lua_tointeger(co, 1);
+    if (status == 0 && lua_gettop(cbs.co) > 0) {
+        if (lua_type(cbs.co, 1) == LUA_TNUMBER) {
+            ret = lua_tointeger(cbs.co, 1);
         }
     }
 
-    POP_REF(L);
+    FAN_CB_CLEANUP(L, cbs);
 
     return (int)ret;
 }
@@ -571,34 +574,36 @@ static size_t onwrite(char *ptr, size_t size, size_t nmemb, void *userdata) {
     lua_State *L = conn->mainthread;
 
     lua_lock(L);
-    lua_State *co = lua_newthread(L);
-    PUSH_REF(L);
-    lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onwriteref);
-
-    // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(co, -1)) {
-        LOGE("http onwrite: onwriteref=%d resolved to %s, expected function\n",
-             conn->onwriteref, luaL_typename(co, -1));
-        lua_pop(co, 1);
+    fan_cb_setup_t cbs = fan_cb_setup(L, conn->onwriteref);
+    if (!cbs.co) {
         lua_unlock(L);
-        POP_REF(L);
         return size * nmemb;
     }
 
-    lua_pushlstring(co, ptr, size * nmemb);
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(cbs.co, -1)) {
+        LOGE("http onwrite: onwriteref=%d resolved to %s, expected function\n",
+             conn->onwriteref, luaL_typename(cbs.co, -1));
+        lua_pop(cbs.co, 1);
+        lua_unlock(L);
+        FAN_CB_CLEANUP(L, cbs);
+        return size * nmemb;
+    }
+
+    lua_pushlstring(cbs.co, ptr, size * nmemb);
 
     lua_unlock(L);
-    int status = FAN_RESUME(co, L, 1);
+    int status = FAN_RESUME(cbs.co, L, 1);
     long ret = 0;
-    if (status == 0 && lua_gettop(co) > 0) {
-        if (lua_type(co, 1) == LUA_TNUMBER) {
-            ret = lua_tointeger(co, 1);
+    if (status == 0 && lua_gettop(cbs.co) > 0) {
+        if (lua_type(cbs.co, 1) == LUA_TNUMBER) {
+            ret = lua_tointeger(cbs.co, 1);
         }
     } else {
         ret = size * nmemb;
     }
 
-    POP_REF(L);
+    FAN_CB_CLEANUP(L, cbs);
 
     return (int)ret;
 }
@@ -608,41 +613,42 @@ static size_t onread(void *ptr, size_t size, size_t nmemb, void *userdata) {
     lua_State *L = conn->mainthread;
 
     lua_lock(L);
-    lua_State *co = lua_newthread(L);
-    PUSH_REF(L);
-
-    size_t accept_size = size * nmemb;
-
-    lua_rawgeti(co, LUA_REGISTRYINDEX, conn->onreadref);
-
-    // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(co, -1)) {
-        LOGE("http onread: onreadref=%d resolved to %s, expected function\n",
-             conn->onreadref, luaL_typename(co, -1));
-        lua_pop(co, 1);
+    fan_cb_setup_t cbs = fan_cb_setup(L, conn->onreadref);
+    if (!cbs.co) {
         lua_unlock(L);
-        POP_REF(L);
         return 0;
     }
 
-    lua_pushinteger(co, accept_size);
+    size_t accept_size = size * nmemb;
+
+    // Guard: verify the registry slot still holds a function
+    if (!lua_isfunction(cbs.co, -1)) {
+        LOGE("http onread: onreadref=%d resolved to %s, expected function\n",
+             conn->onreadref, luaL_typename(cbs.co, -1));
+        lua_pop(cbs.co, 1);
+        lua_unlock(L);
+        FAN_CB_CLEANUP(L, cbs);
+        return 0;
+    }
+
+    lua_pushinteger(cbs.co, accept_size);
 
     lua_unlock(L);
-    int status = FAN_RESUME(co, L, 1);
+    int status = FAN_RESUME(cbs.co, L, 1);
     long ret = 0;
-    if (status == 0 && lua_gettop(co) > 0) {
-        if (lua_isstring(co, 1)) {
+    if (status == 0 && lua_gettop(cbs.co) > 0) {
+        if (lua_isstring(cbs.co, 1)) {
             size_t len = 0;
-            const char *str = lua_tolstring(co, 1, &len);
+            const char *str = lua_tolstring(cbs.co, 1, &len);
             ret = accept_size < len ? accept_size : len;
             memcpy(ptr, str, ret);
-        } else if (lua_isnil(co, 1) && lua_gettop(co) > 1) {
-            if (lua_isstring(co, 2) && strcasecmp(lua_tostring(co, 2), "abort") == 0) {
+        } else if (lua_isnil(cbs.co, 1) && lua_gettop(cbs.co) > 1) {
+            if (lua_isstring(cbs.co, 2) && strcasecmp(lua_tostring(cbs.co, 2), "abort") == 0) {
                 ret = CURL_READFUNC_ABORT;
             }
         }
     }
-    POP_REF(L);
+    FAN_CB_CLEANUP(L, cbs);
     return ret;
 }
 

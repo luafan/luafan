@@ -19,17 +19,19 @@ static void main_handler(const int fd, const short which, void *arg) {
     free(mainevent);
 
     lua_lock(mainState);
-    lua_State *co = lua_newthread(mainState);
-    PUSH_REF(mainState);
+    fan_cb_setup_t cbs = fan_cb_setup(mainState, main_ref);
+    if (!cbs.co) {
+        lua_unlock(mainState);
+        return;
+    }
+
     lua_unlock(mainState);
+    FAN_RESUME(cbs.co, mainState, 0);
 
-    lua_rawgeti(co, LUA_REGISTRYINDEX, main_ref);
-    FAN_RESUME(co, NULL, 0);
-
-    luaL_unref(co, LUA_REGISTRYINDEX, main_ref);
+    luaL_unref(cbs.co, LUA_REGISTRYINDEX, main_ref);
     main_ref = LUA_NOREF;
 
-    POP_REF(mainState);
+    FAN_CB_CLEANUP(mainState, cbs);
 }
 
 LUA_API int luafan_start(lua_State *L) {
