@@ -59,6 +59,7 @@ typedef struct tcpd_base_conn {
     struct bufferevent *buf;
     tcpd_conn_state_t state;
     tcpd_conn_type_t type;
+    volatile int cleaned_up;  // Guard against double cleanup from worker thread + Lua GC
 
     // Lua state and callbacks
     lua_State *mainthread;

@@ -332,6 +332,11 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
 static void tcpd_accept_cleanup_on_disconnect(tcpd_accept_conn_t *accept) {
     if (!accept) return;
 
+    // Atomic guard: prevent double cleanup from worker thread + Lua close/GC
+    if (__sync_bool_compare_and_swap(&accept->base.cleaned_up, 0, 1) == false) {
+        return;
+    }
+
     tcpd_base_conn_cleanup(&accept->base);
 }
 

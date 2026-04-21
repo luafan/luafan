@@ -25,6 +25,10 @@ void tcpd_connection_cleanup_on_disconnect(tcpd_base_conn_t *conn) {
             break;
         }
         default: {
+            // Atomic guard for non-client types
+            if (__sync_bool_compare_and_swap(&conn->cleaned_up, 0, 1) == false) {
+                return;
+            }
             // Basic cleanup
             lua_State *mt = conn->mainthread;
             if (mt) {
@@ -167,6 +171,11 @@ LUA_API int tcpd_connect(lua_State *L) {
 // Client cleanup
 static void tcpd_client_cleanup_on_disconnect(tcpd_client_conn_t *client) {
     if (!client) return;
+
+    // Atomic guard: prevent double cleanup from worker thread + Lua close/GC
+    if (__sync_bool_compare_and_swap(&client->base.cleaned_up, 0, 1) == false) {
+        return;
+    }
 
 #if FAN_HAS_OPENSSL
     // Clean up SSL fields
