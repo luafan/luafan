@@ -223,11 +223,11 @@ int udpd_config_validate(const udpd_config_t *config) {
     if (!config) return -1;
 
     // Validate buffer sizes from base config
-    if (config->base.receive_buffer_size <= 0 || config->base.receive_buffer_size > UDPD_MAX_PACKET_SIZE) {
+    if (config->base.receive_buffer_size <= 0) {
         return -1;
     }
 
-    if (config->base.send_buffer_size <= 0 || config->base.send_buffer_size > UDPD_MAX_PACKET_SIZE) {
+    if (config->base.send_buffer_size <= 0) {
         return -1;
     }
 

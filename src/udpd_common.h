@@ -184,7 +184,7 @@ tcpd_error_t udpd_error_from_dns_error(int dns_error);
 tcpd_error_t udpd_error_bind_failed(const char *host, int port);
 
 // Constants
-#define UDPD_DEFAULT_BUFFER_SIZE 2048
+#define UDPD_DEFAULT_BUFFER_SIZE (256 * 1024)
 #define UDPD_MAX_PACKET_SIZE 65507  // Maximum UDP packet size
 #define LUA_UDPD_CONNECTION_TYPE "UDPD_CONNECTION_TYPE"
 #define LUA_UDPD_DEST_TYPE "LUA_UDPD_DEST_TYPE"

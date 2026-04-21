@@ -17,7 +17,7 @@ void udpd_push_connection_object(lua_State *co, udpd_base_conn_t *conn) {
 // Reasonable receive buffer size to avoid stack overflow on mobile platforms.
 // Actual UDP payloads rarely exceed 1500 bytes (Ethernet MTU).
 // Packets larger than this are still received; recvfrom returns what fits.
-#define UDPD_RECV_BUFFER_SIZE 8192
+#define UDPD_RECV_BUFFER_SIZE 65536
 
 // Common read callback for UDP connections
 void udpd_common_readcb(evutil_socket_t fd, short what, void *ctx) {
@@ -29,7 +29,7 @@ void udpd_common_readcb(evutil_socket_t fd, short what, void *ctx) {
 
     struct sockaddr_storage client_addr;
     socklen_t client_len = sizeof(client_addr);
-    char buffer[UDPD_RECV_BUFFER_SIZE];
+    char buffer[UDPD_RECV_BUFFER_SIZE]; // 64KB on stack; safe for macOS/Catalyst (8MB default stack)
 
     // Receive UDP packet; MSG_TRUNC lets us detect truncation
     ssize_t len = recvfrom(fd, buffer, sizeof(buffer), MSG_TRUNC,
