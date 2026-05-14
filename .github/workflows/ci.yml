@@ -17,7 +17,7 @@ jobs:
       run: apk add --update git
 
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Build LuaFan (Alpine)
       run: |
@@ -37,7 +37,7 @@ jobs:
       run: apt update && apt install -y git
 
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Build LuaFan (Ubuntu)
       run: |
@@ -54,7 +54,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Install test dependencies
       run: |
