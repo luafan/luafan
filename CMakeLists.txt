@@ -71,6 +71,29 @@ INSTALL(TARGETS ${MODULE_NAME}
 # Testing integration
 enable_testing()
 
+# Build C test executable
+file(GLOB C_TEST_SOURCES
+    "tests/c/framework/*.c"
+    "tests/c/unit/*.c"
+)
+add_executable(run_c_tests ${C_TEST_SOURCES} ${MODULE_SOURCE})
+target_include_directories(run_c_tests PRIVATE
+    "tests/c/framework"
+    "src"
+    "/usr/include/lua5.3"
+    "/usr/local/include/lua5.3"
+    "/usr/local/include/luajit-2.0"
+    "/usr/include/luajit-2.0"
+    "/usr/local/mysql/include"
+    "/usr/local/include"
+    "/opt/homebrew/include"
+    "/opt/homebrew/opt/libevent/include"
+)
+target_link_libraries(run_c_tests event event_openssl ssl crypto curl resolv mysqlclient lua5.3 m)
+set_target_properties(run_c_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # Add custom test target that runs our comprehensive test suite
 add_custom_target(test_suite
     COMMAND cd ${CMAKE_SOURCE_DIR}/tests && ./run_all_tests.sh --all --verbose

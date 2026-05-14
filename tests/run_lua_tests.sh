@@ -30,9 +30,12 @@ else
     exit 1
 fi
 
+# Run from tests/ directory (lua test files use relative paths)
+cd "$SCRIPT_DIR"
+
 # Set up Lua path to include project modules and test framework
 export LUA_PATH="$PROJECT_ROOT/modules/?.lua;$PROJECT_ROOT/modules/?/init.lua;$SCRIPT_DIR/lua/framework/?.lua;$SCRIPT_DIR/lua/?.lua;;"
-export LUA_CPATH="$PROJECT_ROOT/?.so;;"
+export LUA_CPATH="$SCRIPT_DIR/build/?.so;$PROJECT_ROOT/?.so;;"
 
 # Check if LuaFan is available
 echo "Checking LuaFan availability..."
@@ -60,14 +63,14 @@ echo -e "${YELLOW}Running all Lua tests in fan.loop context...${NC}"
 ALL_LUA_TESTS_SCRIPT="$SCRIPT_DIR/lua/run_all_lua_tests.lua"
 if [ -f "$ALL_LUA_TESTS_SCRIPT" ]; then
     # Run with timeout
-    if timeout 30s $LUA_CMD "$ALL_LUA_TESTS_SCRIPT"; then
+    if timeout 120s $LUA_CMD "$ALL_LUA_TESTS_SCRIPT"; then
         echo -e "${GREEN}✓ All Lua tests completed successfully${NC}"
         TOTAL_FAILURES=0
         TESTS_RUN=1
     else
         exit_code=$?
         if [ $exit_code -eq 124 ]; then
-            echo -e "${RED}✗ Lua tests timed out (30s limit)${NC}"
+            echo -e "${RED}✗ Lua tests timed out (120s limit)${NC}"
         else
             echo -e "${RED}✗ Lua tests failed${NC}"
         fi

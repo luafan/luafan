@@ -5,6 +5,9 @@ Provides a simple but comprehensive testing framework for Lua modules
 
 local TestFramework = {}
 
+-- Skip sentinel for distinguishing skips from failures
+local SKIP_SENTINEL = "__TEST_SKIPPED__"
+
 -- Test result tracking
 local TestResults = {
     total_tests = 0,
@@ -84,6 +87,11 @@ local function assert_error(func, expected_error, message)
     if expected_error and not string.match(err, expected_error) then
         error(string.format("Expected error matching '%s', got '%s'", expected_error, err), 2)
     end
+end
+
+-- Skip a test with a reason
+function TestFramework.skip_test(reason)
+    error(SKIP_SENTINEL .. (reason or ""), 2)
 end
 
 -- Time utilities
@@ -260,6 +268,16 @@ local function run_test(suite, test)
         if ok then
             print(string.format("PASS (%.3fs)", duration))
             TestResults.passed_tests = TestResults.passed_tests + 1
+        elseif type(err) == "string" and string.find(err, "__TEST_EXIT__", 1, true) then
+            error(err, 0)
+        elseif type(err) == "string" and string.find(err, SKIP_SENTINEL, 1, true) then
+            local reason = string.sub(err, #SKIP_SENTINEL + 1)
+            if #reason > 0 then
+                print(string.format("SKIP: %s", reason))
+            else
+                print("SKIP")
+            end
+            TestResults.skipped_tests = TestResults.skipped_tests + 1
         else
             print(string.format("FAIL (%.3fs): %s", duration, err))
             TestResults.failed_tests = TestResults.failed_tests + 1
@@ -290,17 +308,24 @@ function TestFramework.run_suite(suite)
     if suite.setup then
         local ok, err = pcall(suite.setup)
         if not ok then
+            if type(err) == "string" and string.find(err, "__TEST_EXIT__", 1, true) then
+                error(err, 0)
+            end
             print(string.format("Suite setup failed: %s", err))
             return 1
         end
     end
 
     -- Run all tests
+    local suite_skipped = 0
     for _, test in ipairs(suite.tests) do
         local before_failed = TestResults.failed_tests
+        local before_skipped = TestResults.skipped_tests
         run_test(suite, test)
         if TestResults.failed_tests > before_failed then
             suite_failed = suite_failed + 1
+        elseif TestResults.skipped_tests > before_skipped then
+            suite_skipped = suite_skipped + 1
         else
             suite_passed = suite_passed + 1
         end
@@ -317,8 +342,8 @@ function TestFramework.run_suite(suite)
     local suite_end_time = get_time()
     local suite_duration = suite_end_time - suite_start_time
 
-    print(string.format("\nSuite '%s' completed: %d passed, %d failed (%.3fs)",
-          suite.name, suite_passed, suite_failed, suite_duration))
+    print(string.format("\nSuite '%s' completed: %d passed, %d failed, %d skipped (%.3fs)",
+          suite.name, suite_passed, suite_failed, suite_skipped, suite_duration))
 
     TestResults.total_time = TestResults.total_time + suite_duration
 

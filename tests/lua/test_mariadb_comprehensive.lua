@@ -29,7 +29,8 @@ local function setup_database()
     test_conn = mariadb.connect(DB_CONFIG.database, DB_CONFIG.user, DB_CONFIG.password, DB_CONFIG.host, DB_CONFIG.port)
 
     if not test_conn then
-        error("Failed to connect to MariaDB. Make sure Docker container is running:\ncd tests && ./docker-setup.sh start")
+        print("⊝ MariaDB not reachable, skipping (start with: cd tests && ./docker-setup.sh start)")
+        os.exit(77)
     end
 
     print("✓ MariaDB connection established for comprehensive tests")

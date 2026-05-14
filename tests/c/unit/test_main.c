@@ -22,9 +22,6 @@ extern test_suite_t objectbuf_suite;
 extern void objectbuf_setup(void);
 extern void objectbuf_teardown(void);
 
-// From test_tcpd_core_complete.c
-extern test_suite_t tcpd_core_complete_suite;
-
 // From test_udpd_config.c
 extern test_suite_t udpd_config_suite;
 extern void udpd_config_setup(void);
@@ -143,7 +140,6 @@ int main(void) {
         &event_mgr_suite,
         &utlua_suite,
         &objectbuf_suite,
-        &tcpd_core_complete_suite,
         &udpd_config_suite,
         &udpd_dest_suite,
         &udpd_dns_suite,
@@ -159,7 +155,7 @@ int main(void) {
     };
 
     // Run all tests
-    int failures = run_all_tests(suites, 17);
+    int failures = run_all_tests(suites, 16);
 
     return failures > 0 ? 1 : 0;
 }

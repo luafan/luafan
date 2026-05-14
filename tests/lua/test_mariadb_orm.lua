@@ -30,8 +30,8 @@ if ok then
     orm_available = true
     print("mariadb.orm module loaded successfully")
 else
-    print("Error: mariadb.orm module not available: " .. tostring(result))
-    os.exit(1)
+    print("⊝ mariadb.orm module not available, skipping: " .. tostring(result))
+    os.exit(77)
 end
 
 -- Try to load mariadb.pool module

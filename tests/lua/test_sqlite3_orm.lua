@@ -23,9 +23,8 @@ if ok then
     orm_available = true
     print("sqlite3.orm module loaded successfully")
 else
-    print("Error: sqlite3.orm module not available: " .. tostring(result))
-    print("Note: Requires lsqlite3: luarocks install lsqlite3")
-    os.exit(1)
+    print("⊝ sqlite3.orm module not available, skipping: " .. tostring(result))
+    os.exit(77)
 end
 
 -- Try to load lsqlite3 directly
@@ -38,9 +37,8 @@ if ok2 then
     sqlite3_available = true
     print("lsqlite3 module loaded successfully")
 else
-    print("Error: lsqlite3 module not available: " .. tostring(result2))
-    print("Install with: luarocks install lsqlite3")
-    os.exit(1)
+    print("⊝ lsqlite3 module not available, skipping: " .. tostring(result2))
+    os.exit(77)
 end
 
 -- Function to create test database

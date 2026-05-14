@@ -35,7 +35,8 @@ local function setup_database()
     test_conn = mariadb.connect(DB_CONFIG.database, DB_CONFIG.user, DB_CONFIG.password, DB_CONFIG.host, DB_CONFIG.port)
 
     if not test_conn then
-        error("Failed to connect to MariaDB. Make sure Docker container is running:\ndocker run -d --name test-mariadb -e MYSQL_ROOT_PASSWORD=root_password -e MYSQL_DATABASE=test_db -e MYSQL_USER=test_user -e MYSQL_PASSWORD=test_password -p 3306:3306 mariadb:latest")
+        print("⊝ MariaDB not reachable, skipping (start with: cd tests && ./docker-setup.sh start)")
+        os.exit(77)
     end
 
     -- Drop and recreate test table to ensure correct schema

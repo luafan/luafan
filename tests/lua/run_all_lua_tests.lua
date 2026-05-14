@@ -236,6 +236,7 @@ end
 local total_files = 0
 local passed_files = 0
 local failed_files = 0
+local skipped_files = 0
 local total_tests = 0
 local total_passed = 0
 local total_failed = 0
@@ -277,6 +278,10 @@ local function run_test_file(filename)
             if exit_code == 0 then
                 print(string.format("✓ %s passed", filename))
                 passed_files = passed_files + 1
+                return true
+            elseif exit_code == 77 then
+                print(string.format("⊝ %s skipped", filename))
+                skipped_files = skipped_files + 1
                 return true
             else
                 print(string.format("✗ %s failed (exit code: %d)", filename, exit_code))
@@ -331,6 +336,7 @@ fan.loop(function()
     print(string.format("Total test files:  %d", total_files))
     print(string.format("Passed files:      %d", passed_files))
     print(string.format("Failed files:      %d", failed_files))
+    print(string.format("Skipped files:     %d", skipped_files))
     print(string.format("Success rate:      %.1f%%", total_files > 0 and (passed_files / total_files * 100) or 0))
     print(string.format("Total time:        %.3f seconds", total_time))
     print(string.rep("=", 60))
@@ -342,7 +348,11 @@ fan.loop(function()
         os.exit(1)
     else
         print("OVERALL RESULT: PASSED")
-        print(string.format("✓ All %d test file(s) passed", passed_files))
+        if skipped_files > 0 then
+            print(string.format("✓ %d test file(s) passed, %d skipped", passed_files, skipped_files))
+        else
+            print(string.format("✓ All %d test file(s) passed", passed_files))
+        end
         fan.loopbreak()
         os.exit(0)
     end

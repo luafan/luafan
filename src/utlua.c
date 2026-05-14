@@ -2,6 +2,9 @@
 
 #ifdef LUA_USER_H
 #include LUA_USER_H
+#else
+#define LuaLockDepthGet() 0
+#define LuaLockDepthSet(x) ((void)(x))
 #endif
 
 int GLOBAL_VERBOSE = 0;

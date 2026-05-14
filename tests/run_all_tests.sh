@@ -179,12 +179,7 @@ run_test_section() {
     echo -e "${section_color}$section_name${NC}"
     echo "────────────────────────────────────────"
 
-    local start_time=$(date +%s)
     $test_function
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
-
-    return $duration
 }
 
 # Build tests if requested
@@ -204,9 +199,9 @@ if [ "$BUILD_TESTS" = true ]; then
 
     # Configure with CMake
     if [ "$VERBOSE" = true ]; then
-        cmake .. -DCMAKE_BUILD_TYPE=Debug
+        cmake "$PROJECT_ROOT" -DCMAKE_BUILD_TYPE=Debug
     else
-        cmake .. -DCMAKE_BUILD_TYPE=Debug >/dev/null 2>&1
+        cmake "$PROJECT_ROOT" -DCMAKE_BUILD_TYPE=Debug >/dev/null 2>&1
     fi
 
     # Build
@@ -220,6 +215,43 @@ if [ "$BUILD_TESTS" = true ]; then
     echo -e "${GREEN}✓ Build completed${NC}"
     echo
 fi
+
+# ─── Environment preparation: Docker services ───
+prepare_docker_environment() {
+    if ! command -v docker &> /dev/null; then
+        echo -e "${YELLOW}⚠ Docker not available - MariaDB tests will be skipped${NC}"
+        return 0
+    fi
+
+    if ! docker compose version &> /dev/null 2>&1; then
+        echo -e "${YELLOW}⚠ docker compose not available - MariaDB tests will be skipped${NC}"
+        return 0
+    fi
+
+    if docker ps -q -f name=luafan-test-mariadb 2>/dev/null | grep -q .; then
+        echo -e "${GREEN}✓ MariaDB container already running${NC}"
+        return 0
+    fi
+
+    DOCKER_SETUP_SCRIPT="$SCRIPT_DIR/docker-setup.sh"
+    if [ ! -f "$DOCKER_SETUP_SCRIPT" ]; then
+        echo -e "${YELLOW}⚠ docker-setup.sh not found - MariaDB tests will be skipped${NC}"
+        return 0
+    fi
+
+    echo -e "${BLUE}Starting MariaDB container...${NC}"
+    if "$DOCKER_SETUP_SCRIPT" start > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ MariaDB container started${NC}"
+    else
+        echo -e "${YELLOW}⚠ Failed to start MariaDB - database tests will be skipped${NC}"
+    fi
+
+    return 0
+}
+
+echo -e "${YELLOW}Preparing test environment...${NC}"
+prepare_docker_environment
+echo
 
 # Track overall results
 OVERALL_SUCCESS=true
@@ -480,10 +512,10 @@ if [ -n "$OUTPUT_FILE" ]; then
     echo "  \"summary\": {" >> "$OUTPUT_FILE"
 
     # Count results
-    local total_tests=0
-    local passed_tests=0
-    local failed_tests=0
-    local skipped_tests=0
+    total_tests=0
+    passed_tests=0
+    failed_tests=0
+    skipped_tests=0
 
     for test in "${!TEST_RESULTS[@]}"; do
         case "${TEST_RESULTS[$test]}" in

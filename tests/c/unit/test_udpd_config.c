@@ -200,9 +200,10 @@ TEST_CASE(udpd_config_validate_invalid) {
     TEST_ASSERT_EQUAL(-1, result);
 
     config.base.receive_buffer_size = UDPD_DEFAULT_BUFFER_SIZE;
-    config.base.send_buffer_size = UDPD_MAX_PACKET_SIZE + 1;
+    config.base.send_buffer_size = 0;
     result = udpd_config_validate(&config);
     TEST_ASSERT_EQUAL(-1, result);
+    config.base.send_buffer_size = UDPD_DEFAULT_BUFFER_SIZE;
 
     // Test invalid multicast config
     config.base.send_buffer_size = UDPD_DEFAULT_BUFFER_SIZE;

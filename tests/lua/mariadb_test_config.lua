@@ -19,15 +19,37 @@ M.DB_CONFIG = {
 M.test_conn = nil
 M.mariadb = nil
 
+-- Check MariaDB availability; skip (exit 77) if unreachable
+function M.require_mariadb_or_skip()
+    local ok_req, mod = pcall(require, 'fan.mariadb')
+    if not ok_req then
+        print("⊝ fan.mariadb not available, skipping MariaDB tests")
+        os.exit(77)
+    end
+    local ok_conn, conn = pcall(mod.connect, M.DB_CONFIG.database, M.DB_CONFIG.user,
+                                M.DB_CONFIG.password, M.DB_CONFIG.host, M.DB_CONFIG.port)
+    if not ok_conn or not conn then
+        print("⊝ MariaDB not reachable, skipping (start with: cd tests && ./docker-setup.sh start)")
+        os.exit(77)
+    end
+    conn:close()
+end
+
 -- Test suite setup function
 function M.setup_database()
     print("Setting up MariaDB connection for comprehensive tests...")
 
-    M.mariadb = require('fan.mariadb')
+    local ok_req, mod = pcall(require, 'fan.mariadb')
+    if not ok_req then
+        print("⊝ fan.mariadb not available, skipping")
+        os.exit(77)
+    end
+    M.mariadb = mod
     M.test_conn = M.mariadb.connect(M.DB_CONFIG.database, M.DB_CONFIG.user, M.DB_CONFIG.password, M.DB_CONFIG.host, M.DB_CONFIG.port)
 
     if not M.test_conn then
-        error("Failed to connect to MariaDB. Make sure Docker container is running:\ncd tests && ./docker-setup.sh start")
+        print("⊝ MariaDB not reachable, skipping")
+        os.exit(77)
     end
 
     print("✓ MariaDB connection established for comprehensive tests")
