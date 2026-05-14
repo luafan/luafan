@@ -127,7 +127,11 @@ jobs:
         sudo apt-get install -y \
           build-essential cmake pkg-config \
           liblua5.3-dev libssl-dev libcurl4-openssl-dev \
-          libevent-dev lua5.3 bison libncurses5-dev
+          libevent-dev lua5.3 bison libncurses5-dev \
+          luarocks zlib1g-dev libsqlite3-dev
+        sudo luarocks install lzlib
+        sudo luarocks install lua-cjson 2.1.0-1
+        sudo luarocks install lsqlite3
 
     - name: Build MariaDB from source
       run: |
