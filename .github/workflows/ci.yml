@@ -70,7 +70,7 @@ jobs:
         wget https://github.com/MariaDB/server/archive/mariadb-$MARIADB_VERSION.tar.gz
         tar xzf mariadb-$MARIADB_VERSION.tar.gz
         cd server-mariadb-$MARIADB_VERSION
-        cmake .
+        cmake . -DDISABLE_LIBMYSQLCLIENT_SYMBOL_VERSIONING=TRUE
         cd libmysql && sudo make install
         cd ../include && sudo make install
         cd ../..
