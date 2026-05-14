@@ -1,9 +1,7 @@
 #include "utlua.h"
 
-#if TARGET_OS_IPHONE
-#include <lua53/luauser.h>
-#else
-#include <luauser.h>
+#ifdef LUA_USER_H
+#include LUA_USER_H
 #endif
 
 int GLOBAL_VERBOSE = 0;
