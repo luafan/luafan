@@ -62,7 +62,19 @@ jobs:
         sudo apt-get install -y \
           build-essential cmake pkg-config \
           liblua5.3-dev libssl-dev libcurl4-openssl-dev \
-          libevent-dev libmariadb-dev lua5.3
+          libevent-dev lua5.3 bison libncurses5-dev
+
+    - name: Build MariaDB from source
+      run: |
+        MARIADB_VERSION=5.5.68
+        wget https://github.com/MariaDB/server/archive/mariadb-$MARIADB_VERSION.tar.gz
+        tar xzf mariadb-$MARIADB_VERSION.tar.gz
+        cd server-mariadb-$MARIADB_VERSION
+        cmake .
+        cd libmysql && sudo make install
+        cd ../include && sudo make install
+        cd ../..
+        rm -rf mariadb-$MARIADB_VERSION.tar.gz server-mariadb-$MARIADB_VERSION
 
     - name: Build for testing
       run: |
