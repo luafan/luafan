@@ -1,6 +1,8 @@
 name: Docker Push
 
 on:
+  schedule:
+    - cron: '0 0 * * 1'
   workflow_dispatch:
     inputs:
       target:
@@ -14,9 +16,32 @@ on:
           - alpine
 
 jobs:
+  check-changes:
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'schedule'
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Check for commits in the past week
+      id: check
+      run: |
+        if git log --since="7 days ago" --oneline | grep -q .; then
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+        fi
+
   push-ubuntu:
     runs-on: ubuntu-22.04
-    if: inputs.target == 'both' || inputs.target == 'ubuntu'
+    needs: [check-changes]
+    if: |
+      github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'ubuntu') ||
+      github.event_name == 'schedule' && needs.check-changes.outputs.has_changes == 'true'
 
     steps:
     - name: Checkout code
@@ -47,7 +72,10 @@ jobs:
 
   push-alpine:
     runs-on: ubuntu-22.04
-    if: inputs.target == 'both' || inputs.target == 'alpine'
+    needs: [check-changes]
+    if: |
+      github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'alpine') ||
+      github.event_name == 'schedule' && needs.check-changes.outputs.has_changes == 'true'
 
     steps:
     - name: Checkout code
