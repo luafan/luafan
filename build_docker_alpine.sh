@@ -21,4 +21,4 @@ apk add --update bsd-compat-headers tzdata linux-headers git lua5.3-dev lua5.3 l
     && luarocks install lsqlite3 \
     && cd luarocks-$LUAROCKS_VERSION && make uninstall && cd .. && rm -rf luarocks* \
     && apk del linux-headers git lua5.3-dev g++ bison ncurses-dev libc-dev curl-dev wget libevent-dev cmake make gcc unzip openssl-dev bsd-compat-headers perl \
-    && rm -rf /usr/include /usr/local/include /usr/local/share/doc /usr/local/share/man /usr/local/share/lua/5.3/luarocks /usr/local/mysql/lib/*.a /var/cache/apk/* .cache
+    && rm -rf /usr/include /usr/local/include /usr/local/share/doc /usr/local/share/man /usr/local/share/lua/5.3/luarocks /usr/local/mysql/lib/*.a /usr/local/mysql/include /usr/local/bin /var/cache/apk/* .cache

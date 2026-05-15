@@ -21,4 +21,4 @@ apt update \
     && cd luarocks-$LUAROCKS_VERSION && make uninstall && cd .. && rm -rf luarocks* \
     && apt-get -y remove g++ bison libncurses5-dev liblua5.3-dev libc-dev zlib1g-dev libcurl4-openssl-dev libevent-dev unzip cmake make gcc binutils libc-dev-bin git \
     && apt-get -y autoremove \
-    && rm -rf /usr/local/share/doc /usr/local/mysql/lib/*.a /var/lib/apt/lists/* || exit -1
+    && rm -rf /usr/local/share/doc /usr/local/mysql/lib/*.a /usr/local/mysql/include /usr/local/bin /var/lib/apt/lists/* || exit -1
