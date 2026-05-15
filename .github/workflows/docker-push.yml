@@ -40,8 +40,10 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [check-changes]
     if: |
-      github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'ubuntu') ||
-      github.event_name == 'schedule' && needs.check-changes.outputs.has_changes == 'true'
+      always() && (
+        github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'ubuntu') ||
+        github.event_name == 'schedule' && needs.check-changes.outputs.has_changes == 'true'
+      )
 
     steps:
     - name: Checkout code
@@ -74,8 +76,10 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [check-changes]
     if: |
-      github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'alpine') ||
-      github.event_name == 'schedule' && needs.check-changes.outputs.has_changes == 'true'
+      always() && (
+        github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'alpine') ||
+        github.event_name == 'schedule' && needs.check-changes.outputs.has_changes == 'true'
+      )
 
     steps:
     - name: Checkout code
