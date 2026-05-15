@@ -1,5 +1,5 @@
 FROM alpine:3.16.9
 
 WORKDIR /root/
-COPY ./ /root/
-RUN sh build_docker_alpine.sh
+COPY build_docker_alpine.sh /root/
+RUN sh build_docker_alpine.sh && rm build_docker_alpine.sh
