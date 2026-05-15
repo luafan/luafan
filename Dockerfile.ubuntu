@@ -2,4 +2,4 @@ FROM ubuntu:22.04
 
 WORKDIR /root/
 COPY build_docker_ubuntu.sh /root/
-RUN bash build_docker_ubuntu.sh && rm build_docker_ubuntu.sh
+RUN bash build_docker_ubuntu.sh && rm build_docker_ubuntu.sh && rm -rf /tmp/*
