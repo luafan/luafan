@@ -234,6 +234,13 @@ static const MethodMap methodMap[] = {{"GET", EVHTTP_REQ_GET},       {"POST", EV
                                       {"TRACE", EVHTTP_REQ_TRACE},   {"CONNECT", EVHTTP_REQ_CONNECT},
                                       {"PATCH", EVHTTP_REQ_PATCH},   {NULL, EVHTTP_REQ_GET}};
 
+typedef struct ws_frame_node {
+    websocket_frame_t frame;
+    struct ws_frame_node *next;
+} ws_frame_node_t;
+
+#define WS_MAX_QUEUED_FRAMES 64
+
 typedef struct {
     struct evhttp_request *req;
 
@@ -243,6 +250,21 @@ typedef struct {
     int is_websocket;
     websocket_state_t ws_state;
     struct bufferevent *ws_bev;
+
+    // WebSocket receive coroutine support (REF_STATE pattern)
+    lua_State *mainthread;
+    int _ref_;
+
+    // Registry ref to request table itself (prevents GC during WS lifetime)
+    int self_ref;
+
+    // Frame queue for when data arrives with no waiting coroutine
+    ws_frame_node_t *frame_queue_head;
+    ws_frame_node_t *frame_queue_tail;
+    int frame_queue_len;
+
+    // Ownership flag
+    int owns_request;
 } Request;
 
 #define LUA_EVHTTP_REQUEST_TYPE "EVHTTP_REQUEST_TYPE"
@@ -265,6 +287,13 @@ static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
     request->is_websocket = 0;
     request->ws_state = WS_STATE_CONNECTING;
     request->ws_bev = NULL;
+    request->mainthread = NULL;
+    request->_ref_ = LUA_NOREF;
+    request->self_ref = LUA_NOREF;
+    request->frame_queue_head = NULL;
+    request->frame_queue_tail = NULL;
+    request->frame_queue_len = 0;
+    request->owns_request = 0;
     lua_rawseti(L, -2, 1);
 }
 
@@ -325,76 +354,59 @@ static void websocket_mask_unmask(char *data, uint64_t len, uint32_t mask_key) {
 static int websocket_parse_frame(struct evbuffer *input, websocket_frame_t *frame) {
     size_t available = evbuffer_get_length(input);
     if (available < 2) {
-        return 0; // Need at least 2 bytes for basic header
+        return 0;
     }
 
-    // Read first two bytes
-    uint8_t header[2];
-    evbuffer_copyout(input, header, 2);
+    unsigned char peek_buf[14];
+    size_t peek_len = (available < 14) ? available : 14;
+    evbuffer_copyout(input, peek_buf, peek_len);
 
-    frame->fin = (header[0] & 0x80) != 0;
-    frame->rsv1 = (header[0] & 0x40) != 0;
-    frame->rsv2 = (header[0] & 0x20) != 0;
-    frame->rsv3 = (header[0] & 0x10) != 0;
-    frame->opcode = (websocket_opcode_t)(header[0] & 0x0F);
-    frame->masked = (header[1] & 0x80) != 0;
+    frame->fin = (peek_buf[0] & 0x80) != 0;
+    frame->rsv1 = (peek_buf[0] & 0x40) != 0;
+    frame->rsv2 = (peek_buf[0] & 0x20) != 0;
+    frame->rsv3 = (peek_buf[0] & 0x10) != 0;
+    frame->opcode = (websocket_opcode_t)(peek_buf[0] & 0x0F);
+    frame->masked = (peek_buf[1] & 0x80) != 0;
 
-    uint64_t payload_len = header[1] & 0x7F;
+    uint64_t payload_len = peek_buf[1] & 0x7F;
     size_t header_size = 2;
 
-    // Determine actual payload length
     if (payload_len == 126) {
-        if (available < 4) return 0;
+        if (peek_len < 4) return 0;
         uint16_t len16;
-        evbuffer_copyout(input, &len16, sizeof(len16));
+        memcpy(&len16, peek_buf + 2, 2);
         frame->payload_len = ntohs(len16);
         header_size += 2;
     } else if (payload_len == 127) {
-        if (available < 10) return 0;
+        if (peek_len < 10) return 0;
         uint64_t len64;
-        evbuffer_copyout(input, &len64, sizeof(len64));
+        memcpy(&len64, peek_buf + 2, 8);
         frame->payload_len = be64toh(len64);
         header_size += 8;
     } else {
         frame->payload_len = payload_len;
     }
 
-    // Add mask size if masked
     if (frame->masked) {
         header_size += 4;
     }
 
-    // Check if we have the complete frame
     if (available < header_size + frame->payload_len) {
-        return 0; // Incomplete frame
+        return 0;
     }
 
-    // Remove header from buffer
-    evbuffer_drain(input, header_size - 2); // We already read 2 bytes
-
-    // Read extended length if needed
-    if (payload_len == 126) {
-        uint16_t len16;
-        evbuffer_remove(input, &len16, sizeof(len16));
-    } else if (payload_len == 127) {
-        uint64_t len64;
-        evbuffer_remove(input, &len64, sizeof(len64));
-    }
-
-    // Read mask key if masked
     if (frame->masked) {
-        evbuffer_remove(input, &frame->mask_key, 4);
+        memcpy(&frame->mask_key, peek_buf + header_size - 4, 4);
     }
 
-    // Read payload
+    evbuffer_drain(input, header_size);
+
     if (frame->payload_len > 0) {
         frame->payload = malloc(frame->payload_len);
         if (!frame->payload) {
-            return -1; // Memory allocation failed
+            return -1;
         }
         evbuffer_remove(input, frame->payload, frame->payload_len);
-
-        // Unmask payload if needed
         if (frame->masked) {
             websocket_mask_unmask(frame->payload, frame->payload_len, frame->mask_key);
         }
@@ -402,7 +414,7 @@ static int websocket_parse_frame(struct evbuffer *input, websocket_frame_t *fram
         frame->payload = NULL;
     }
 
-    return 1; // Successfully parsed
+    return 1;
 }
 
 static struct evbuffer* websocket_create_frame(websocket_opcode_t opcode, const char *payload,
@@ -442,6 +454,255 @@ static void websocket_frame_free(websocket_frame_t *frame) {
     if (frame && frame->payload) {
         free(frame->payload);
         frame->payload = NULL;
+    }
+}
+
+// --- WebSocket frame queue ---
+
+static void ws_frame_queue_push(Request *request, websocket_frame_t *frame) {
+    if (request->frame_queue_len >= WS_MAX_QUEUED_FRAMES) {
+        LOG_WARN_FMT("WebSocket frame queue full, dropping frame");
+        websocket_frame_free(frame);
+        return;
+    }
+    ws_frame_node_t *node = malloc(sizeof(ws_frame_node_t));
+    if (!node) {
+        websocket_frame_free(frame);
+        return;
+    }
+    node->frame = *frame;
+    node->next = NULL;
+    if (request->frame_queue_tail) {
+        request->frame_queue_tail->next = node;
+    } else {
+        request->frame_queue_head = node;
+    }
+    request->frame_queue_tail = node;
+    request->frame_queue_len++;
+}
+
+static int ws_frame_queue_pop(Request *request, websocket_frame_t *frame) {
+    ws_frame_node_t *node = request->frame_queue_head;
+    if (!node) return 0;
+    *frame = node->frame;
+    request->frame_queue_head = node->next;
+    if (!request->frame_queue_head) {
+        request->frame_queue_tail = NULL;
+    }
+    request->frame_queue_len--;
+    free(node);
+    return 1;
+}
+
+static void ws_frame_queue_clear(Request *request) {
+    ws_frame_node_t *node = request->frame_queue_head;
+    while (node) {
+        ws_frame_node_t *next = node->next;
+        if (node->frame.payload) free(node->frame.payload);
+        free(node);
+        node = next;
+    }
+    request->frame_queue_head = NULL;
+    request->frame_queue_tail = NULL;
+    request->frame_queue_len = 0;
+}
+
+// --- WebSocket connection cleanup ---
+
+static void ws_deferred_free_cb(evutil_socket_t fd, short what, void *ctx) {
+    (void)fd; (void)what;
+    Request *request = (Request *)ctx;
+    if (request->owns_request && request->req) {
+        struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
+        if (evcon) {
+            evhttp_connection_free(evcon);
+        }
+        evhttp_request_free(request->req);
+    }
+    request->req = NULL;
+    request->owns_request = 0;
+    if (request->self_ref != LUA_NOREF && request->mainthread) {
+        CLEAR_REF(request->mainthread, request->self_ref);
+    }
+}
+
+static void ws_schedule_free(Request *request, struct bufferevent *bev) {
+    struct timeval tv = {0, 0};
+    bufferevent_setcb(bev, NULL, NULL, NULL, NULL);
+    event_base_once(bufferevent_get_base(bev),
+                    -1, EV_TIMEOUT, ws_deferred_free_cb, request, &tv);
+}
+
+static void ws_flush_writecb(struct bufferevent *bev, void *ctx) {
+    Request *request = (Request *)ctx;
+    struct evbuffer *output = bufferevent_get_output(bev);
+    if (evbuffer_get_length(output) == 0) {
+        ws_schedule_free(request, bev);
+    }
+}
+
+static void ws_flush_eventcb(struct bufferevent *bev, short what, void *ctx) {
+    Request *request = (Request *)ctx;
+    if (what & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
+        ws_schedule_free(request, bev);
+    }
+}
+
+static void ws_connection_cleanup(Request *request) {
+    ws_frame_queue_clear(request);
+
+    if (request->ws_bev) {
+        struct bufferevent *bev = request->ws_bev;
+        request->ws_bev = NULL;
+        bufferevent_disable(bev, EV_READ);
+
+        struct evbuffer *output = bufferevent_get_output(bev);
+        if (evbuffer_get_length(output) == 0) {
+            ws_schedule_free(request, bev);
+        } else {
+            bufferevent_setcb(bev, NULL, ws_flush_writecb,
+                              ws_flush_eventcb, request);
+        }
+    } else if (request->owns_request && request->req) {
+        struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
+        if (evcon) {
+            evhttp_connection_free(evcon);
+        }
+        evhttp_request_free(request->req);
+        request->req = NULL;
+        request->owns_request = 0;
+        if (request->self_ref != LUA_NOREF && request->mainthread) {
+            CLEAR_REF(request->mainthread, request->self_ref);
+        }
+    }
+}
+
+// --- WebSocket resume helpers ---
+
+static void ws_resume_with_error(Request *request, const char *errmsg) {
+    lua_State *L = NULL;
+    REF_STATE_GET(request, L);
+    if (!L) return;
+    REF_STATE_CLEAR(request);
+
+    lua_pushnil(L);
+    lua_pushstring(L, errmsg);
+
+    int status = FAN_RESUME(L, NULL, 2);
+    if (status == LUA_OK || status > LUA_YIELD) {
+        ws_connection_cleanup(request);
+    }
+}
+
+static void ws_resume_with_frame(Request *request, websocket_frame_t *frame) {
+    lua_State *L = NULL;
+    REF_STATE_GET(request, L);
+    if (!L) {
+        websocket_frame_free(frame);
+        return;
+    }
+    REF_STATE_CLEAR(request);
+
+    if (frame->payload && frame->payload_len > 0) {
+        lua_pushlstring(L, frame->payload, frame->payload_len);
+    } else {
+        lua_pushliteral(L, "");
+    }
+    lua_pushinteger(L, frame->opcode);
+    websocket_frame_free(frame);
+
+    int status = FAN_RESUME(L, NULL, 2);
+    if (status == LUA_OK || status > LUA_YIELD) {
+        ws_connection_cleanup(request);
+    }
+}
+
+// --- WebSocket bufferevent callbacks ---
+
+static void ws_readcb(struct bufferevent *bev, void *ctx) {
+    Request *request = (Request *)ctx;
+    struct evbuffer *input = bufferevent_get_input(bev);
+
+    while (evbuffer_get_length(input) > 0) {
+        websocket_frame_t frame;
+        memset(&frame, 0, sizeof(frame));
+        int rc = websocket_parse_frame(input, &frame);
+        if (rc == 0) break;
+        if (rc < 0) {
+            request->ws_state = WS_STATE_CLOSED;
+            if (request->_ref_ != LUA_NOREF) {
+                ws_resume_with_error(request, "frame parse error");
+            } else {
+                ws_connection_cleanup(request);
+            }
+            return;
+        }
+
+        switch (frame.opcode) {
+            case WS_OPCODE_PING:
+                if (request->ws_bev && request->ws_state == WS_STATE_OPEN) {
+                    struct evbuffer *pong = websocket_create_frame(
+                        WS_OPCODE_PONG, frame.payload, frame.payload_len, 1);
+                    if (pong) {
+                        bufferevent_write_buffer(request->ws_bev, pong);
+                        evbuffer_free(pong);
+                    }
+                }
+                websocket_frame_free(&frame);
+                continue;
+
+            case WS_OPCODE_PONG:
+                websocket_frame_free(&frame);
+                continue;
+
+            case WS_OPCODE_CLOSE:
+                request->ws_state = WS_STATE_CLOSED;
+                if (request->ws_bev) {
+                    struct evbuffer *close_resp = websocket_create_frame(
+                        WS_OPCODE_CLOSE, frame.payload, frame.payload_len, 1);
+                    if (close_resp) {
+                        bufferevent_write_buffer(request->ws_bev, close_resp);
+                        evbuffer_free(close_resp);
+                    }
+                }
+                websocket_frame_free(&frame);
+                if (request->_ref_ != LUA_NOREF) {
+                    ws_resume_with_error(request, "closed");
+                } else {
+                    ws_connection_cleanup(request);
+                }
+                return;
+
+            case WS_OPCODE_TEXT:
+            case WS_OPCODE_BINARY:
+                if (request->_ref_ != LUA_NOREF) {
+                    ws_resume_with_frame(request, &frame);
+                    if (!request->ws_bev) return;
+                } else {
+                    ws_frame_queue_push(request, &frame);
+                }
+                break;
+
+            default:
+                websocket_frame_free(&frame);
+                break;
+        }
+    }
+}
+
+static void ws_eventcb(struct bufferevent *bev, short what, void *ctx) {
+    Request *request = (Request *)ctx;
+    (void)bev;
+
+    if (what & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
+        request->ws_state = WS_STATE_CLOSED;
+
+        if (request->_ref_ != LUA_NOREF) {
+            const char *msg = (what & BEV_EVENT_EOF) ? "connection closed" : "connection error";
+            ws_resume_with_error(request, msg);
+        } else {
+            ws_connection_cleanup(request);
+        }
     }
 }
 
@@ -838,7 +1099,9 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         return luaL_error(L, "Failed to generate WebSocket accept key");
     }
 
-    // Send WebSocket handshake response
+    evhttp_request_own(req);
+    request->owns_request = 1;
+
     struct evbuffer *response = evbuffer_new();
     if (!response) {
         free(accept_key);
@@ -852,20 +1115,24 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         "Sec-WebSocket-Accept: %s\r\n"
         "\r\n", accept_key);
 
-    // Send the handshake response manually
     struct evhttp_connection *evcon = evhttp_request_get_connection(req);
     struct bufferevent *bev = evhttp_connection_get_bufferevent(evcon);
 
     if (bev) {
         bufferevent_write_buffer(bev, response);
 
-        // Mark as WebSocket connection
         request->is_websocket = 1;
         request->ws_state = WS_STATE_OPEN;
         request->ws_bev = bev;
         request->reply_status = REPLY_STATUS_REPLYED;
+        request->mainthread = utlua_mainthread(L);
 
-        LOG_INFO_FMT("WebSocket connection established for request");
+        evhttp_connection_set_timeout(evcon, 0);
+        bufferevent_setcb(bev, ws_readcb, NULL, ws_eventcb, request);
+        bufferevent_enable(bev, EV_READ | EV_WRITE);
+
+        lua_pushvalue(L, 1);
+        request->self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     }
 
     evbuffer_free(response);
@@ -1049,56 +1316,43 @@ LUA_API int lua_evhttp_request_websocket_state(lua_State *L) {
     return 1;
 }
 
-// WebSocket data reading function (for handling incoming frames)
-static void websocket_handle_incoming_frame(Request *request, websocket_frame_t *frame) {
-    if (!request || !frame) return;
+LUA_API int lua_evhttp_request_websocket_receive(lua_State *L) {
+    Request *request = request_from_table(L, 1);
 
-    switch (frame->opcode) {
-        case WS_OPCODE_TEXT:
-        case WS_OPCODE_BINARY:
-            // Application data - would typically be passed to Lua callback
-            LOG_INFO_FMT("WebSocket received %s frame: %llu bytes",
-                        frame->opcode == WS_OPCODE_TEXT ? "text" : "binary",
-                        (unsigned long long)frame->payload_len);
-            break;
-
-        case WS_OPCODE_CLOSE:
-            LOG_INFO_FMT("WebSocket close frame received");
-            request->ws_state = WS_STATE_CLOSED;
-            if (request->ws_bev) {
-                bufferevent_free(request->ws_bev);
-                request->ws_bev = NULL;
-            }
-            break;
-
-        case WS_OPCODE_PING:
-            LOG_INFO_FMT("WebSocket ping received, sending pong");
-            // Auto-respond with pong
-            if (request->ws_bev && request->ws_state == WS_STATE_OPEN) {
-                struct evbuffer *pong = websocket_create_frame(WS_OPCODE_PONG,
-                                                              frame->payload,
-                                                              frame->payload_len, 1);
-                if (pong) {
-                    bufferevent_write_buffer(request->ws_bev, pong);
-                    evbuffer_free(pong);
-                }
-            }
-            break;
-
-        case WS_OPCODE_PONG:
-            LOG_INFO_FMT("WebSocket pong received");
-            // Could be used for keepalive logic
-            break;
-
-        case WS_OPCODE_CONTINUATION:
-            LOG_INFO_FMT("WebSocket continuation frame received");
-            // Handle fragmented messages
-            break;
-
-        default:
-            LOG_WARN_FMT("WebSocket unknown opcode: 0x%x", frame->opcode);
-            break;
+    if (!request->is_websocket) {
+        return luaL_error(L, "Not a WebSocket connection");
     }
+
+    if (request->ws_state == WS_STATE_CLOSED) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "closed");
+        return 2;
+    }
+
+    if (request->ws_state != WS_STATE_OPEN) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "not open");
+        return 2;
+    }
+
+    websocket_frame_t frame;
+    if (ws_frame_queue_pop(request, &frame)) {
+        if (frame.payload && frame.payload_len > 0) {
+            lua_pushlstring(L, frame.payload, frame.payload_len);
+        } else {
+            lua_pushliteral(L, "");
+        }
+        lua_pushinteger(L, frame.opcode);
+        websocket_frame_free(&frame);
+        return 2;
+    }
+
+    if (request->_ref_ != LUA_NOREF) {
+        return luaL_error(L, "Another coroutine is already waiting on this WebSocket");
+    }
+
+    REF_STATE_SET(request, L);
+    return lua_yield(L, 0);
 }
 
 static const struct luaL_Reg evhttp_request_lib[] = {
@@ -1120,6 +1374,7 @@ static const struct luaL_Reg evhttp_request_lib[] = {
     {"websocket_pong", lua_evhttp_request_websocket_pong},
     {"websocket_close", lua_evhttp_request_websocket_close},
     {"websocket_state", lua_evhttp_request_websocket_state},
+    {"websocket_receive", lua_evhttp_request_websocket_receive},
     {NULL, NULL},
 };
 
