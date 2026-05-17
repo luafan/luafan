@@ -176,7 +176,6 @@ local function make_rows(t, stmt)
 end
 
 local function each_rows(t, stmt, eachfunc)
-	local lines = {}
 	for row in stmt:nrows() do
 		local r = {
 			[KEY_ATTR] = row
@@ -188,7 +187,6 @@ local function each_rows(t, stmt, eachfunc)
 			r[k] = v
 		end
 
-		lines[#lines+1] = r
 		if eachfunc(r) then
 			break
 		end
