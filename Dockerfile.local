@@ -15,6 +15,8 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
        cmake g++ bison libncurses5-dev \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt update && apt install -y gdb && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /root
 
 RUN wget https://luarocks.github.io/luarocks/releases/luarocks-$LUAROCKS_VERSION.tar.gz \
@@ -41,7 +43,8 @@ RUN luarocks install compat53 && luarocks install lpeg \
 
 COPY . /root/luafan/
 RUN cd /root/luafan \
-    && luarocks make luafan-$LUAFAN_VERSION.rockspec \
+    && CFLAGS="-g -O2" \
+       luarocks make luafan-$LUAFAN_VERSION.rockspec \
        MARIADB_DIR=/usr/local/mysql \
        CURL_INCDIR=/usr/include/$(uname -m)-linux-gnu \
     && cd .. && rm -rf luafan
