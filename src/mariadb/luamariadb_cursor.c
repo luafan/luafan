@@ -119,8 +119,8 @@ static void free_result_cont(int fd, short event, void *_userdata)
   else
   {
     lua_pushboolean(L, true);
-    FAN_RESUME(L, NULL, 1);
     UNREF_CO(cur);
+    FAN_RESUME(L, NULL, 1);
   }
 
   event_free(bag->event);
@@ -212,8 +212,8 @@ static void fetch_row_cont(int fd, short event, void *_userdata)
     int count = fetch_row_result(L, cur, row);
     if (count >= 0)
     {
-      FAN_RESUME(L, NULL, count);
       UNREF_CO(cur);
+      FAN_RESUME(L, NULL, count);
     }
     else if (count == CONTINUE_YIELD)
     {

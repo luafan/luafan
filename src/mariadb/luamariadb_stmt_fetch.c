@@ -7,8 +7,6 @@ static int stmt_fetch_result(lua_State *L, STMT_CTX *st)
   unsigned int field_count = mysql_num_fields(prepare_meta_result);
   MYSQL_FIELD *fields = mysql_fetch_fields(prepare_meta_result);
 
-  mysql_free_result(prepare_meta_result);
-
   lua_rawgeti(L, LUA_REGISTRYINDEX, st->table);
   int tableidx = lua_gettop(L); // never pop
 
@@ -116,6 +114,8 @@ static int stmt_fetch_result(lua_State *L, STMT_CTX *st)
     lua_setfield(L, -2, field.name);
   }
 
+  mysql_free_result(prepare_meta_result);
+
   return 1;
 }
 
@@ -129,8 +129,9 @@ static void stmt_fetch_cont(int fd, short event, void *_userdata)
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode)
   {
-    FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
+    int nresults = luamariadb_push_stmt_error(L, st);
     UNREF_CO(st);
+    FAN_RESUME(L, NULL, nresults);
   }
   else
   {
@@ -142,13 +143,14 @@ static void stmt_fetch_cont(int fd, short event, void *_userdata)
     else if (ret == 0)
     {
       int count = stmt_fetch_result(L, st);
-      FAN_RESUME(L, NULL, count);
       UNREF_CO(st);
+      FAN_RESUME(L, NULL, count);
     }
     else
     {
-      FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
+      int nresults = luamariadb_push_stmt_error(L, st);
       UNREF_CO(st);
+      FAN_RESUME(L, NULL, nresults);
     }
   }
   event_free(bag->event);

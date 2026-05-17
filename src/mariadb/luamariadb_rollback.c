@@ -9,8 +9,9 @@ static void conn_rollback_event(int fd, short event, void *_userdata)
   int errorcode = mysql_errno(conn);
   if (errorcode)
   {
-    FAN_RESUME(L, NULL, luamariadb_push_errno(L, bag->ctx));
+    int nresults = luamariadb_push_errno(L, bag->ctx);
     UNREF_CO(bag->ctx);
+    FAN_RESUME(L, NULL, nresults);
   }
   else
   {
@@ -24,13 +25,14 @@ static void conn_rollback_event(int fd, short event, void *_userdata)
     else if (ret == 0)
     {
       lua_pushboolean(L, true);
-      FAN_RESUME(L, NULL, 1);
       UNREF_CO(bag->ctx);
+      FAN_RESUME(L, NULL, 1);
     }
     else
     {
-      FAN_RESUME(L, NULL, luamariadb_push_errno(L, bag->ctx));
+      int nresults = luamariadb_push_errno(L, bag->ctx);
       UNREF_CO(bag->ctx);
+      FAN_RESUME(L, NULL, nresults);
     }
   }
   event_free(bag->event);

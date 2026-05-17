@@ -15,8 +15,9 @@ static void conn_ping_event(int fd, short event, void *_userdata)
   int errorcode = mysql_errno(conn);
   if (errorcode)
   {
-    FAN_RESUME(L, NULL, luamariadb_push_errno(L, bag->ctx));
+    int nresults = luamariadb_push_errno(L, bag->ctx);
     UNREF_CO(bag->ctx);
+    FAN_RESUME(L, NULL, nresults);
   }
   else
   {
@@ -31,13 +32,14 @@ static void conn_ping_event(int fd, short event, void *_userdata)
     else if (ret == 0)
     {
       int count = conn_ping_result(L, bag->ctx);
-      FAN_RESUME(L, NULL, count);
       UNREF_CO(bag->ctx);
+      FAN_RESUME(L, NULL, count);
     }
     else
     {
-      FAN_RESUME(L, NULL, luamariadb_push_errno(L, bag->ctx));
+      int nresults = luamariadb_push_errno(L, bag->ctx);
       UNREF_CO(bag->ctx);
+      FAN_RESUME(L, NULL, nresults);
     }
   }
   event_free(bag->event);

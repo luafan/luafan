@@ -22,13 +22,14 @@ static void real_connect_cont(int fd, short event, void *_userdata)
     mysql_options(conn, MYSQL_OPT_RECONNECT, &value);
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, bag->extra);
-    FAN_RESUME(L, NULL, 1);
     UNREF_CO(bag->ctx);
+    FAN_RESUME(L, NULL, 1);
   }
   else
   {
-    FAN_RESUME(L, NULL, luamariadb_push_errno(L, bag->ctx));
+    int nresults = luamariadb_push_errno(L, bag->ctx);
     UNREF_CO(bag->ctx);
+    FAN_RESUME(L, NULL, nresults);
   }
 
   if (!skip_unref)

@@ -15,8 +15,9 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata)
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode)
   {
-    FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
+    int nresults = luamariadb_push_stmt_error(L, st);
     UNREF_CO(st);
+    FAN_RESUME(L, NULL, nresults);
   }
   else
   {
@@ -30,13 +31,14 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata)
     else if (ret == 0)
     {
       int count = stmt_send_long_data_result(L, st);
-      FAN_RESUME(L, NULL, count);
       UNREF_CO(st);
+      FAN_RESUME(L, NULL, count);
     }
     else
     {
-      FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
+      int nresults = luamariadb_push_stmt_error(L, st);
       UNREF_CO(st);
+      FAN_RESUME(L, NULL, nresults);
     }
   }
 

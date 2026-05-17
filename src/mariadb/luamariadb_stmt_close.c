@@ -17,14 +17,15 @@ static void stmt_close_cont(int fd, short event, void *_userdata)
     luaL_unref(L, LUA_REGISTRYINDEX, st->table);
 
     lua_pushboolean(L, 1);
-    FAN_RESUME(L, NULL, 1);
     UNREF_CO(st);
+    FAN_RESUME(L, NULL, 1);
   }
   else
   {
     luaL_unref(L, LUA_REGISTRYINDEX, st->table);
-    FAN_RESUME(L, NULL, luamariadb_push_errno(L, bag->ctx));
+    int nresults = luamariadb_push_errno(L, bag->ctx);
     UNREF_CO(st);
+    FAN_RESUME(L, NULL, nresults);
   }
 
   event_free(bag->event);

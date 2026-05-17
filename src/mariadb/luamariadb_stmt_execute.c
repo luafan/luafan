@@ -26,8 +26,6 @@ static int stmt_execute_result(lua_State *L, STMT_CTX *st)
     my_bool *is_nulls = get_or_create_ud(L, tableidx, &st->is_nulls,
                                          field_count * sizeof(my_bool));
 
-    mysql_free_result(prepare_meta_result);
-
     int i = 0;
     for (; i < field_count; i++)
     {
@@ -97,6 +95,8 @@ static int stmt_execute_result(lua_State *L, STMT_CTX *st)
       rbind[i].is_null = &is_nulls[i];
     }
 
+    mysql_free_result(prepare_meta_result);
+
     lua_pop(L, 1); // pop table
 
     if (mysql_stmt_bind_result(st->my_stmt, rbind))
@@ -118,8 +118,9 @@ static void stmt_execute_cont(int fd, short event, void *_userdata)
   int errorcode = mysql_stmt_errno(st->my_stmt);
   if (errorcode)
   {
-    FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
+    int nresults = luamariadb_push_stmt_error(L, st);
     UNREF_CO(st);
+    FAN_RESUME(L, NULL, nresults);
   }
   else
   {
@@ -133,13 +134,14 @@ static void stmt_execute_cont(int fd, short event, void *_userdata)
     else if (ret == 0)
     {
       int count = stmt_execute_result(L, st);
-      FAN_RESUME(L, NULL, count);
       UNREF_CO(st);
+      FAN_RESUME(L, NULL, count);
     }
     else
     {
-      FAN_RESUME(L, NULL, luamariadb_push_stmt_error(L, st));
+      int nresults = luamariadb_push_stmt_error(L, st);
       UNREF_CO(st);
+      FAN_RESUME(L, NULL, nresults);
     }
   }
   event_free(bag->event);

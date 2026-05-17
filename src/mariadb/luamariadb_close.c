@@ -14,8 +14,8 @@ LUA_API void conn_close_cont(int fd, short event, void *_userdata)
   else
   {
     lua_pushboolean(L, 1);
-    FAN_RESUME(L, NULL, 1);
     UNREF_CO(bag->ctx);
+    FAN_RESUME(L, NULL, 1);
   }
 
   event_free(bag->event);
