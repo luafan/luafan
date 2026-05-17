@@ -188,6 +188,7 @@ local function each_rows(t, stmt, eachfunc)
 			r[k] = v
 		end
 
+		lines[#lines+1] = r
 		if eachfunc(r) then
 			break
 		end
