@@ -1023,6 +1023,12 @@ LUA_API int lua_evhttp_request_reply_chunk(lua_State *L) {
             break;
     }
 
+    struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
+    if (!evcon) {
+        request->reply_status = REPLY_STATUS_REPLYED;
+        return luaL_error(L, "connection closed by peer");
+    }
+
     int top = lua_gettop(L);
     if (top > 1) {
         struct evbuffer *buf = evbuffer_new();
@@ -1060,7 +1066,10 @@ LUA_API int lua_evhttp_request_reply_end(lua_State *L) {
             break;
     }
 
-    evhttp_send_reply_end(request->req);
+    struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
+    if (evcon) {
+        evhttp_send_reply_end(request->req);
+    }
     request->reply_status = REPLY_STATUS_REPLYED;
 
     lua_settop(L, 1);
