@@ -294,12 +294,19 @@ function context_mt:reply_chunk(data)
         return
     end
 
+    if self.apt.disconnected then
+        error("connection closed by peer")
+    end
+
     if self._gzip_body then
         self._gzip_outputstream:write(data)
         self._gzip_outputstream:flush()
     else
         local output = string.format("%X\r\n%s\r\n", #data, data)
-        self.apt:send(output)
+        local sent = self.apt:send(output)
+        if not sent then
+            error("connection closed by peer")
+        end
     end
 end
 

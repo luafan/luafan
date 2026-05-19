@@ -1029,6 +1029,19 @@ LUA_API int lua_evhttp_request_reply_chunk(lua_State *L) {
         return luaL_error(L, "connection closed by peer");
     }
 
+    struct bufferevent *bev = evhttp_connection_get_bufferevent(evcon);
+    if (bev) {
+        evutil_socket_t fd = bufferevent_getfd(bev);
+        if (fd >= 0) {
+            char peek_buf[1];
+            ssize_t n = recv(fd, peek_buf, 1, MSG_PEEK | MSG_DONTWAIT);
+            if (n == 0) {
+                request->reply_status = REPLY_STATUS_REPLYED;
+                return luaL_error(L, "connection closed by peer");
+            }
+        }
+    }
+
     int top = lua_gettop(L);
     if (top > 1) {
         struct evbuffer *buf = evbuffer_new();

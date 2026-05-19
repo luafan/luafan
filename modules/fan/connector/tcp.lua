@@ -182,7 +182,7 @@ local function bind(host, port, path, args)
     host = host,
     port = port,
     callback_self_first = true,  -- Enable to avoid circular references
-    onaccept = function(apt)
+    onaccept = function(self, apt)
       local t = {
         connection_map = weak_connection_map,
         conn = apt,
