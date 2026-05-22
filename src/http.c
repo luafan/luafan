@@ -1225,8 +1225,8 @@ static int http_getpost(lua_State *L, int method) {
                 curl_easy_setopt(conn->easy, CURLOPT_COOKIEJAR, lua_tostring(L, -1));
                 curl_easy_setopt(conn->easy, CURLOPT_COOKIEFILE, lua_tostring(L, -1));
             } else {
-                curl_easy_setopt(conn->easy, CURLOPT_COOKIEJAR, "cookies.txt");
-                curl_easy_setopt(conn->easy, CURLOPT_COOKIEFILE, "cookies.txt");
+                curl_easy_setopt(conn->easy, CURLOPT_COOKIEJAR, "/dev/null");
+                curl_easy_setopt(conn->easy, CURLOPT_COOKIEFILE, "/dev/null");
             }
             lua_pop(L, 1);
         }

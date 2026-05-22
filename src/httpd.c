@@ -279,6 +279,12 @@ static Request *request_from_table(lua_State *L, int idx) {
     return request;
 }
 
+static void httpd_conn_close_cb(struct evhttp_connection *evcon, void *arg) {
+    (void)evcon;
+    Request *request = (Request *)arg;
+    request->req = NULL;
+}
+
 static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
     lua_newtable(L);
     Request *request = (Request *)lua_newuserdata(L, sizeof(Request));
@@ -295,6 +301,11 @@ static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
     request->frame_queue_len = 0;
     request->owns_request = 0;
     lua_rawseti(L, -2, 1);
+
+    struct evhttp_connection *evcon = evhttp_request_get_connection(req);
+    if (evcon) {
+        evhttp_connection_set_closecb(evcon, httpd_conn_close_cb, request);
+    }
 }
 
 // WebSocket utility functions
@@ -807,6 +818,10 @@ static void request_push_body(lua_State *L, int idx) {
         lua_pop(L, 1);
 
         struct evhttp_request *req = request_from_table(L, idx)->req;
+        if (!req) {
+            lua_pushnil(L);
+            return;
+        }
         struct evbuffer *bodybuf = evhttp_request_get_input_buffer(req);
         if (bodybuf) {
             size_t len = evbuffer_get_length(bodybuf);
@@ -861,6 +876,10 @@ static void request_push_body(lua_State *L, int idx) {
 
 LUA_API int lua_evhttp_request_available(lua_State *L) {
     struct evhttp_request *req = request_from_table(L, 1)->req;
+    if (!req) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
     struct evbuffer *bodybuf = evhttp_request_get_input_buffer(req);
     if (bodybuf) {
         size_t len = evbuffer_get_length(bodybuf);
@@ -878,6 +897,10 @@ LUA_API int lua_evhttp_request_available(lua_State *L) {
 
 LUA_API int lua_evhttp_request_read(lua_State *L) {
     struct evhttp_request *req = request_from_table(L, 1)->req;
+    if (!req) {
+        lua_pushnil(L);
+        return 1;
+    }
     struct evbuffer *bodybuf = evhttp_request_get_input_buffer(req);
     size_t evbuffer_length = evbuffer_get_length(bodybuf);
 
@@ -914,6 +937,9 @@ LUA_API int lua_evhttp_request_read(lua_State *L) {
 
 LUA_API int lua_evhttp_request_reply(lua_State *L) {
     Request *request = request_from_table(L, 1);
+    if (!request->req) {
+        return luaL_error(L, "connection closed by peer");
+    }
     switch (request->reply_status) {
         case REPLY_STATUS_REPLYED:
             return luaL_error(L, "reply has completed already.");
@@ -974,6 +1000,9 @@ LUA_API int lua_evhttp_request_reply(lua_State *L) {
 
 LUA_API int lua_evhttp_request_reply_addheader(lua_State *L) {
     Request *request = request_from_table(L, 1);
+    if (!request->req) {
+        return luaL_error(L, "connection closed by peer");
+    }
     switch (request->reply_status) {
         case REPLY_STATUS_REPLYED:
             return luaL_error(L, "reply has completed already.");
@@ -994,6 +1023,9 @@ LUA_API int lua_evhttp_request_reply_addheader(lua_State *L) {
 
 LUA_API int lua_evhttp_request_reply_start(lua_State *L) {
     Request *request = request_from_table(L, 1);
+    if (!request->req) {
+        return luaL_error(L, "connection closed by peer");
+    }
     switch (request->reply_status) {
         case REPLY_STATUS_REPLYED:
             return luaL_error(L, "reply has completed already.");
@@ -1014,6 +1046,10 @@ LUA_API int lua_evhttp_request_reply_start(lua_State *L) {
 
 LUA_API int lua_evhttp_request_reply_chunk(lua_State *L) {
     Request *request = request_from_table(L, 1);
+    if (!request->req) {
+        request->reply_status = REPLY_STATUS_REPLYED;
+        return luaL_error(L, "connection closed by peer");
+    }
     switch (request->reply_status) {
         case REPLY_STATUS_REPLYED:
             return luaL_error(L, "reply has completed already.");
@@ -1070,6 +1106,11 @@ LUA_API int lua_evhttp_request_reply_chunk(lua_State *L) {
 
 LUA_API int lua_evhttp_request_reply_end(lua_State *L) {
     Request *request = request_from_table(L, 1);
+    if (!request->req) {
+        request->reply_status = REPLY_STATUS_REPLYED;
+        lua_settop(L, 1);
+        return 1;
+    }
     switch (request->reply_status) {
         case REPLY_STATUS_REPLYED:
             return luaL_error(L, "reply has completed already.");
@@ -1093,6 +1134,10 @@ LUA_API int lua_evhttp_request_reply_end(lua_State *L) {
 LUA_API int lua_evhttp_request_is_websocket_upgrade(lua_State *L) {
     Request *request = request_from_table(L, 1);
     struct evhttp_request *req = request->req;
+    if (!req) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
 
     int is_upgrade = is_websocket_upgrade_request(req);
     lua_pushboolean(L, is_upgrade);
@@ -1102,6 +1147,9 @@ LUA_API int lua_evhttp_request_is_websocket_upgrade(lua_State *L) {
 LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
     Request *request = request_from_table(L, 1);
     struct evhttp_request *req = request->req;
+    if (!req) {
+        return luaL_error(L, "connection closed by peer");
+    }
 
     if (request->reply_status != REPLY_STATUS_NONE) {
         return luaL_error(L, "Response already started");
@@ -1427,7 +1475,7 @@ LUA_API int lua_evhttp_server_gc(lua_State *L) {
 }
 
 LUA_API int lua_evhttp_request_lookup(lua_State *L) {
-    struct evhttp_request *req = request_from_table(L, 1)->req;
+    Request *request = request_from_table(L, 1);
     const char *p = lua_tostring(L, 2);
 
     const luaL_Reg *lib;
@@ -1437,6 +1485,11 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L) {
             lua_pushcfunction(L, lib->func);
             return 1;
         }
+    }
+
+    struct evhttp_request *req = request->req;
+    if (!req) {
+        return luaL_error(L, "request already closed (connection dropped)");
     }
 
     if (strcmp(p, "path") == 0) {
