@@ -241,8 +241,6 @@ typedef struct ws_frame_node {
 
 #define WS_MAX_QUEUED_FRAMES 64
 
-typedef struct CloseCallbackCtx CloseCallbackCtx;
-
 typedef struct {
     struct evhttp_request *req;
 
@@ -260,6 +258,9 @@ typedef struct {
     // Registry ref to request table itself (prevents GC during WS lifetime)
     int self_ref;
 
+    // Registry ref that prevents GC while connection is alive
+    int prevent_gc_ref;
+
     // Frame queue for when data arrives with no waiting coroutine
     ws_frame_node_t *frame_queue_head;
     ws_frame_node_t *frame_queue_tail;
@@ -267,9 +268,6 @@ typedef struct {
 
     // Ownership flag
     int owns_request;
-
-    // Connection close callback context (heap-allocated, outlives Request if needed)
-    CloseCallbackCtx *close_ctx;
 } Request;
 
 #define LUA_EVHTTP_REQUEST_TYPE "EVHTTP_REQUEST_TYPE"
@@ -284,31 +282,26 @@ static Request *request_from_table(lua_State *L, int idx) {
     return request;
 }
 
-struct CloseCallbackCtx {
-    Request *request;
-};
-
 static void httpd_conn_close_cb(struct evhttp_connection *evcon, void *arg) {
     (void)evcon;
-    CloseCallbackCtx *ctx = (CloseCallbackCtx *)arg;
-    if (ctx->request) {
-        ctx->request->req = NULL;
-        ctx->request->close_ctx = NULL;
+    Request *request = (Request *)arg;
+    request->req = NULL;
+    if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
+        luaL_unref(request->mainthread, LUA_REGISTRYINDEX, request->prevent_gc_ref);
+        request->prevent_gc_ref = LUA_NOREF;
     }
-    free(ctx);
 }
 
-static void httpd_clear_close_cb(Request *request) {
-    if (request->close_ctx) {
-        request->close_ctx->request = NULL;
-        if (request->req) {
-            struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
-            if (evcon) {
-                evhttp_connection_set_closecb(evcon, NULL, NULL);
-            }
+static void httpd_release_conn_guard(Request *request) {
+    if (request->req) {
+        struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
+        if (evcon) {
+            evhttp_connection_set_closecb(evcon, NULL, NULL);
         }
-        free(request->close_ctx);
-        request->close_ctx = NULL;
+    }
+    if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
+        luaL_unref(request->mainthread, LUA_REGISTRYINDEX, request->prevent_gc_ref);
+        request->prevent_gc_ref = LUA_NOREF;
     }
 }
 
@@ -320,24 +313,23 @@ static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
     request->is_websocket = 0;
     request->ws_state = WS_STATE_CONNECTING;
     request->ws_bev = NULL;
-    request->mainthread = NULL;
+    request->mainthread = utlua_mainthread(L);
     request->_ref_ = LUA_NOREF;
     request->self_ref = LUA_NOREF;
+    request->prevent_gc_ref = LUA_NOREF;
     request->frame_queue_head = NULL;
     request->frame_queue_tail = NULL;
     request->frame_queue_len = 0;
     request->owns_request = 0;
-    request->close_ctx = NULL;
     lua_rawseti(L, -2, 1);
+
+    // Hold a registry ref to the request table to prevent GC while connection lives
+    lua_pushvalue(L, -1);
+    request->prevent_gc_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
     struct evhttp_connection *evcon = evhttp_request_get_connection(req);
     if (evcon) {
-        CloseCallbackCtx *ctx = malloc(sizeof(CloseCallbackCtx));
-        if (ctx) {
-            ctx->request = request;
-            request->close_ctx = ctx;
-            evhttp_connection_set_closecb(evcon, httpd_conn_close_cb, ctx);
-        }
+        evhttp_connection_set_closecb(evcon, httpd_conn_close_cb, request);
     }
 }
 
@@ -835,10 +827,19 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req, LuaServer *server)
     luaL_getmetatable(cbs.co, LUA_EVHTTP_REQUEST_TYPE);
     lua_setmetatable(cbs.co, -2);
 
+    // Get request pointer before resume (stack may be cleared after)
+    lua_rawgeti(cbs.co, -1, 1);
+    Request *request = (Request *)lua_touserdata(cbs.co, -1);
+    lua_pop(cbs.co, 1);
+
     lua_pushvalue(cbs.co, -1); // duplicate for req,resp
 
     lua_unlock(mainthread);
-    FAN_RESUME(cbs.co, mainthread, 2);
+    int status = FAN_RESUME(cbs.co, mainthread, 2);
+    if (status != LUA_YIELD && request->reply_status != REPLY_STATUS_REPLYED) {
+        // Coroutine finished (ok or error) without reply — release guard now
+        httpd_release_conn_guard(request);
+    }
     FAN_CB_CLEANUP(mainthread, cbs);
 }
 
@@ -979,7 +980,7 @@ LUA_API int lua_evhttp_request_reply(lua_State *L) {
         case REPLY_STATUS_REPLY_START:
             evhttp_send_reply_end(request->req);
             request->reply_status = REPLY_STATUS_REPLYED;
-            httpd_clear_close_cb(request);
+            httpd_release_conn_guard(request);
             lua_settop(L, 1);
             return 1;
         default:
@@ -1025,7 +1026,7 @@ LUA_API int lua_evhttp_request_reply(lua_State *L) {
     evbuffer_free(buf);
 
     request->reply_status = REPLY_STATUS_REPLYED;
-    httpd_clear_close_cb(request);
+    httpd_release_conn_guard(request);
 
     // Update response metrics
     metrics_update_request_end(responseCode, responseBuffLen);
@@ -1160,7 +1161,7 @@ LUA_API int lua_evhttp_request_reply_end(lua_State *L) {
         evhttp_send_reply_end(request->req);
     }
     request->reply_status = REPLY_STATUS_REPLYED;
-    httpd_clear_close_cb(request);
+    httpd_release_conn_guard(request);
 
     lua_settop(L, 1);
     return 1;
