@@ -241,6 +241,8 @@ typedef struct ws_frame_node {
 
 #define WS_MAX_QUEUED_FRAMES 64
 
+typedef struct CloseCallbackCtx CloseCallbackCtx;
+
 typedef struct {
     struct evhttp_request *req;
 
@@ -265,6 +267,9 @@ typedef struct {
 
     // Ownership flag
     int owns_request;
+
+    // Connection close callback context (heap-allocated, outlives Request if needed)
+    CloseCallbackCtx *close_ctx;
 } Request;
 
 #define LUA_EVHTTP_REQUEST_TYPE "EVHTTP_REQUEST_TYPE"
@@ -279,10 +284,32 @@ static Request *request_from_table(lua_State *L, int idx) {
     return request;
 }
 
+struct CloseCallbackCtx {
+    Request *request;
+};
+
 static void httpd_conn_close_cb(struct evhttp_connection *evcon, void *arg) {
     (void)evcon;
-    Request *request = (Request *)arg;
-    request->req = NULL;
+    CloseCallbackCtx *ctx = (CloseCallbackCtx *)arg;
+    if (ctx->request) {
+        ctx->request->req = NULL;
+        ctx->request->close_ctx = NULL;
+    }
+    free(ctx);
+}
+
+static void httpd_clear_close_cb(Request *request) {
+    if (request->close_ctx) {
+        request->close_ctx->request = NULL;
+        if (request->req) {
+            struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
+            if (evcon) {
+                evhttp_connection_set_closecb(evcon, NULL, NULL);
+            }
+        }
+        free(request->close_ctx);
+        request->close_ctx = NULL;
+    }
 }
 
 static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
@@ -300,11 +327,17 @@ static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
     request->frame_queue_tail = NULL;
     request->frame_queue_len = 0;
     request->owns_request = 0;
+    request->close_ctx = NULL;
     lua_rawseti(L, -2, 1);
 
     struct evhttp_connection *evcon = evhttp_request_get_connection(req);
     if (evcon) {
-        evhttp_connection_set_closecb(evcon, httpd_conn_close_cb, request);
+        CloseCallbackCtx *ctx = malloc(sizeof(CloseCallbackCtx));
+        if (ctx) {
+            ctx->request = request;
+            request->close_ctx = ctx;
+            evhttp_connection_set_closecb(evcon, httpd_conn_close_cb, ctx);
+        }
     }
 }
 
@@ -946,6 +979,7 @@ LUA_API int lua_evhttp_request_reply(lua_State *L) {
         case REPLY_STATUS_REPLY_START:
             evhttp_send_reply_end(request->req);
             request->reply_status = REPLY_STATUS_REPLYED;
+            httpd_clear_close_cb(request);
             lua_settop(L, 1);
             return 1;
         default:
@@ -991,6 +1025,7 @@ LUA_API int lua_evhttp_request_reply(lua_State *L) {
     evbuffer_free(buf);
 
     request->reply_status = REPLY_STATUS_REPLYED;
+    httpd_clear_close_cb(request);
 
     // Update response metrics
     metrics_update_request_end(responseCode, responseBuffLen);
@@ -1125,6 +1160,7 @@ LUA_API int lua_evhttp_request_reply_end(lua_State *L) {
         evhttp_send_reply_end(request->req);
     }
     request->reply_status = REPLY_STATUS_REPLYED;
+    httpd_clear_close_cb(request);
 
     lua_settop(L, 1);
     return 1;
