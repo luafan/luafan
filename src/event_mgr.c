@@ -232,7 +232,7 @@ int event_mgr_init() {
     if (!initialized) {
         initialized = 1;
 
-        dnsbase = evdns_base_new(event_mgr_base(), 0);
+        dnsbase = evdns_base_new(event_mgr_base(), EVDNS_BASE_INITIALIZE_NAMESERVERS);
         evdns_base_set_option(dnsbase, "randomize-case:", "0");
 
 #if FAN_HAS_OPENSSL && OPENSSL_VERSION_NUMBER < 0x1010000fL

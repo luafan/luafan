@@ -107,7 +107,9 @@ local function connect(host, port, path, args)
     port = port,
     callback_self_first = true,  -- Enable to avoid circular references
     onconnected = function(conn)
-      coroutine.resume(running)
+      if running then
+        coroutine.resume(running)
+      end
     end,
     onread = function(conn, buf)
       collectgarbage()
@@ -146,6 +148,7 @@ local function connect(host, port, path, args)
       end
       local t = weak_t
       t.disconnected_message = msg
+      t.disconnected = true
 
       if running then
         coroutine.resume(running)
@@ -155,15 +158,22 @@ local function connect(host, port, path, args)
     end
   }
 
+  local presend = args and args.presend
   if args and type(args) == "table" then
     for k, v in pairs(args) do
-      params[k] = v
+      if k ~= "presend" then
+        params[k] = v
+      end
     end
   end
 
   t.conn = tcpd.connect(params)
 
   setmetatable(t, apt_mt)
+
+  if presend then
+    t.conn:send(presend)
+  end
 
   coroutine.yield()
   running = nil
