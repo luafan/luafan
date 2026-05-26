@@ -270,10 +270,17 @@ after_eof_read:
         }
 #endif
 
-        // Clean up the bufferevent
-        if (conn->buf) {
-            tcpd_shutdown_bufferevent(conn->buf);
-            conn->buf = NULL;
+        // Take ownership of `buf` under the mutex so any concurrent
+        // tcpd_conn_send sees NULL before we destroy the bev. The free is
+        // performed outside the lock — by then no other thread can observe
+        // the pointer.
+        pthread_mutex_lock(&conn->buf_mutex);
+        struct bufferevent *bev_to_free = conn->buf;
+        conn->buf = NULL;
+        pthread_mutex_unlock(&conn->buf_mutex);
+
+        if (bev_to_free) {
+            tcpd_shutdown_bufferevent(bev_to_free);
         }
 
         // Call the disconnected callback if set
@@ -434,6 +441,14 @@ int tcpd_base_conn_init(tcpd_base_conn_t *conn, tcpd_conn_type_t type, lua_State
 
     memset(conn, 0, sizeof(tcpd_base_conn_t));
 
+    // Recursive so a holder may call into helpers that reacquire it without
+    // deadlocking; cheap on the uncontended path.
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&conn->buf_mutex, &attr);
+    pthread_mutexattr_destroy(&attr);
+
     conn->type = type;
     conn->state = TCPD_CONN_DISCONNECTED;
     conn->mainthread = utlua_mainthread(L);
@@ -460,10 +475,15 @@ int tcpd_base_conn_init(tcpd_base_conn_t *conn, tcpd_conn_type_t type, lua_State
 void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
     if (!conn) return;
 
-    // Close bufferevent if still open
-    if (conn->buf) {
-        tcpd_shutdown_bufferevent(conn->buf);
-        conn->buf = NULL;
+    // Take ownership of `buf` under the mutex so any concurrent
+    // tcpd_conn_send sees NULL before we destroy the bev.
+    pthread_mutex_lock(&conn->buf_mutex);
+    struct bufferevent *bev_to_free = conn->buf;
+    conn->buf = NULL;
+    pthread_mutex_unlock(&conn->buf_mutex);
+
+    if (bev_to_free) {
+        tcpd_shutdown_bufferevent(bev_to_free);
     }
 
     // Clear callback references
@@ -489,6 +509,8 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
 
     conn->state = TCPD_CONN_DISCONNECTED;
     conn->mainthread = NULL;
+
+    pthread_mutex_destroy(&conn->buf_mutex);
 }
 
 // Helper function to format TCP connection info

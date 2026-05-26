@@ -202,17 +202,31 @@ LUA_API int tcpd_conn_send(lua_State *L) {
     size_t len = 0;
     const char *data = luaL_checklstring(L, 2, &len);
 
-    struct bufferevent *buf = client ? client->base.buf : NULL;
-    if (data && len > 0 && buf) {
-        tcpd_config_apply_timeouts(&client->base.config, buf);
-        bufferevent_write(buf, data, len);
-
-        size_t total = evbuffer_get_length(bufferevent_get_output(buf));
-        lua_pushinteger(L, total);
-    } else {
+    if (!client || !data || len == 0) {
         lua_pushinteger(L, -1);
+        return 1;
     }
 
+    // Hold buf_mutex across the read of `client->base.buf` and every operation
+    // that touches the bev, so the worker-thread eventcb / cleanup path cannot
+    // call bufferevent_free between our NULL-check and bufferevent_write
+    // (use-after-free => memmove crash in evbuffer_add).
+    pthread_mutex_lock(&client->base.buf_mutex);
+
+    struct bufferevent *buf = client->base.buf;
+    if (!buf) {
+        pthread_mutex_unlock(&client->base.buf_mutex);
+        lua_pushinteger(L, -1);
+        return 1;
+    }
+
+    tcpd_config_apply_timeouts(&client->base.config, buf);
+    bufferevent_write(buf, data, len);
+    size_t total = evbuffer_get_length(bufferevent_get_output(buf));
+
+    pthread_mutex_unlock(&client->base.buf_mutex);
+
+    lua_pushinteger(L, total);
     return 1;
 }
 

@@ -3,6 +3,7 @@
 
 #include "utlua.h"
 #include <event2/bufferevent.h>
+#include <pthread.h>
 
 // Forward declarations
 struct tcpd_config;
@@ -57,6 +58,12 @@ typedef struct tcpd_config {
 typedef struct tcpd_base_conn {
     // Core connection data
     struct bufferevent *buf;
+    // Serialises publication and invalidation of `buf` between the worker
+    // thread (eventcb / cleanup, which destroy the bev) and external callers
+    // such as tcpd_conn_send (which may run on the Lua main thread).
+    // Held only across the read of `buf` and the bufferevent operations that
+    // depend on it, never across event_base / Lua callbacks.
+    pthread_mutex_t buf_mutex;
     tcpd_conn_state_t state;
     tcpd_conn_type_t type;
     volatile int cleaned_up;  // Guard against double cleanup from worker thread + Lua GC
