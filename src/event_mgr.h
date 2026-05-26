@@ -27,6 +27,8 @@ void event_mgr_start(void);
 
 int event_mgr_workers_init(int num_workers);
 void event_mgr_workers_shutdown(void);
+void event_mgr_workers_stop_threads(void);
+void event_mgr_workers_free_bases(void);
 struct event_base *event_mgr_worker_base(int worker_id);
 struct evdns_base *event_mgr_worker_dnsbase(int worker_id);
 int event_mgr_next_worker(void);

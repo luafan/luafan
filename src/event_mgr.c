@@ -67,6 +67,7 @@ int event_mgr_workers_init(int count) {
 }
 
 void event_mgr_workers_shutdown(void) {
+    // Stop the worker threads first so no callbacks fire while we free state.
     for (int i = 0; i < num_workers; i++) {
         if (workers[i].running && workers[i].base) {
             event_base_loopbreak(workers[i].base);
@@ -77,6 +78,43 @@ void event_mgr_workers_shutdown(void) {
             pthread_join(workers[i].thread, NULL);
             workers[i].thread = 0;
         }
+    }
+
+    // Free the bases. Callers that still need to run Lua finalisers (which may
+    // bufferevent_free into a worker base) MUST do so before reaching here —
+    // see event_mgr_workers_stop_threads().
+    for (int i = 0; i < num_workers; i++) {
+        if (workers[i].dnsbase) {
+            evdns_base_free(workers[i].dnsbase, 0);
+            workers[i].dnsbase = NULL;
+        }
+        if (workers[i].base) {
+            event_base_free(workers[i].base);
+            workers[i].base = NULL;
+        }
+    }
+    num_workers = 0;
+}
+
+// Stop worker threads but keep their event_bases alive, so that Lua __gc
+// finalisers running afterwards can still bufferevent_free() into them.
+// The matching event_base_free() happens later via event_mgr_workers_free_bases.
+void event_mgr_workers_stop_threads(void) {
+    for (int i = 0; i < num_workers; i++) {
+        if (workers[i].running && workers[i].base) {
+            event_base_loopbreak(workers[i].base);
+        }
+    }
+    for (int i = 0; i < num_workers; i++) {
+        if (workers[i].thread) {
+            pthread_join(workers[i].thread, NULL);
+            workers[i].thread = 0;
+        }
+    }
+}
+
+void event_mgr_workers_free_bases(void) {
+    for (int i = 0; i < num_workers; i++) {
         if (workers[i].dnsbase) {
             evdns_base_free(workers[i].dnsbase, 0);
             workers[i].dnsbase = NULL;
@@ -167,7 +205,12 @@ static void signal_cb(evutil_socket_t fd, short event, void *arg) {
 }
 
 void event_mgr_break() {
-    event_mgr_workers_shutdown();
+    // Only break the main loop. Worker threads are stopped by
+    // event_mgr_workers_stop_threads() inside event_mgr_loop_later_cleanup,
+    // and their bases are freed later by event_mgr_workers_free_bases()
+    // inside event_mgr_loop_cleanup — after the caller has run lua_close.
+    // Freeing worker bases here races Lua finalisers (__gc → bufferevent_free)
+    // and triggers libevent's "evcb_pri < nactivequeues" assertion.
     if (base) {
         event_base_loopbreak(base);
     }
@@ -283,12 +326,16 @@ int event_mgr_loop_later_cleanup() {
 
         event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
 
-        // Partial cleanup - keep event base for later cleanup
+        // Partial cleanup - keep event base for later cleanup.
+        // Stop worker threads but keep their bases alive: Lua finalisers
+        // run after this returns (lua_close → __gc → bufferevent_free) and
+        // must be able to remove themselves from their owning worker base.
+        // The worker bases are freed in event_mgr_loop_cleanup().
         cleanup_signals();
         cleanup_signal_events();
         cleanup_openssl();
         cleanup_dnsbase();
-        event_mgr_workers_shutdown();
+        event_mgr_workers_stop_threads();
 
         looping = 0;
         initialized = 0;
@@ -305,6 +352,9 @@ void event_mgr_cleanup() {
 }
 
 void event_mgr_loop_cleanup() {
+    // Free worker bases now — by this point the caller has run lua_close()
+    // so all bevs created on these bases have been removed.
+    event_mgr_workers_free_bases();
     cleanup_eventbase();
 }
 
