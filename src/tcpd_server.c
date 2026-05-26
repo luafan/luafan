@@ -318,9 +318,11 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
     tcpd_base_conn_set_callbacks(&accept->base, L, 2);
 
     // Enable EV_READ now that onReadRef is set (may have been deferred for worker threads)
+    pthread_mutex_lock(&accept->base.buf_mutex);
     if (accept->base.buf) {
         bufferevent_enable(accept->base.buf, EV_READ);
     }
+    pthread_mutex_unlock(&accept->base.buf_mutex);
 
     lua_pushstring(L, accept->base.ip);
     lua_pushinteger(L, accept->base.port);
@@ -346,15 +348,31 @@ LUA_API int tcpd_accept_send(lua_State *L) {
     size_t len = 0;
     const char *data = luaL_checklstring(L, 2, &len);
 
-    struct bufferevent *buf = accept ? accept->base.buf : NULL;
-    if (data && len > 0 && buf) {
-        bufferevent_write(buf, data, len);
-        size_t total = evbuffer_get_length(bufferevent_get_output(buf));
-        lua_pushinteger(L, total);
-    } else {
+    if (!accept || !data || len == 0) {
         lua_pushinteger(L, -1);
+        return 1;
     }
 
+    // Hold buf_mutex across the read of `accept->base.buf` and every operation
+    // that touches the bev, so the worker-thread eventcb / cleanup path cannot
+    // call bufferevent_free between our NULL-check and bufferevent_write
+    // (use-after-free => memmove crash in evbuffer_add).
+    pthread_mutex_lock(&accept->base.buf_mutex);
+
+    struct bufferevent *buf = accept->base.buf;
+    if (!buf) {
+        pthread_mutex_unlock(&accept->base.buf_mutex);
+        lua_pushinteger(L, -1);
+        return 1;
+    }
+
+    tcpd_config_apply_timeouts(&accept->base.config, buf);
+    bufferevent_write(buf, data, len);
+    size_t total = evbuffer_get_length(bufferevent_get_output(buf));
+
+    pthread_mutex_unlock(&accept->base.buf_mutex);
+
+    lua_pushinteger(L, total);
     return 1;
 }
 
@@ -372,10 +390,11 @@ LUA_API int tcpd_accept_close(lua_State *L) {
 LUA_API int tcpd_accept_read_pause(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    struct bufferevent *buf = accept ? accept->base.buf : NULL;
-    if (buf) {
-        bufferevent_disable(buf, EV_READ);
+    pthread_mutex_lock(&accept->base.buf_mutex);
+    if (accept->base.buf) {
+        bufferevent_disable(accept->base.buf, EV_READ);
     }
+    pthread_mutex_unlock(&accept->base.buf_mutex);
 
     return 0;
 }
@@ -384,10 +403,11 @@ LUA_API int tcpd_accept_read_pause(lua_State *L) {
 LUA_API int tcpd_accept_read_resume(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    struct bufferevent *buf = accept ? accept->base.buf : NULL;
-    if (buf) {
-        bufferevent_enable(buf, EV_READ);
+    pthread_mutex_lock(&accept->base.buf_mutex);
+    if (accept->base.buf) {
+        bufferevent_enable(accept->base.buf, EV_READ);
     }
+    pthread_mutex_unlock(&accept->base.buf_mutex);
 
     return 0;
 }
@@ -396,7 +416,8 @@ LUA_API int tcpd_accept_read_resume(lua_State *L) {
 LUA_API int tcpd_accept_getsockname(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    struct bufferevent *buf = accept ? accept->base.buf : NULL;
+    pthread_mutex_lock(&accept->base.buf_mutex);
+    struct bufferevent *buf = accept->base.buf;
     if (buf) {
         evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
@@ -417,12 +438,14 @@ LUA_API int tcpd_accept_getsockname(lua_State *L) {
                     port = ntohs(addr->sin6_port);
                 }
 
+                pthread_mutex_unlock(&accept->base.buf_mutex);
                 lua_pushstring(L, ip);
                 lua_pushinteger(L, port);
                 return 2;
             }
         }
     }
+    pthread_mutex_unlock(&accept->base.buf_mutex);
 
     lua_pushnil(L);
     lua_pushnil(L);
@@ -433,7 +456,8 @@ LUA_API int tcpd_accept_getsockname(lua_State *L) {
 LUA_API int tcpd_accept_getpeername(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    struct bufferevent *buf = accept ? accept->base.buf : NULL;
+    pthread_mutex_lock(&accept->base.buf_mutex);
+    struct bufferevent *buf = accept->base.buf;
     if (buf) {
         evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
@@ -454,12 +478,14 @@ LUA_API int tcpd_accept_getpeername(lua_State *L) {
                     port = ntohs(addr->sin6_port);
                 }
 
+                pthread_mutex_unlock(&accept->base.buf_mutex);
                 lua_pushstring(L, ip);
                 lua_pushinteger(L, port);
                 return 2;
             }
         }
     }
+    pthread_mutex_unlock(&accept->base.buf_mutex);
 
     lua_pushnil(L);
     lua_pushnil(L);
@@ -501,13 +527,9 @@ static int tcpd_server_gc(lua_State *L) {
 static int tcpd_accept_conn_gc(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    // Clear references
-    if (accept->base.mainthread) {
-        // References cleaned up by base connection cleanup
-    }
-
-    // Perform base connection cleanup
-    tcpd_base_conn_cleanup(&accept->base);
+    // Route through the cleanup wrapper which uses the atomic cleaned_up guard
+    // to prevent double cleanup from worker eventcb + Lua GC.
+    tcpd_accept_cleanup_on_disconnect(accept);
 
     return 0;
 }

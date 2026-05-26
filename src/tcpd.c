@@ -25,17 +25,13 @@ void tcpd_connection_cleanup_on_disconnect(tcpd_base_conn_t *conn) {
             break;
         }
         default: {
-            // Atomic guard for non-client types
+            // Atomic guard for non-client types (accept, server)
             if (__sync_bool_compare_and_swap(&conn->cleaned_up, 0, 1) == false) {
                 return;
             }
-            // Basic cleanup
-            lua_State *mt = conn->mainthread;
-            if (mt) {
-                CLEAR_REF(mt, conn->onReadRef);
-                CLEAR_REF(mt, conn->onSendReadyRef);
-            }
-            conn->mainthread = NULL;
+            // Full base cleanup: frees buf under buf_mutex, clears all callback
+            // refs, frees host, releases ssl_ctx, destroys mutex.
+            tcpd_base_conn_cleanup(conn);
             break;
         }
     }
@@ -244,8 +240,11 @@ LUA_API int tcpd_conn_close(lua_State *L) {
 LUA_API int tcpd_conn_shutdown(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    struct bufferevent *buf = client ? client->base.buf : NULL;
+    pthread_mutex_lock(&client->base.buf_mutex);
+
+    struct bufferevent *buf = client->base.buf;
     if (!buf) {
+        pthread_mutex_unlock(&client->base.buf_mutex);
         lua_pushinteger(L, 0);
         return 1;
     }
@@ -254,16 +253,10 @@ LUA_API int tcpd_conn_shutdown(lua_State *L) {
     struct evbuffer *output = bufferevent_get_output(buf);
     size_t pending = evbuffer_get_length(output);
 
-    // Return the pending bytes count to Lua
-    // Lua can decide whether to defer shutdown
-    lua_pushinteger(L, pending);
-
     // Only shutdown if buffer is empty
     if (pending == 0) {
-        // Get the underlying socket file descriptor
         evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
-            // Shutdown write end: SHUT_WR = 1 on Unix systems
             #ifdef _WIN32
                 shutdown(fd, SD_SEND);
             #else
@@ -272,6 +265,10 @@ LUA_API int tcpd_conn_shutdown(lua_State *L) {
         }
     }
 
+    pthread_mutex_unlock(&client->base.buf_mutex);
+
+    // Return the pending bytes count to Lua so it can decide whether to defer.
+    lua_pushinteger(L, pending);
     return 1;
 }
 
@@ -279,10 +276,11 @@ LUA_API int tcpd_conn_shutdown(lua_State *L) {
 LUA_API int tcpd_conn_read_pause(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    struct bufferevent *buf = client ? client->base.buf : NULL;
-    if (buf) {
-        bufferevent_disable(buf, EV_READ);
+    pthread_mutex_lock(&client->base.buf_mutex);
+    if (client->base.buf) {
+        bufferevent_disable(client->base.buf, EV_READ);
     }
+    pthread_mutex_unlock(&client->base.buf_mutex);
 
     return 0;
 }
@@ -291,10 +289,11 @@ LUA_API int tcpd_conn_read_pause(lua_State *L) {
 LUA_API int tcpd_conn_read_resume(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    struct bufferevent *buf = client ? client->base.buf : NULL;
-    if (buf) {
-        bufferevent_enable(buf, EV_READ);
+    pthread_mutex_lock(&client->base.buf_mutex);
+    if (client->base.buf) {
+        bufferevent_enable(client->base.buf, EV_READ);
     }
+    pthread_mutex_unlock(&client->base.buf_mutex);
 
     return 0;
 }
@@ -303,7 +302,8 @@ LUA_API int tcpd_conn_read_resume(lua_State *L) {
 LUA_API int tcpd_conn_getsockname(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    struct bufferevent *buf = client ? client->base.buf : NULL;
+    pthread_mutex_lock(&client->base.buf_mutex);
+    struct bufferevent *buf = client->base.buf;
     if (buf) {
         evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
@@ -324,12 +324,14 @@ LUA_API int tcpd_conn_getsockname(lua_State *L) {
                     port = ntohs(addr->sin6_port);
                 }
 
+                pthread_mutex_unlock(&client->base.buf_mutex);
                 lua_pushstring(L, ip);
                 lua_pushinteger(L, port);
                 return 2;
             }
         }
     }
+    pthread_mutex_unlock(&client->base.buf_mutex);
 
     lua_pushnil(L);
     lua_pushnil(L);
@@ -340,7 +342,8 @@ LUA_API int tcpd_conn_getsockname(lua_State *L) {
 LUA_API int tcpd_conn_getpeername(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    struct bufferevent *buf = client ? client->base.buf : NULL;
+    pthread_mutex_lock(&client->base.buf_mutex);
+    struct bufferevent *buf = client->base.buf;
     if (buf) {
         evutil_socket_t fd = bufferevent_getfd(buf);
         if (fd >= 0) {
@@ -361,12 +364,14 @@ LUA_API int tcpd_conn_getpeername(lua_State *L) {
                     port = ntohs(addr->sin6_port);
                 }
 
+                pthread_mutex_unlock(&client->base.buf_mutex);
                 lua_pushstring(L, ip);
                 lua_pushinteger(L, port);
                 return 2;
             }
         }
     }
+    pthread_mutex_unlock(&client->base.buf_mutex);
 
     lua_pushnil(L);
     lua_pushnil(L);
