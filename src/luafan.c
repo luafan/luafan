@@ -241,6 +241,37 @@ LUA_API int luafan_worker_count(lua_State *L) {
     return 1;
 }
 
+#define LUA_FAN_CONST_TYPE "fan.const"
+
+static int luafan_const_tostring(lua_State *L) {
+    const char *name = (const char *)lua_touserdata(L, lua_upvalueindex(1));
+    lua_pushfstring(L, "const: %s", name);
+    return 1;
+}
+
+static int luafan_const(lua_State *L) {
+    size_t len;
+    const char *name = luaL_checklstring(L, 1, &len);
+
+    /* Create a full userdata (size=0, identity is the pointer) */
+    lua_newuserdata(L, 0);
+
+    /* Build a unique metatable for this const */
+    lua_newtable(L);
+
+    /* Store name as a light userdata in an upvalue for __tostring */
+    char *stored = (char *)lua_newuserdata(L, len + 1);
+    memcpy(stored, name, len + 1);
+    lua_pushcclosure(L, luafan_const_tostring, 1);
+    lua_setfield(L, -2, "__tostring");
+
+    lua_pushboolean(L, 0);
+    lua_setfield(L, -2, "__metatable");
+
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
 static const struct luaL_Reg fanlib[] = {
     {"loop", luafan_start},
     {"loopbreak", luafan_stop},
@@ -270,6 +301,7 @@ static const struct luaL_Reg fanlib[] = {
 #endif
     {"getinterfaces", luafan_getinterfaces},
     {"worker_count", luafan_worker_count},
+    {"const", luafan_const},
 
     {NULL, NULL},
 };
