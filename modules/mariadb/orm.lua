@@ -78,7 +78,7 @@ end
 local function delete(ctx, db, tablename, fmt, ...)
   local stmt = nil
   if fmt then
-    stmt = prepare(ctx, db, string.format("delete from %s where %s", tablename, fmt))
+    stmt = prepare(ctx, db, string.format("delete from %s %s", tablename, fmt))
     bind_values(stmt, ...)
   else
     stmt = prepare(ctx, db, string.format("delete from %s", tablename))
@@ -102,7 +102,7 @@ local function make_row_mt(t)
             local attr = r[KEY_ATTR]
 
             local db = getmetatable(t[KEY_CONTEXT]).db
-            local st = delete(ctx, db, t[KEY_NAME], FIELD_ID .. "=?", attr[FIELD_ID])
+            local st = delete(ctx, db, t[KEY_NAME], "where " .. FIELD_ID .. "=?", attr[FIELD_ID])
             setmetatable(r, nil)
             r[KEY_ATTR] = nil
             return st
@@ -303,11 +303,8 @@ local table_mt = {
       stmt_close(stmt)
     elseif key == "delete" or key == "remove" then
       local fmt = obj
-
       local db = getmetatable(t[KEY_CONTEXT]).db
-      local st = delete(ctx, db, t[KEY_NAME], fmt, ...)
-
-      return st
+      return delete(ctx, db, t[KEY_NAME], fmt, ...)
     elseif key == "new" or key == "insert" then
       local map = obj
       if type(map) ~= "table" then
