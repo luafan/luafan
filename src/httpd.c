@@ -550,10 +550,11 @@ static void ws_deferred_free_cb(evutil_socket_t fd, short what, void *ctx) {
     Request *request = (Request *)ctx;
     if (request->owns_request && request->req) {
         struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
+        request->req = NULL;
+        request->owns_request = 0;
         if (evcon) {
             evhttp_connection_free(evcon);
         }
-        evhttp_request_free(request->req);
     }
     request->req = NULL;
     request->owns_request = 0;
@@ -601,12 +602,11 @@ static void ws_connection_cleanup(Request *request) {
         }
     } else if (request->owns_request && request->req) {
         struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
+        request->req = NULL;
+        request->owns_request = 0;
         if (evcon) {
             evhttp_connection_free(evcon);
         }
-        evhttp_request_free(request->req);
-        request->req = NULL;
-        request->owns_request = 0;
         if (request->self_ref != LUA_NOREF && request->mainthread) {
             CLEAR_REF(request->mainthread, request->self_ref);
         }
