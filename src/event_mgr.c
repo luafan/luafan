@@ -85,7 +85,9 @@ void event_mgr_workers_shutdown(void) {
     // see event_mgr_workers_stop_threads().
     for (int i = 0; i < num_workers; i++) {
         if (workers[i].dnsbase) {
-            evdns_base_free(workers[i].dnsbase, 0);
+            // fail_requests=1 — see cleanup_dnsbase(): dropping pending DNS
+            // callbacks silently can leave Lua refs dangling.
+            evdns_base_free(workers[i].dnsbase, 1);
             workers[i].dnsbase = NULL;
         }
         if (workers[i].base) {
@@ -116,7 +118,8 @@ void event_mgr_workers_stop_threads(void) {
 void event_mgr_workers_free_bases(void) {
     for (int i = 0; i < num_workers; i++) {
         if (workers[i].dnsbase) {
-            evdns_base_free(workers[i].dnsbase, 0);
+            // fail_requests=1 — see cleanup_dnsbase().
+            evdns_base_free(workers[i].dnsbase, 1);
             workers[i].dnsbase = NULL;
         }
         if (workers[i].base) {
@@ -243,7 +246,15 @@ static void cleanup_openssl() {
 
 static void cleanup_dnsbase() {
     if (dnsbase) {
-        evdns_base_free(dnsbase, 0);
+        // Pass 1 to fail outstanding requests rather than silently
+        // dropping them. With fail_requests=0 any callback that runs
+        // before the base is fully torn down can dereference state
+        // (lua_State, conn) that is already gone — the resolver's
+        // worker thread may queue a result just as we free the base.
+        // Asking libevent to invoke each pending callback with an
+        // error gives the user code a chance to clean its refs while
+        // the base is still valid.
+        evdns_base_free(dnsbase, 1);
         dnsbase = NULL;
     }
 }
@@ -310,8 +321,28 @@ int event_mgr_loop() {
 
         event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
 
-        // Full cleanup after loop exits
-        full_cleanup();
+        // Symmetric with event_mgr_loop_later_cleanup(): we cannot run
+        // full_cleanup() here because the caller still holds Lua state
+        // whose __gc finalisers are about to run (lua_close happens later
+        // in the embedder, e.g. when the Lua module is unloaded). Those
+        // finalisers may bufferevent_free() into worker bases — freeing
+        // those bases here triggers libevent's "evcb_pri < nactivequeues"
+        // assertion and use-after-free in __gc.
+        //
+        // Stop worker threads (no callbacks can fire any more) and clean
+        // signal handlers / dns / openssl. The worker bases and the main
+        // base are freed by the matching event_mgr_loop_cleanup() call,
+        // which the embedder invokes after lua_close. If the embedder
+        // never calls it, the bases leak at process exit — that is far
+        // preferable to a crash.
+        cleanup_signals();
+        cleanup_signal_events();
+        cleanup_openssl();
+        cleanup_dnsbase();
+        event_mgr_workers_stop_threads();
+
+        looping = 0;
+        initialized = 0;
         return 0;
     }
 

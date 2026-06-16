@@ -150,12 +150,25 @@ local test_files = {
     "test_sqlite3_orm.lua",
     "test_integration_http_server.lua",
     "test_tcpd_callback_self_first.lua",
+    "test_tcpd_concurrent_lifecycle.lua",  -- Regression tests for tcpd buf_mutex / cleanup races
     "test_udpd_callback_self_first.lua",
+    "test_udpd_event_lifecycle.lua",       -- Regression tests for UDP event cleanup races
     "test_udpd_dest_getip.lua",
     "test_fan_evdns.lua",
     "test_evdns_integration.lua",
     "test_memory_leak_fix.lua",
     "test_tcpd_memory_leak_fix.lua",
+    "test_httpd_websocket_lifecycle.lua",  -- Regression tests for WebSocket cleanup races
+    "test_mariadb_pending_event.lua",      -- Regression tests for MariaDB async event cancellation
+    "test_event_mgr_loop_cleanup.lua",     -- Regression tests for event_mgr_loop cleanup order
+    "test_luafan_mainevent_lifetime.lua",  -- Regression tests for mainevent UAF/double-free
+    "test_evdns_cleanup_order.lua",        -- Regression tests for DNS base release order
+    "test_httpd_websocket_req_access.lua", -- Regression tests for WebSocket API request->req access
+    "test_ssl_retain_count.lua",           -- Regression tests for SSL retain_count atomicity
+    "test_tcpd_cleanup_mainthread.lua",    -- Regression tests for tcpd_base_conn_cleanup mainthread validity
+    "test_http_client_timer_linger.lua",   -- Regression tests for HTTP client timer/socket event lingering
+    "test_udpd_send_ready_race.lua",       -- Regression tests for UDP send_ready vs cleanup race
+    "test_thread_tracker_overflow.lua",     -- Regression tests for thread_tracker array bounds
     -- Add more test files here as they are completed
 }
 

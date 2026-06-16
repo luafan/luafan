@@ -17,6 +17,7 @@ static lua_State *mainState;
 static void main_handler(const int fd, const short which, void *arg) {
     evtimer_del(mainevent);
     free(mainevent);
+    mainevent = NULL;
 
     lua_lock(mainState);
     fan_cb_setup_t cbs = fan_cb_setup(mainState, main_ref);
@@ -62,6 +63,16 @@ LUA_API int luafan_start(lua_State *L) {
 
             main_ref = luaL_ref(L, LUA_REGISTRYINDEX);
             mainState = utlua_mainthread(L);
+
+            // Defensive: drop any stale mainevent left over from a prior
+            // loop that exited before the one-shot timer fired. Without
+            // this, a second fan.loop() would overwrite the pointer and
+            // leak the original event into the new base.
+            if (mainevent) {
+                evtimer_del(mainevent);
+                free(mainevent);
+                mainevent = NULL;
+            }
 
             struct timeval t = {0, 1};
             mainevent = malloc(sizeof(struct event));

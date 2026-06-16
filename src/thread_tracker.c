@@ -36,6 +36,12 @@ static ref_record_t thread_records[MAX_THREAD_RECORDS];
 static ref_record_t function_records[MAX_FUNCTION_RECORDS];
 static int next_thread_index = 0;
 static int next_function_index = 0;
+// Track how often the circular buffer wrapped — when non-zero, recorded
+// diagnostics are partial and earlier entries have been silently
+// overwritten. Surface the count via the get_stats API and warn once
+// per overflow boundary so users notice.
+static unsigned int thread_overflow_count = 0;
+static unsigned int function_overflow_count = 0;
 
 // Initialize reference tracker
 void thread_tracker_init(void) {
@@ -81,7 +87,16 @@ static ref_record_t* get_next_thread_record() {
         }
     }
 
-    // If no free slot, use circular overwrite
+    // No free slot: circular overwrite. Increment the overflow counter
+    // and warn on each wrap boundary (when next_thread_index returns to
+    // 0) so silent data loss doesn't go unnoticed.
+    thread_overflow_count++;
+    if (next_thread_index == 0) {
+        fprintf(stderr,
+                "[REF_TRACKER] WARNING: thread record array full (%d slots);"
+                " circular overwrite — earlier entries lost. overflow_count=%u\n",
+                MAX_THREAD_RECORDS, thread_overflow_count);
+    }
     ref_record_t* record = &thread_records[next_thread_index];
     next_thread_index = (next_thread_index + 1) % MAX_THREAD_RECORDS;
     return record;
@@ -96,7 +111,14 @@ static ref_record_t* get_next_function_record() {
         }
     }
 
-    // If no free slot, use circular overwrite
+    // No free slot: circular overwrite. See get_next_thread_record().
+    function_overflow_count++;
+    if (next_function_index == 0) {
+        fprintf(stderr,
+                "[REF_TRACKER] WARNING: function record array full (%d slots);"
+                " circular overwrite — earlier entries lost. overflow_count=%u\n",
+                MAX_FUNCTION_RECORDS, function_overflow_count);
+    }
     ref_record_t* record = &function_records[next_function_index];
     next_function_index = (next_function_index + 1) % MAX_FUNCTION_RECORDS;
     return record;

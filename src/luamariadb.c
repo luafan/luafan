@@ -9,6 +9,15 @@ int LONG_DATA = 0; // &LONG_DATA used as mariadb const.
 void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
                      int status, event_callback_fn callback, int extra)
 {
+  // Refuse to schedule new wait events on a connection that has been
+  // marked closed (or is in the middle of closing). Without this gate
+  // a *_cont callback could re-arm itself just after conn_close_start
+  // flipped ctx->closed, leaving an event holding a dangling DB_CTX*
+  // after the embedder runs lua_close.
+  if (ctx == NULL || ctx->closed) {
+    return;
+  }
+
   DB_STATUS *bag = malloc(sizeof(DB_STATUS));
   bag->data = data;
   bag->L = L;

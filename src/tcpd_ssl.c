@@ -55,7 +55,7 @@ tcpd_ssl_context_t* tcpd_ssl_context_create(lua_State *L) {
 
     tcpd_ssl_context_t *ctx = lua_newuserdata(L, sizeof(tcpd_ssl_context_t));
     memset(ctx, 0, sizeof(tcpd_ssl_context_t));
-    ctx->retain_count = 1;
+    atomic_init(&ctx->retain_count, 1);
     ctx->verify_peer = 1;
     ctx->verify_host = 1;
 
@@ -279,7 +279,7 @@ tcpd_ssl_context_t* tcpd_ssl_context_get_or_create(lua_State *L, const char *cac
         // Found cached context
         tcpd_ssl_context_t *ctx = lua_touserdata(L, -1);
         if (ctx) {
-            ctx->retain_count++;
+            atomic_fetch_add(&ctx->retain_count, 1);
             lua_pop(L, 1);
             return ctx;
         }
@@ -301,7 +301,7 @@ tcpd_ssl_context_t* tcpd_ssl_context_get_or_create(lua_State *L, const char *cac
 // Retain SSL context
 void tcpd_ssl_context_retain(tcpd_ssl_context_t *ctx) {
     if (ctx) {
-        ctx->retain_count++;
+        atomic_fetch_add(&ctx->retain_count, 1);
     }
 }
 
@@ -309,8 +309,12 @@ void tcpd_ssl_context_retain(tcpd_ssl_context_t *ctx) {
 void tcpd_ssl_context_release(tcpd_ssl_context_t *ctx, lua_State *L) {
     if (!ctx) return;
 
-    ctx->retain_count--;
-    if (ctx->retain_count <= 0) {
+    // atomic_fetch_sub returns the previous value; the last releaser is the
+    // thread that observed prev <= 1. Lua registry mutation must still happen
+    // on a thread that owns L, which is guaranteed because release is called
+    // from connection cleanup paths bound to the connection's mainthread.
+    int prev = atomic_fetch_sub(&ctx->retain_count, 1);
+    if (prev <= 1) {
         // Remove from Lua registry cache if cached
         if (ctx->cache_key && L) {
             lua_pushnil(L);

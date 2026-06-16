@@ -268,6 +268,13 @@ typedef struct {
 
     // Ownership flag
     int owns_request;
+
+    // Idempotency guard for ws_connection_cleanup / ws_deferred_free_cb.
+    // Prevents repeated CLEAR_REF on self_ref/prevent_gc_ref and double
+    // evhttp_connection_free when cleanup is reached from multiple paths
+    // (e.g. ws_resume_with_error + ws_eventcb close, or queued flush cb
+    //  firing after the synchronous cleanup already completed).
+    volatile int ws_cleaning_up;
 } Request;
 
 #define LUA_EVHTTP_REQUEST_TYPE "EVHTTP_REQUEST_TYPE"
@@ -321,6 +328,7 @@ static void newtable_from_req(lua_State *L, struct evhttp_request *req) {
     request->frame_queue_tail = NULL;
     request->frame_queue_len = 0;
     request->owns_request = 0;
+    request->ws_cleaning_up = 0;
     lua_rawseti(L, -2, 1);
 
     // Hold a registry ref to the request table to prevent GC while connection lives
@@ -548,6 +556,10 @@ static void ws_frame_queue_clear(Request *request) {
 static void ws_deferred_free_cb(evutil_socket_t fd, short what, void *ctx) {
     (void)fd; (void)what;
     Request *request = (Request *)ctx;
+
+    // The deferred free can race with another cleanup path that has already
+    // released request state (e.g. flush cb scheduled from a stale bev).
+    // Drop both refs at most once.
     if (request->owns_request && request->req) {
         struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
         request->req = NULL;
@@ -561,6 +573,10 @@ static void ws_deferred_free_cb(evutil_socket_t fd, short what, void *ctx) {
     if (request->self_ref != LUA_NOREF && request->mainthread) {
         CLEAR_REF(request->mainthread, request->self_ref);
     }
+    if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
+        luaL_unref(request->mainthread, LUA_REGISTRYINDEX, request->prevent_gc_ref);
+        request->prevent_gc_ref = LUA_NOREF;
+    }
 }
 
 static void ws_schedule_free(Request *request, struct bufferevent *bev) {
@@ -572,6 +588,11 @@ static void ws_schedule_free(Request *request, struct bufferevent *bev) {
 
 static void ws_flush_writecb(struct bufferevent *bev, void *ctx) {
     Request *request = (Request *)ctx;
+    // If a different cleanup path has already advanced past schedule_free,
+    // ignore this flush — the deferred free callback will (or has) finalised.
+    if (request->ws_cleaning_up) {
+        return;
+    }
     struct evbuffer *output = bufferevent_get_output(bev);
     if (evbuffer_get_length(output) == 0) {
         ws_schedule_free(request, bev);
@@ -580,12 +601,24 @@ static void ws_flush_writecb(struct bufferevent *bev, void *ctx) {
 
 static void ws_flush_eventcb(struct bufferevent *bev, short what, void *ctx) {
     Request *request = (Request *)ctx;
+    if (request->ws_cleaning_up) {
+        return;
+    }
     if (what & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
         ws_schedule_free(request, bev);
     }
 }
 
 static void ws_connection_cleanup(Request *request) {
+    // Cleanup can be reached from many paths (resume_with_error, ws_eventcb,
+    // explicit lua_evhttp_request_websocket_close, request __gc, …). Run the
+    // body at most once. Use a CAS-style guard via __sync to remain
+    // signal/thread safe; the rest of httpd.c lives on the main loop, but
+    // the deferred free fires from a libevent callback.
+    if (__sync_bool_compare_and_swap(&request->ws_cleaning_up, 0, 1) == 0) {
+        return;
+    }
+
     ws_frame_queue_clear(request);
 
     if (request->ws_bev) {
@@ -1233,6 +1266,14 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         request->ws_bev = bev;
         request->reply_status = REPLY_STATUS_REPLYED;
         request->mainthread = utlua_mainthread(L);
+
+        // Once we own the connection (via evhttp_request_own above), the
+        // bev is the live handle. Unwire the close cb that newtable_from_req
+        // installed to NULL request->req from a libevent thread — from this
+        // point ws_bev is the source of truth, and ws_eventcb handles all
+        // tear-down.  Leaving the close cb wired races every WebSocket API
+        // function that still consults request->req for diagnostics.
+        evhttp_connection_set_closecb(evcon, NULL, NULL);
 
         evhttp_connection_set_timeout(evcon, 0);
         bufferevent_setcb(bev, ws_readcb, NULL, ws_eventcb, request);

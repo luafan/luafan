@@ -2,6 +2,7 @@
 #define TCPD_SSL_H
 
 #include "tcpd_common.h"
+#include <stdatomic.h>
 
 #if FAN_HAS_OPENSSL
 #include <openssl/ssl.h>
@@ -14,7 +15,10 @@
 typedef struct tcpd_ssl_context {
     SSL_CTX *ssl_ctx;
     char *cache_key;
-    int retain_count;
+    // Atomic so retain/release can be called from worker threads safely.
+    // A cached context is shared between client connections that may live
+    // on different worker bases.
+    atomic_int retain_count;
     int configured;  // Flag to track if context is already configured
 
     // SSL configuration

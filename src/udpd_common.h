@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 
 // Forward declarations
 struct udpd_base_conn;
@@ -79,6 +80,11 @@ typedef struct udpd_base_conn {
     // Event handling
     struct event *read_ev;
     struct event *write_ev;
+    // Serialises read_ev/write_ev creation, free, event_add and event_del
+    // between the Lua main thread (request_send_ready, cleanup) and the
+    // worker base callbacks. Held only across the libevent calls — never
+    // across Lua resume.
+    pthread_mutex_t event_mutex;
 
     // Worker thread assignment (-1 = main event_base)
     int worker_id;

@@ -1,6 +1,8 @@
 # Object files
 *.o
 build
+build-asan
+build-tsan
 .DS_Store
 *CMakeFiles/*
 *CMakeCache.txt
@@ -78,6 +80,7 @@ final_*.lua
 
 # Compiled test executables in root
 test_tcpd_*
+!test_tcpd_*.lua
 objectbuf_perf_*
 *_perf_*
 

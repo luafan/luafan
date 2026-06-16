@@ -24,7 +24,21 @@ void tcpd_push_connection_object(lua_State *co, tcpd_base_conn_t *conn) {
 void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
     tcpd_base_conn_t *conn = (tcpd_base_conn_t *)ctx;
 
-    if (!conn || !conn->buf || conn->onReadRef == LUA_NOREF) {
+    if (!conn) return;
+
+    // Snapshot buf under the mutex so a concurrent base_conn_cleanup that
+    // is in the middle of nulling conn->buf and freeing the bev cannot
+    // pull bev out from under us. We release the lock immediately — the
+    // remainder of the callback runs with bev as the local copy and
+    // performs Lua resume, which must not be done under the lock.
+    pthread_mutex_lock(&conn->buf_mutex);
+    if (conn->buf != bev) {
+        pthread_mutex_unlock(&conn->buf_mutex);
+        return;
+    }
+    pthread_mutex_unlock(&conn->buf_mutex);
+
+    if (conn->onReadRef == LUA_NOREF) {
         return;
     }
 
@@ -91,7 +105,17 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
 void tcpd_common_writecb(struct bufferevent *bev, void *ctx) {
     tcpd_base_conn_t *conn = (tcpd_base_conn_t *)ctx;
 
-    if (!conn || !conn->buf || conn->onSendReadyRef == LUA_NOREF) {
+    if (!conn) return;
+
+    // Snapshot under buf_mutex — see tcpd_common_readcb for rationale.
+    pthread_mutex_lock(&conn->buf_mutex);
+    if (conn->buf != bev) {
+        pthread_mutex_unlock(&conn->buf_mutex);
+        return;
+    }
+    pthread_mutex_unlock(&conn->buf_mutex);
+
+    if (conn->onSendReadyRef == LUA_NOREF) {
         return;
     }
 
@@ -486,7 +510,17 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
         tcpd_shutdown_bufferevent(bev_to_free);
     }
 
-    // Clear callback references
+    // Clear callback references.
+    // Note on mainthread validity: when this runs from a Lua __gc finaliser
+    // before lua_close, mt is valid. When invoked after lua_close (e.g. via
+    // a leftover libevent callback), mt would be a dangling pointer — but
+    // fix #3 (event_mgr_loop now defers worker base free until
+    // event_mgr_loop_cleanup) ensures __gc runs while mt is still valid,
+    // because the only callers of cleanup go through Lua's GC machinery
+    // before the embedder reaches lua_close. If a future code path reaches
+    // this without a live Lua state, mt would have been zeroed by the
+    // deliberate `conn->mainthread = NULL` at the bottom of this function
+    // on its first invocation; the NULL check below catches a re-entry.
     lua_State *mt = conn->mainthread;
     if (mt) {
         CLEAR_REF(mt, conn->onReadRef);
@@ -522,9 +556,18 @@ char* tcpd_format_connection_info(const tcpd_base_conn_t *conn) {
     int local_port = 0;
     evutil_socket_t fd = -1;
 
-    // Get socket info if available
-    if (conn->buf) {
-        fd = bufferevent_getfd(conn->buf);
+    // Read conn->buf under buf_mutex to avoid racing with eventcb /
+    // base_conn_cleanup, which may concurrently NULL the field and free
+    // the bufferevent. We resolve the fd and ip while still holding the
+    // lock so the bev cannot be destroyed underneath us.
+    // The mutex is logically protecting writes to a non-const member, so
+    // we cast away const here — the function signature is widely used by
+    // Lua bindings that already pass a const pointer.
+    pthread_mutex_t *m = (pthread_mutex_t *)&conn->buf_mutex;
+    pthread_mutex_lock(m);
+    struct bufferevent *bev = conn->buf;
+    if (bev) {
+        fd = bufferevent_getfd(bev);
         if (fd >= 0) {
             struct sockaddr_storage ss;
             socklen_t len = sizeof(ss);
@@ -543,6 +586,7 @@ char* tcpd_format_connection_info(const tcpd_base_conn_t *conn) {
             }
         }
     }
+    pthread_mutex_unlock(m);
 
     size_t len = strlen(host) + strlen(local_ip) + 128;
     char *info = malloc(len);

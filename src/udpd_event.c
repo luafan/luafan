@@ -167,9 +167,11 @@ void udpd_handle_read_error(udpd_base_conn_t *conn, int error_code) {
     conn->state = UDPD_CONN_ERROR;
 
     // Disable read events to prevent error loop
+    pthread_mutex_lock(&conn->event_mutex);
     if (conn->read_ev) {
         event_del(conn->read_ev);
     }
+    pthread_mutex_unlock(&conn->event_mutex);
 
     // Cleanup error
     tcpd_error_cleanup(&error);
@@ -211,6 +213,15 @@ int udpd_base_conn_init(udpd_base_conn_t *conn, udpd_conn_type_t type, lua_State
     conn->worker_id = -1;
     conn->dns_request = NULL;
 
+    // Recursive mutex so cleanup may run nested under callbacks that
+    // already hold the lock briefly (e.g. eventcb → request_send_ready
+    // races avoided without contortion).
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&conn->event_mutex, &attr);
+    pthread_mutexattr_destroy(&attr);
+
     return 0;
 }
 
@@ -237,15 +248,22 @@ void udpd_base_conn_cleanup(udpd_base_conn_t *conn) {
         conn->bind_host = NULL;
     }
 
-    // Clean up events
+    // Clean up events. Take the mutex so a callback that just entered
+    // udpd_common_readcb/writecb on a worker base sees a consistent
+    // (NULL'd) pointer and any concurrent request_send_ready can't add
+    // a freed event back into the base.
+    pthread_mutex_lock(&conn->event_mutex);
     if (conn->read_ev) {
+        event_del(conn->read_ev);
         event_free(conn->read_ev);
         conn->read_ev = NULL;
     }
     if (conn->write_ev) {
+        event_del(conn->write_ev);
         event_free(conn->write_ev);
         conn->write_ev = NULL;
     }
+    pthread_mutex_unlock(&conn->event_mutex);
 
     // Close socket
     if (conn->socket_fd >= 0) {
@@ -264,6 +282,9 @@ void udpd_base_conn_cleanup(udpd_base_conn_t *conn) {
 
     // Update state
     conn->state = UDPD_CONN_DISCONNECTED;
+
+    // No further events can fire — destroy the mutex.
+    pthread_mutex_destroy(&conn->event_mutex);
 }
 
 // Set callbacks from Lua table
@@ -424,6 +445,11 @@ int udpd_base_conn_setup_events(udpd_base_conn_t *conn) {
         ev_base = event_mgr_base();
     }
 
+    // Hold event_mutex across event_new + event_add so a parallel
+    // request_send_ready / cleanup observes either fully-initialised events
+    // or none.
+    pthread_mutex_lock(&conn->event_mutex);
+
     // Set up read event if callback is registered
     if (conn->onReadRef != LUA_NOREF) {
         conn->read_ev = event_new(ev_base, conn->socket_fd,
@@ -446,6 +472,7 @@ int udpd_base_conn_setup_events(udpd_base_conn_t *conn) {
         // Don't add write event initially, only when requested
     }
 
+    pthread_mutex_unlock(&conn->event_mutex);
     conn->state = UDPD_CONN_READY;
     return 0;
 
@@ -459,18 +486,23 @@ error:
         event_free(conn->write_ev);
         conn->write_ev = NULL;
     }
+    pthread_mutex_unlock(&conn->event_mutex);
     conn->state = UDPD_CONN_ERROR;
     return -1;
 }
 
 // Request send ready notification
 int udpd_base_conn_request_send_ready(udpd_base_conn_t *conn) {
-    if (!conn || !conn->write_ev) {
+    if (!conn) return -1;
+
+    pthread_mutex_lock(&conn->event_mutex);
+    if (!conn->write_ev) {
+        pthread_mutex_unlock(&conn->event_mutex);
         return -1;
     }
-
-    // Add write event to be notified when socket is ready for writing
-    return event_add(conn->write_ev, NULL);
+    int rc = event_add(conn->write_ev, NULL);
+    pthread_mutex_unlock(&conn->event_mutex);
+    return rc;
 }
 
 // Connection cleanup on disconnect
@@ -478,15 +510,16 @@ void udpd_connection_cleanup_on_disconnect(udpd_base_conn_t *conn) {
     if (!conn) return;
 
     // For UDP, we just clean up resources but don't change state dramatically
-    // since UDP is connectionless
-
-    // Remove events
+    // since UDP is connectionless. Take the lock so a worker callback that
+    // just observed a non-NULL event pointer cannot race the event_del.
+    pthread_mutex_lock(&conn->event_mutex);
     if (conn->read_ev) {
         event_del(conn->read_ev);
     }
     if (conn->write_ev) {
         event_del(conn->write_ev);
     }
+    pthread_mutex_unlock(&conn->event_mutex);
 
     // Update state
     conn->state = UDPD_CONN_DISCONNECTED;
