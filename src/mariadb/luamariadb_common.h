@@ -110,28 +110,30 @@
   }
 
 // Reference counting macros
-#define REF_CO(x)                              \
-  if (x->coref == LUA_NOREF)                   \
-  {                                            \
-    lua_pushthread(L);                         \
-    x->coref = luaL_ref(L, LUA_REGISTRYINDEX); \
-    x->coref_count = 1;                        \
-  }                                            \
-  else                                         \
-  {                                            \
-    x->coref_count++;                          \
-  }
+#define REF_CO(x) do {                             \
+  if ((x)->coref == LUA_NOREF)                     \
+  {                                                \
+    lua_pushthread(L);                             \
+    (x)->coref = luaL_ref(L, LUA_REGISTRYINDEX);   \
+    (x)->coref_count = 1;                          \
+  }                                                \
+  else                                             \
+  {                                                \
+    (x)->coref_count++;                            \
+  }                                                \
+} while(0)
 
-#define UNREF_CO(x)                               \
-  if (x->coref != LUA_NOREF)                      \
-  {                                               \
-    x->coref_count--;                             \
-    if (x->coref_count == 0)                      \
-    {                                             \
-      luaL_unref(L, LUA_REGISTRYINDEX, x->coref); \
-      x->coref = LUA_NOREF;                       \
-    }                                             \
-  }
+#define UNREF_CO(x) do {                              \
+  if ((x)->coref != LUA_NOREF)                        \
+  {                                                   \
+    (x)->coref_count--;                               \
+    if ((x)->coref_count == 0)                        \
+    {                                                 \
+      luaL_unref(L, LUA_REGISTRYINDEX, (x)->coref);   \
+      (x)->coref = LUA_NOREF;                         \
+    }                                                 \
+  }                                                   \
+} while(0)
 
 // Structure definitions
 typedef struct

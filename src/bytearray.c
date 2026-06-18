@@ -101,7 +101,7 @@ static inline bool read_value_optimized(BYTEARRAY *ba, void *value, size_t size)
 }
 
 // Optimized individual write functions
-bool bytearray_write8_optimized(BYTEARRAY *ba, const uint8_t value) {
+static bool bytearray_write8_optimized(BYTEARRAY *ba, const uint8_t value) {
     // Ultra-fast path for single byte
     if (__builtin_expect(ba->offset < ba->total, 1)) {
         ba->buffer[ba->offset++] = value;
@@ -110,24 +110,24 @@ bool bytearray_write8_optimized(BYTEARRAY *ba, const uint8_t value) {
     return write_value_optimized(ba, &value, 1);
 }
 
-bool bytearray_write16_optimized(BYTEARRAY *ba, const uint16_t value) {
+static bool bytearray_write16_optimized(BYTEARRAY *ba, const uint16_t value) {
     return write_value_optimized(ba, &value, sizeof(uint16_t));
 }
 
-bool bytearray_write32_optimized(BYTEARRAY *ba, const uint32_t value) {
+static bool bytearray_write32_optimized(BYTEARRAY *ba, const uint32_t value) {
     return write_value_optimized(ba, &value, sizeof(uint32_t));
 }
 
-bool bytearray_write64_optimized(BYTEARRAY *ba, const uint64_t value) {
+static bool bytearray_write64_optimized(BYTEARRAY *ba, const uint64_t value) {
     return write_value_optimized(ba, &value, sizeof(uint64_t));
 }
 
-bool bytearray_write64d_optimized(BYTEARRAY *ba, const double value) {
+static bool bytearray_write64d_optimized(BYTEARRAY *ba, const double value) {
     return write_value_optimized(ba, &value, sizeof(double));
 }
 
 // Optimized read functions
-bool bytearray_read8_optimized(BYTEARRAY *ba, uint8_t *value) {
+static bool bytearray_read8_optimized(BYTEARRAY *ba, uint8_t *value) {
     if (__builtin_expect(ba->offset < ba->total, 1)) {
         *value = ba->buffer[ba->offset++];
         return true;
@@ -135,28 +135,28 @@ bool bytearray_read8_optimized(BYTEARRAY *ba, uint8_t *value) {
     return false;
 }
 
-bool bytearray_read16_optimized(BYTEARRAY *ba, uint16_t *value) {
+static bool bytearray_read16_optimized(BYTEARRAY *ba, uint16_t *value) {
     return read_value_optimized(ba, value, sizeof(uint16_t));
 }
 
-bool bytearray_read32_optimized(BYTEARRAY *ba, uint32_t *value) {
+static bool bytearray_read32_optimized(BYTEARRAY *ba, uint32_t *value) {
     return read_value_optimized(ba, value, sizeof(uint32_t));
 }
 
-bool bytearray_read64_optimized(BYTEARRAY *ba, uint64_t *value) {
+static bool bytearray_read64_optimized(BYTEARRAY *ba, uint64_t *value) {
     return read_value_optimized(ba, value, sizeof(uint64_t));
 }
 
-bool bytearray_read64d_optimized(BYTEARRAY *ba, double *value) {
+static bool bytearray_read64d_optimized(BYTEARRAY *ba, double *value) {
     return read_value_optimized(ba, value, sizeof(double));
 }
 
 // Optimized buffer operations
-bool bytearray_writebuffer_optimized(BYTEARRAY *ba, const void *buff, const size_t length) {
+static bool bytearray_writebuffer_optimized(BYTEARRAY *ba, const void *buff, const size_t length) {
     return write_value_optimized(ba, buff, length);
 }
 
-bool bytearray_readbuffer_optimized(BYTEARRAY *ba, void *buff, uint32_t length) {
+static bool bytearray_readbuffer_optimized(BYTEARRAY *ba, void *buff, uint32_t length) {
     if (__builtin_expect(FAST_BOUNDS_CHECK(ba, length), 1)) {
         if (buff) {
             memcpy(buff, ba->buffer + ba->offset, length);

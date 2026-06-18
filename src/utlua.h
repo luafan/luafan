@@ -98,12 +98,14 @@ extern "C" {
 
 #else
 
-#define LOGD(...)                                                                                                      \
-    fprintf(stdout, __VA_ARGS__);                                                                                      \
-    fflush(stdout);
-#define LOGE(...)                                                                                                      \
-    fprintf(stderr, __VA_ARGS__);                                                                                      \
-    fflush(stderr);
+#define LOGD(...) do {                                                                                                   \
+    fprintf(stdout, __VA_ARGS__);                                                                                        \
+    fflush(stdout);                                                                                                      \
+} while(0)
+#define LOGE(...) do {                                                                                                   \
+    fprintf(stderr, __VA_ARGS__);                                                                                        \
+    fflush(stderr);                                                                                                      \
+} while(0)
 
 #endif
 
@@ -127,11 +129,8 @@ extern "C" {
 #else
 
 #define LUA_OK 0
-#define lua_rawgetp(L, index, p)                                                                                       \
-    {                                                                                                                  \
-        lua_pushstring(L, p);                                                                                          \
-        lua_rawget(L, index);                                                                                          \
-    }
+#define lua_rawgetp(L, index, p)                                                                                         \
+    (lua_pushstring(L, p), lua_rawget(L, index))
 
 #endif
 

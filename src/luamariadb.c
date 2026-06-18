@@ -1,6 +1,3 @@
-#define true 1
-#define false 0
-
 #include "mariadb/luamariadb_common.h"
 
 // Global variable definition

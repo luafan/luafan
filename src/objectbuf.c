@@ -4,13 +4,13 @@
 
 #include "utlua.h"
 
-#define HAS_NUMBER_MASK 1 << 7
-#define HAS_U30_MASK 1 << 6
-#define HAS_STRING_MASK 1 << 5
-#define HAS_FUNCTION_MASK 1 << 4
-#define HAS_TABLE_MASK 1 << 3
+#define HAS_NUMBER_MASK (1 << 7)
+#define HAS_U30_MASK (1 << 6)
+#define HAS_STRING_MASK (1 << 5)
+#define HAS_FUNCTION_MASK (1 << 4)
+#define HAS_TABLE_MASK (1 << 3)
 /* if none of the above mask was set, that means it's boolean value. */
-#define TRUE_FALSE_MASK 1 << 0
+#define TRUE_FALSE_MASK (1 << 0)
 
 #define MAX_U30 4294967296 // exclusive upper bound for u32/u30 value range (2^32)
 
