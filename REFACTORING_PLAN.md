@@ -394,7 +394,7 @@ Phase 2 (Lua modules, P1)
 Phase 3 (Platform, P2)
   3.1 Consolidate platform ifdefs ───────── DONE (commit f37ae4b)
   3.2 SSL version compat ────────────────── DONE (commit 973935c)
-  3.3 Build system modernization ────────── DONE (commit pending)
+  3.3 Build system modernization ────────── DONE (commit fc4a550)
 
 Phase 4 (Testing, P2)
   4.1 Fix known failures ────────────────── DONE (commit ccb0a12)
@@ -404,7 +404,7 @@ Phase 4 (Testing, P2)
 
 **Critical path**: 0.1 -> 1.1 -> 2.1 -> 3.1
 **Parallel track**: 1.2, 2.2, 2.3, 4.1 can proceed independently
-**Completed**: Phases 0.1, 0.2, 1.1, 1.3, 3.1, 4.1 (all DONE)
+**Completed**: Phases 0.1, 0.2, 1.1, 1.3, 2.1, 2.2, 3.1, 3.2, 3.3, 4.1 (all DONE)
 
 ---
 
@@ -595,7 +595,7 @@ No significant issues found. Clean implementation.
 - [x] ASan: zero new leak/UAF reports (existing leaks fixed or documented as by-design)
 - [ ] httpd.c reduced from ~1800 lines to ~600 lines per file (deferred — Phase 1.2)
 - [x] TCP/UDP socket option duplication eliminated (conn_config.h)
-- [ ] MariaDB/SQLite ORM duplication reduced by >50%
+- [x] MariaDB/SQLite ORM duplication reduced by >50%
 - [x] Platform `#ifdef` consolidated into single `platform.h`
-- [ ] `make test` runs full suite with ASan in one command
+- [x] `make test` runs full suite with ASan in one command
 - [ ] CI matrix covers 5 platform/arch combinations
