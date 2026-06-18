@@ -128,8 +128,9 @@ LUA_API int luafan_setaffinity(lua_State *L) {
         return 1;
     }
 #else
-    lua_pushboolean(L, 1);
-    return 1;
+    lua_pushnil(L);
+    lua_pushstring(L, "setaffinity is not supported on this platform");
+    return 2;
 #endif
 }
 
@@ -140,7 +141,9 @@ LUA_API int luafan_getcpucount(lua_State *L) {
 #endif
 
 LUA_API int luafan_kill(lua_State *L) {
-    if (kill(luaL_optinteger(L, 1, -1), (pid_t)luaL_optinteger(L, 2, SIGTERM))) {
+    pid_t pid = (pid_t)luaL_checkinteger(L, 1);
+    int sig = (int)luaL_optinteger(L, 2, SIGTERM);
+    if (kill(pid, sig)) {
         lua_pushnil(L);
         lua_pushstring(L, strerror(errno));
         return 2;
@@ -194,14 +197,18 @@ LUA_API int luafan_getinterfaces(lua_State *L) {
             }
         }
         if (ifa->ifa_netmask) {
-            if (getnameinfo(ifa->ifa_netmask, sizeof(struct sockaddr_in), host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST) ==
+            socklen_t nm_size = ifa->ifa_netmask->sa_family == AF_INET6
+                ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+            if (getnameinfo(ifa->ifa_netmask, nm_size, host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST) ==
                 0) {
                 lua_pushstring(L, host);
                 lua_setfield(L, -2, "netmask");
             }
         }
         if (ifa->ifa_dstaddr) {
-            if (getnameinfo(ifa->ifa_dstaddr, sizeof(struct sockaddr_in), host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST) ==
+            socklen_t dst_size = ifa->ifa_dstaddr->sa_family == AF_INET6
+                ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+            if (getnameinfo(ifa->ifa_dstaddr, dst_size, host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST) ==
                 0) {
                 lua_pushstring(L, host);
                 lua_setfield(L, -2, "dst");

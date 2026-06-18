@@ -146,8 +146,8 @@ void tcpd_server_rebind(lua_State *L, tcpd_server_t *server) {
         struct evutil_addrinfo hints = {0};
         struct evutil_addrinfo *answer = NULL;
         hints.ai_family = server->ipv6 ? AF_INET6 : AF_INET;
-        hints.ai_socktype = SOCK_DGRAM;
-        hints.ai_protocol = IPPROTO_UDP;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
         hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
 
         int err = evutil_getaddrinfo(server->host, portbuf, &hints, &answer);

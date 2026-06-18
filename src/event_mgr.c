@@ -179,7 +179,7 @@ static void signal_handler(int sig) {
             signal_count++;
             if (signal_count > 1) {
                 printf("force exit.\n");
-                exit(0);
+                _exit(0);
             }
         case SIGTERM:
         case SIGHUP:
