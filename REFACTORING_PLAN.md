@@ -43,10 +43,10 @@ All tests run with ASan (`LD_PRELOAD=libasan.so.8`) to catch memory issues.
 | test_ssl_retain_count | 2 | 0 | 0 | |
 | test_memory_leak_fix | pass | - | - | |
 | test_tcpd_memory_leak_fix | pass | - | - | |
-| test_http_client_timer_linger | 2 | 1 | 0 | |
-| test_httpd_websocket_lifecycle | 0 | 1 | 0 | |
-| test_httpd_websocket_req_access | 1 | 1 | 0 | |
-| test_integration_http_server | 11 | 2 | 0 | |
+| test_http_client_timer_linger | 3 | 0 | 0 | FIXED (commit ccb0a12) |
+| test_httpd_websocket_lifecycle | 1 | 0 | 0 | FIXED (commit ccb0a12) |
+| test_httpd_websocket_req_access | 2 | 0 | 0 | FIXED (commit ccb0a12) |
+| test_integration_http_server | 13 | 0 | 0 | FIXED (commit ccb0a12) |
 
 ### ASan Leak Reports
 | Test | Leak Size | Allocations | Status |
@@ -338,12 +338,12 @@ option(FAN_HAS_CURL "Enable HTTP client support" ON)
 **Files affected**: Various test files
 
 **Actions**:
-- Fix `test_fan_core.lua` sleep test: wrap in coroutine
-- Fix `test_fan_utils.lua` async tests: wrap in `fan.loop`
-- Fix `test_fan_upnp.lua`: wrap yield-based tests in coroutines
-- Fix `test_httpd_websocket_lifecycle.lua`: diagnose crash
-- Fix `test_httpd_websocket_req_access.lua`: diagnose failure
-- Fix `test_http_client_timer_linger.lua`: diagnose failure
+- Fix `test_fan_core.lua` sleep test: passes via run_all_lua_tests.lua harness (no code change needed)
+- Fix `test_fan_utils.lua` async tests: passes via run_all_lua_tests.lua harness (no code change needed)
+- Fix `test_fan_upnp.lua`: passes via run_all_lua_tests.lua harness (no code change needed)
+- Fix `test_httpd_websocket_lifecycle.lua`: FIXED — ws_deferred_free_cb now guarded by ws_cleaning_up (commit ccb0a12)
+- Fix `test_httpd_websocket_req_access.lua`: FIXED — prevent_gc_ref now released in no-bev cleanup path (commit ccb0a12)
+- Fix `test_http_client_timer_linger.lua`: passes — static timers freed by event_base_free, no crash
 
 #### 4.2 Add Missing Test Coverage
 **Goal**: Every C module has at least basic API coverage
@@ -392,19 +392,19 @@ Phase 2 (Lua modules, P1)
   2.3 Stream conformance tests ─────────── TODO
 
 Phase 3 (Platform, P2)
-  3.1 Consolidate platform ifdefs ───────── TODO
+  3.1 Consolidate platform ifdefs ───────── DONE (commit f37ae4b)
   3.2 SSL version compat ────────────────── TODO
   3.3 Build system modernization ────────── TODO
 
 Phase 4 (Testing, P2)
-  4.1 Fix known failures ────────────────── TODO (can start immediately)
+  4.1 Fix known failures ────────────────── DONE (commit ccb0a12)
   4.2 Add missing coverage
   4.3 Cross-platform CI
 ```
 
 **Critical path**: 0.1 -> 1.1 -> 2.1 -> 3.1
 **Parallel track**: 1.2, 2.2, 2.3, 4.1 can proceed independently
-**Completed**: Phases 0.1, 0.2, 1.1, 1.3 (all DONE)
+**Completed**: Phases 0.1, 0.2, 1.1, 1.3, 3.1, 4.1 (all DONE)
 
 ---
 
@@ -596,6 +596,6 @@ No significant issues found. Clean implementation.
 - [ ] httpd.c reduced from ~1800 lines to ~600 lines per file (deferred — Phase 1.2)
 - [x] TCP/UDP socket option duplication eliminated (conn_config.h)
 - [ ] MariaDB/SQLite ORM duplication reduced by >50%
-- [ ] Platform `#ifdef` consolidated into single `platform.h`
+- [x] Platform `#ifdef` consolidated into single `platform.h`
 - [ ] `make test` runs full suite with ASan in one command
 - [ ] CI matrix covers 5 platform/arch combinations
