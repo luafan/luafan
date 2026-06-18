@@ -151,6 +151,7 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
 
     FIFO *fifo = (FIFO *)lua_newuserdata(L, sizeof(FIFO));
     memset(fifo, 0, sizeof(FIFO));
+    fifo->socket = -1;
 
     fifo->name = strdup(fifoname);
 
@@ -310,15 +311,15 @@ LUA_API int luafan_fifo_close(lua_State *L) {
         fifo->write_ev = NULL;
     }
 
-    if (fifo->socket) {
+    if (fifo->socket >= 0) {
         close(fifo->socket);
-        fifo->socket = 0;
+        fifo->socket = -1;
     }
 
     if (fifo->delete_on_close) {
         if (unlink(fifo->name)) {
             if (errno != ENOENT) {
-                printf("unlink %s, error = %s\n", fifo->name, strerror(errno));
+                LOGE("unlink %s, error = %s\n", fifo->name, strerror(errno));
             }
         } else {
             // printf("unlinked %s\n", fifo->name);

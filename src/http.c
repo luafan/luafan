@@ -146,7 +146,7 @@ static void http_getpost_complete(ConnInfo *conn) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, conn->retref);
     luaL_unref(L, LUA_REGISTRYINDEX, conn->retref);
 
-    if (strlen(conn->error) < CURL_ERROR_SIZE && *conn->error != 0) {
+    if (*conn->error != 0) {
         lua_pushstring(L, conn->error);
         lua_setfield(L, -2, "error");
         // LOGE("%s", conn->error);

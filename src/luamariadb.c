@@ -16,6 +16,9 @@ void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
   }
 
   DB_STATUS *bag = malloc(sizeof(DB_STATUS));
+  if (!bag) {
+    return;
+  }
   bag->data = data;
   bag->L = L;
   bag->status = status;

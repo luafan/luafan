@@ -80,6 +80,10 @@ int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_
     if (lua_isstring(L, -1)) {
         const char *cert = lua_tostring(L, -1);
         ctx->cert_file = strdup(cert);
+        if (!ctx->cert_file) {
+            lua_pop(L, 1);
+            return luaL_error(L, "memory allocation failed for cert_file");
+        }
     }
     lua_pop(L, 1);
 
@@ -87,6 +91,10 @@ int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_
     if (lua_isstring(L, -1)) {
         const char *key = lua_tostring(L, -1);
         ctx->key_file = strdup(key);
+        if (!ctx->key_file) {
+            lua_pop(L, 1);
+            return luaL_error(L, "memory allocation failed for key_file");
+        }
     }
     lua_pop(L, 1);
 
@@ -94,6 +102,10 @@ int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_
     if (lua_isstring(L, -1)) {
         const char *cainfo = lua_tostring(L, -1);
         ctx->ca_info = strdup(cainfo);
+        if (!ctx->ca_info) {
+            lua_pop(L, 1);
+            return luaL_error(L, "memory allocation failed for ca_info");
+        }
     }
     lua_pop(L, 1);
 
@@ -101,6 +113,10 @@ int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_
     if (lua_isstring(L, -1)) {
         const char *capath = lua_tostring(L, -1);
         ctx->ca_path = strdup(capath);
+        if (!ctx->ca_path) {
+            lua_pop(L, 1);
+            return luaL_error(L, "memory allocation failed for ca_path");
+        }
     }
     lua_pop(L, 1);
 
@@ -108,6 +124,10 @@ int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_
     if (lua_isstring(L, -1)) {
         const char *p12path = lua_tostring(L, -1);
         ctx->pkcs12_path = strdup(p12path);
+        if (!ctx->pkcs12_path) {
+            lua_pop(L, 1);
+            return luaL_error(L, "memory allocation failed for pkcs12_path");
+        }
     }
     lua_pop(L, 1);
 
@@ -115,6 +135,10 @@ int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_
     if (lua_isstring(L, -1)) {
         const char *p12password = lua_tostring(L, -1);
         ctx->pkcs12_password = strdup(p12password);
+        if (!ctx->pkcs12_password) {
+            lua_pop(L, 1);
+            return luaL_error(L, "memory allocation failed for pkcs12_password");
+        }
     }
     lua_pop(L, 1);
 

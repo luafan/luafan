@@ -62,12 +62,21 @@ LUA_API int udpd_new(lua_State *L) {
     if (lua_type(L, -1) == LUA_TSTRING) {
         const char *bind_host = lua_tostring(L, -1);
         conn->base.bind_host = strdup(bind_host);
+        if (!conn->base.bind_host) {
+            lua_pop(L, 1);
+            return luaL_error(L, "memory allocation failed for bind_host");
+        }
     }
     lua_pop(L, 1);
 
     lua_getfield(L, 1, "bind_port");
     if (lua_type(L, -1) == LUA_TNUMBER) {
-        conn->base.bind_port = (int)lua_tointeger(L, -1);
+        int port = (int)lua_tointeger(L, -1);
+        if (port < 0 || port > 65535) {
+            lua_pop(L, 1);
+            return luaL_error(L, "bind_port out of range (0-65535): %d", port);
+        }
+        conn->base.bind_port = port;
     }
     lua_pop(L, 1);
 
