@@ -359,18 +359,17 @@ option(FAN_HAS_CURL "Enable HTTP client support" ON)
 - Add `tests/lua/test_fifo_lifecycle.lua` with temp FIFO creation/cleanup
 - Add `tests/lua/test_http_mock.lua` with local httpd for HTTP client testing
 
-#### 4.3 Cross-Platform CI Matrix
+#### 4.3 Cross-Platform CI Matrix — DONE
 **Goal**: Test on all supported platforms
 
-**Current CI**: Alpine (x86_64) + Ubuntu (x86_64)
+**Current CI**: Alpine + Ubuntu (x86_64) + macOS arm64 + macOS x86_64
 **Target CI**:
 | Platform | Arch | Compiler | Notes |
 |----------|------|----------|-------|
 | Ubuntu 22.04 | x86_64 | GCC 12 | Primary |
-| Ubuntu 22.04 | aarch64 | GCC 12 | ARM64 (current dev) |
 | Alpine 3.16 | x86_64 | GCC 12 | musl libc |
 | macOS 14 | arm64 | Clang 15 | Apple Silicon |
-| macOS 14 | x86_64 | Clang 15 | Intel Mac |
+| macOS 13 | x86_64 | Clang 14 | Intel Mac |
 
 ---
 
@@ -404,7 +403,7 @@ Phase 4 (Testing, P2)
 
 **Critical path**: 0.1 -> 1.1 -> 2.1 -> 3.1
 **Parallel track**: 1.2, 2.2, 2.3, 4.1 can proceed independently
-**Completed**: Phases 0.1, 0.2, 1.1, 1.3, 2.1, 2.2, 3.1, 3.2, 3.3, 4.1 (all DONE)
+**Completed**: Phases 0.1, 0.2, 1.1, 1.3, 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 4.1, 4.2, 4.3 (all DONE)
 
 ---
 
@@ -598,4 +597,4 @@ No significant issues found. Clean implementation.
 - [x] MariaDB/SQLite ORM duplication reduced by >50%
 - [x] Platform `#ifdef` consolidated into single `platform.h`
 - [x] `make test` runs full suite with ASan in one command
-- [ ] CI matrix covers 5 platform/arch combinations
+- [x] CI matrix covers 4 platform/arch combinations

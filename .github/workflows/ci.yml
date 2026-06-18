@@ -47,6 +47,54 @@ jobs:
     - name: Build completion
       run: echo "Build Ubuntu finished!"
 
+  build-macos-arm64:
+    runs-on: macos-14
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Install dependencies
+      run: |
+        brew install cmake libevent openssl lua@5.3 curl mariadb-connector-c
+
+    - name: Build LuaFan (macOS arm64)
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix openssl);$(brew --prefix libevent);$(brew --prefix mariadb-connector-c)" \
+          -DCMAKE_FIND_FRAMEWORK=NEVER
+        make -j$(sysctl -n hw.ncpu)
+
+    - name: Build completion
+      run: echo "Build macOS arm64 finished!"
+
+  build-macos-x86_64:
+    runs-on: macos-13
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Install dependencies
+      run: |
+        brew install cmake libevent openssl lua@5.3 curl mariadb-connector-c
+
+    - name: Build LuaFan (macOS x86_64)
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix openssl);$(brew --prefix libevent);$(brew --prefix mariadb-connector-c)" \
+          -DCMAKE_FIND_FRAMEWORK=NEVER
+        make -j$(sysctl -n hw.ncpu)
+
+    - name: Build completion
+      run: echo "Build macOS x86_64 finished!"
+
   # Additional job for running tests using our comprehensive test suite
   test-comprehensive:
     runs-on: ubuntu-22.04
