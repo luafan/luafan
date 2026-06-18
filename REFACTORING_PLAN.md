@@ -111,8 +111,10 @@ The project supports Linux, macOS, Android, and iOS. Platform differences are co
 
 ### Phase 1: C Core Layer Decomposition (P0)
 
-#### 1.1 Extract Common Connection Base from TCP/UDP
-**Files affected**: `src/tcpd_common.h`, `src/udpd_common.h`, `src/tcpd_config.c`, `src/udpd_config.c`
+#### 1.1 Extract Common Connection Base from TCP/UDP — DONE (scoped to shared helpers)
+**Files affected**: `src/conn_config.h` (new), `src/tcpd_config.c`, `src/udpd_config.c`
+**Commit**: `d1aed38`
+**What was done**: Extracted shared socket option helpers (`SO_SNDBUF`, `SO_RCVBUF`, `IP_BOUND_IF`) into `conn_config.h`. Full `conn_base_t` extraction deferred — the actual field overlap is only 5 fields (`mainthread`, `onReadRef`, `onSendReadyRef`, `host`, `port`), insufficient to justify the structural churn.
 **Goal**: Eliminate ~30% code duplication between TCP and UDP modules
 
 **Current duplication**:
@@ -210,8 +212,14 @@ src/
 - Metrics: no platform differences
 - evhttp: libevent handles platform abstraction
 
-#### 1.3 Standardize Error Handling Across C Modules
-**Files affected**: All `src/*.c`
+#### 1.3 Standardize Error Handling Across C Modules — DONE
+**Files affected**: `src/utlua.h`, `src/utlua.c`, `src/http.c`, `src/httpd.c`
+**Commit**: `de3cdf6`
+**What was done**:
+- `die_most_horribly_from_openssl_error` → takes `lua_State*`, uses `luaL_error` instead of `exit(EXIT_FAILURE)`
+- `server_setup_certs` → passes `lua_State*` through to error handler
+- `http.c` curl_easy_init failure → `luaL_error` with cleanup instead of `exit(2)`
+- `event_mgr.c` SIGINT handler `exit(0)` kept (intentional force-exit on double Ctrl+C)
 **Goal**: Consistent error propagation strategy
 
 **Current inconsistencies**:
