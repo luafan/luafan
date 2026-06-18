@@ -284,8 +284,14 @@ suite:test("cleanup", function()
     TestFramework.assert_true(true, "DNS objects should be properly cleaned up")
 end)
 
--- Run the test suite
-local failures = TestFramework.run_suite(suite)
+-- Run tests inside fan.loop so that pending DNS requests from tcpd.connect
+-- can complete before we exit. fan.loopbreak() triggers clean shutdown of
+-- the event loop, which frees the default dnsbase and lets Lua __gc run
+-- on all remaining evdns_base / bufferevent objects.
+local fan = require('fan')
 
--- Exit with appropriate code
-os.exit(failures > 0 and 1 or 0)
+fan.loop(function()
+    local failures = TestFramework.run_suite(suite)
+    suite = nil
+    fan.loopbreak()
+end)

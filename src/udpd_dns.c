@@ -283,6 +283,13 @@ int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
                                                 struct evdns_base *dnsbase, lua_State *L) {
     if (!hostname || !L) return -1;
 
+    // Async DNS resolution requires a yieldable coroutine — otherwise lua_yield
+    // raises a Lua error and the request object (already allocated) leaks.
+    if (!lua_isyieldable(L)) {
+        luaL_error(L, "udpd.make_dest with hostname requires a coroutine context");
+        return -1;
+    }
+
     // Create DNS request
     udpd_dns_request_t *request = udpd_dns_request_create(hostname, port);
     if (!request) return -1;
@@ -321,7 +328,8 @@ int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
         if (lua_gettop(L) > 3) {
             return lua_gettop(L) - 3;
         }
-        // Callback didn't fire — error. request already cleaned up if callback ran.
+        // Callback didn't fire — error. Clean up the request.
+        udpd_dns_request_cleanup(request);
         return -1;
     }
 
@@ -339,6 +347,12 @@ int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
 int udpd_dns_resolve_for_destinations_with_evdns(const char *hostname, int port,
                                                  struct evdns_base *dnsbase, lua_State *L) {
     if (!hostname || !L) return -1;
+
+    // Async DNS resolution requires a yieldable coroutine
+    if (!lua_isyieldable(L)) {
+        luaL_error(L, "udpd.make_dests with hostname requires a coroutine context");
+        return -1;
+    }
 
     // Create DNS request
     udpd_dns_request_t *request = udpd_dns_request_create(hostname, port);
@@ -378,7 +392,8 @@ int udpd_dns_resolve_for_destinations_with_evdns(const char *hostname, int port,
         if (lua_gettop(L) > 3) {
             return lua_gettop(L) - 3;
         }
-        // Callback didn't fire — error. request already cleaned up if callback ran.
+        // Callback didn't fire — error. Clean up the request.
+        udpd_dns_request_cleanup(request);
         return -1;
     }
 
