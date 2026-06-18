@@ -536,9 +536,13 @@ static void ws_deferred_free_cb(evutil_socket_t fd, short what, void *ctx) {
     (void)fd; (void)what;
     Request *request = (Request *)ctx;
 
-    // The deferred free can race with another cleanup path that has already
-    // released request state (e.g. flush cb scheduled from a stale bev).
-    // Drop both refs at most once.
+    // If another cleanup path (e.g. ws_connection_cleanup via a no-bev
+    // branch, or a second ws_schedule_free from a stale flush cb) has
+    // already completed, skip to avoid double-free of refs.
+    if (request->ws_cleaning_up != 1) {
+        return;
+    }
+
     if (request->owns_request && request->req) {
         struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
         request->req = NULL;
@@ -621,6 +625,10 @@ static void ws_connection_cleanup(Request *request) {
         }
         if (request->self_ref != LUA_NOREF && request->mainthread) {
             CLEAR_REF(request->mainthread, request->self_ref);
+        }
+        if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
+            luaL_unref(request->mainthread, LUA_REGISTRYINDEX, request->prevent_gc_ref);
+            request->prevent_gc_ref = LUA_NOREF;
         }
     }
 }
