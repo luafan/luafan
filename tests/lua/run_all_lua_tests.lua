@@ -129,6 +129,7 @@ local test_files = {
     "test_fan_httpd_lua.lua",
     "test_fan_http_enhanced.lua",
     "test_fan_stream.lua",
+    "test_stream_conformance.lua",
     "test_fan_connector.lua",
     "test_mariadb_orm.lua",
     "test_mariadb_basic.lua",     -- Basic consolidated MariaDB core tests
