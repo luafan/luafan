@@ -2,9 +2,9 @@
 #define _GNU_SOURCE
 #endif
 #include "utlua.h"
+#include "platform.h"
 
 #include <fcntl.h>
-#include <sched.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -32,11 +32,7 @@ LUA_API int luafan_getpid(lua_State *L) {
 }
 
 LUA_API int luafan_getdtablesize(lua_State *L) {
-#ifndef __ANDROID__
-    lua_pushinteger(L, getdtablesize());
-#else
-    lua_pushinteger(L, sysconf(_SC_OPEN_MAX));
-#endif
+    lua_pushinteger(L, FAN_GETDTABLESIZE());
     return 1;
 }
 
@@ -60,10 +56,6 @@ LUA_API int luafan_setsid(lua_State *L) {
     return luafan_push_result(L, result);
 }
 
-#ifdef __APPLE__
-#include <TargetConditionals.h>
-#endif
-
 #if TARGET_OS_IOS == 0
 extern char *__progname;
 #endif
@@ -85,46 +77,6 @@ LUA_API int luafan_getpgid(lua_State *L) {
 }
 
 #ifndef DISABLE_AFFINIY
-
-#ifdef __APPLE__
-#include <sys/sysctl.h>
-
-#define SYSCTL_CORE_COUNT "machdep.cpu.core_count"
-
-typedef struct cpu_set {
-    uint32_t count;
-} cpu_set_t;
-
-static inline void CPU_ZERO(cpu_set_t *cs) {
-    cs->count = 0;
-}
-
-static inline void CPU_SET(int num, cpu_set_t *cs) {
-    cs->count |= (1 << num);
-}
-
-static inline int CPU_ISSET(int num, cpu_set_t *cs) {
-    return (cs->count & (1 << num));
-}
-
-int sched_getaffinity(pid_t pid, size_t cpu_size, cpu_set_t *cpu_set) {
-    int32_t core_count = 0;
-    size_t len = sizeof(core_count);
-    int ret = sysctlbyname(SYSCTL_CORE_COUNT, &core_count, &len, 0, 0);
-    if (ret) {
-        printf("error while get core count %d\n", ret);
-        return -1;
-    }
-    cpu_set->count = 0;
-    for (int i = 0; i < core_count; i++) {
-        cpu_set->count |= (1 << i);
-    }
-
-    return 0;
-}
-#else
-#include <sched.h>
-#endif
 
 static int get_cpu_count() {
     return sysconf(_SC_NPROCESSORS_CONF);
@@ -211,12 +163,6 @@ LUA_API int luafan_waitpid(lua_State *L) {
         return 2;
     }
 }
-
-#ifdef __ANDROID__
-#include "ifaddrs.h"
-#else
-#include <ifaddrs.h>
-#endif
 
 LUA_API int luafan_getinterfaces(lua_State *L) {
     struct ifaddrs *ifaddr, *ifa;
