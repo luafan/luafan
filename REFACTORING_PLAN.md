@@ -387,13 +387,13 @@ Phase 1 (C core, P0)
   1.3 Standardize error handling ─────────── DONE (commit de3cdf6)
 
 Phase 2 (Lua modules, P1)
-  2.1 Unify connector ──────────────────── TODO
-  2.2 Extract ORM base ─────────────────── TODO
+  2.1 Unify connector ──────────────────── DONE (commit e8ec05c)
+  2.2 Extract ORM base ─────────────────── DONE (commit f9b0c72)
   2.3 Stream conformance tests ─────────── TODO
 
 Phase 3 (Platform, P2)
   3.1 Consolidate platform ifdefs ───────── DONE (commit f37ae4b)
-  3.2 SSL version compat ────────────────── TODO
+  3.2 SSL version compat ────────────────── DONE (commit pending)
   3.3 Build system modernization ────────── TODO
 
 Phase 4 (Testing, P2)

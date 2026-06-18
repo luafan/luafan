@@ -131,10 +131,12 @@ int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_
     lua_pop(L, 1);
 
     // Create SSL_CTX
-#if OPENSSL_VERSION_NUMBER < 0x1010000fL
-    ctx->ssl_ctx = SSL_CTX_new(SSLv23_method());
-#else
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    ctx->ssl_ctx = SSL_CTX_new_ex(NULL, NULL, TLS_method());
+#elif OPENSSL_VERSION_NUMBER >= 0x1010000fL
     ctx->ssl_ctx = SSL_CTX_new(TLS_method());
+#else
+    ctx->ssl_ctx = SSL_CTX_new(SSLv23_method());
 #endif
 
     if (!ctx->ssl_ctx) {
