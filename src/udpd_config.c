@@ -1,4 +1,5 @@
 #include "udpd_common.h"
+#include "conn_config.h"
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -145,30 +146,12 @@ int udpd_config_apply_socket_options(const udpd_config_t *config, evutil_socket_
         }
     }
 
-    // Apply buffer sizes from base config
-    if (config->base.receive_buffer_size > 0) {
-        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
-                      &config->base.receive_buffer_size, sizeof(config->base.receive_buffer_size)) < 0) {
-            // Non-fatal, continue
-        }
-    }
+    // Apply buffer sizes from base config (non-fatal on error)
+    conn_config_apply_sndbuf(fd, config->base.send_buffer_size);
+    conn_config_apply_rcvbuf(fd, config->base.receive_buffer_size);
 
-    if (config->base.send_buffer_size > 0) {
-        if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
-                      &config->base.send_buffer_size, sizeof(config->base.send_buffer_size)) < 0) {
-            // Non-fatal, continue
-        }
-    }
-
-    // Apply interface binding (similar to tcpd)
-    if (config->base.interface > 0) {
-#ifdef IP_BOUND_IF
-        if (setsockopt(fd, IPPROTO_IP, IP_BOUND_IF,
-                      &config->base.interface, sizeof(config->base.interface)) < 0) {
-            // Non-fatal, continue
-        }
-#endif
-    }
+    // Apply interface binding from base config (non-fatal on error)
+    conn_config_apply_bound_if(fd, config->base.interface);
 
     return 0;
 }

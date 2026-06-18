@@ -1,4 +1,5 @@
 #include "tcpd_common.h"
+#include "conn_config.h"
 #include <string.h>
 #include <stdlib.h>
 #include <net/if.h>  // For if_nametoindex function
@@ -178,15 +179,13 @@ int tcpd_config_apply_keepalive(const tcpd_config_t *config, evutil_socket_t fd)
 int tcpd_config_apply_buffers(const tcpd_config_t *config, struct bufferevent *bev, evutil_socket_t fd) {
     if (!config || !bev) return -1;
 
-    if (config->send_buffer_size > 0) {
-        if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &config->send_buffer_size, sizeof(config->send_buffer_size)) != 0) {
-            return -1;
-        }
+    if (conn_config_apply_sndbuf(fd, config->send_buffer_size) != 0) {
+        return -1;
     }
 
     if (config->receive_buffer_size > 0) {
         bufferevent_setwatermark(bev, EV_READ, 0, config->receive_buffer_size);
-        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &config->receive_buffer_size, sizeof(config->receive_buffer_size)) != 0) {
+        if (conn_config_apply_rcvbuf(fd, config->receive_buffer_size) != 0) {
             return -1;
         }
     }
@@ -222,13 +221,6 @@ int tcpd_config_apply_timeouts(const tcpd_config_t *config, struct bufferevent *
 
 // Apply network interface binding
 int tcpd_config_apply_interface(const tcpd_config_t *config, evutil_socket_t fd) {
-    if (!config || config->interface == 0) return 0;
-
-#ifdef IP_BOUND_IF
-    if (setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &config->interface, sizeof(config->interface)) != 0) {
-        return -1;
-    }
-#endif
-
-    return 0;
+    if (!config) return 0;
+    return conn_config_apply_bound_if(fd, config->interface);
 }
