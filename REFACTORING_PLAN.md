@@ -389,7 +389,7 @@ Phase 1 (C core, P0)
 Phase 2 (Lua modules, P1)
   2.1 Unify connector ──────────────────── DONE (commit e8ec05c)
   2.2 Extract ORM base ─────────────────── DONE (commit f9b0c72)
-  2.3 Stream conformance tests ─────────── DONE (commit pending)
+  2.3 Stream conformance tests ─────────── DONE (commit d2d3ff3)
 
 Phase 3 (Platform, P2)
   3.1 Consolidate platform ifdefs ───────── DONE (commit f37ae4b)

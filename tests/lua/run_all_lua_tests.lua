@@ -130,6 +130,7 @@ local test_files = {
     "test_fan_http_enhanced.lua",
     "test_fan_stream.lua",
     "test_stream_conformance.lua",
+    "test_fifo_lifecycle.lua",
     "test_fan_connector.lua",
     "test_mariadb_orm.lua",
     "test_mariadb_basic.lua",     -- Basic consolidated MariaDB core tests
@@ -170,6 +171,7 @@ local test_files = {
     "test_http_client_timer_linger.lua",   -- Regression tests for HTTP client timer/socket event lingering
     "test_udpd_send_ready_race.lua",       -- Regression tests for UDP send_ready vs cleanup race
     "test_thread_tracker_overflow.lua",     -- Regression tests for thread_tracker array bounds
+    "test_http_client.lua",                -- HTTP client tests with local httpd (creates server, ASan leak)
     -- Add more test files here as they are completed
 }
 
