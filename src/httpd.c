@@ -292,7 +292,13 @@ static Request *request_from_table(lua_State *L, int idx) {
 static void httpd_conn_close_cb(struct evhttp_connection *evcon, void *arg) {
     (void)evcon;
     Request *request = (Request *)arg;
+    // If a chunked reply was in progress, finalize it to free libevent's
+    // internal chunked-response state and prevent a memory leak.
+    if (request->req && request->reply_status == REPLY_STATUS_REPLY_START) {
+        evhttp_send_reply_end(request->req);
+    }
     request->req = NULL;
+    request->reply_status = REPLY_STATUS_REPLYED;
     if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
         luaL_unref(request->mainthread, LUA_REGISTRYINDEX, request->prevent_gc_ref);
         request->prevent_gc_ref = LUA_NOREF;
