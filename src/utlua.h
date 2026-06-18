@@ -340,9 +340,9 @@ fan_cb_setup_t fan_cb_setup(lua_State *L, int callback_ref);
     } while(0)
 
 #if FAN_HAS_OPENSSL
-void die_most_horribly_from_openssl_error(const char *func);
+void die_most_horribly_from_openssl_error(lua_State *L, const char *func);
 
-void server_setup_certs(SSL_CTX *ctx, const char *certificate_chain, const char *private_key);
+void server_setup_certs(lua_State *L, SSL_CTX *ctx, const char *certificate_chain, const char *private_key);
 #endif
 
 #endif

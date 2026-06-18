@@ -1922,14 +1922,14 @@ LUA_API int utd_bind(lua_State *L) {
 
         EC_KEY *ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
         if (!ecdh) {
-            die_most_horribly_from_openssl_error("EC_KEY_new_by_curve_name");
+            die_most_horribly_from_openssl_error(L, "EC_KEY_new_by_curve_name");
         }
 
         if (1 != SSL_CTX_set_tmp_ecdh(ctx, ecdh)) {
-            die_most_horribly_from_openssl_error("SSL_CTX_set_tmp_ecdh");
+            die_most_horribly_from_openssl_error(L, "SSL_CTX_set_tmp_ecdh");
         }
 
-        server_setup_certs(ctx, cert, key);
+        server_setup_certs(L, ctx, cert, key);
 
         evhttp_set_bevcb(httpd, bevcb, ctx);
     }

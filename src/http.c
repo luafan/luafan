@@ -762,8 +762,10 @@ static int http_getpost(lua_State *L, int method) {
     conn->easy = curl_easy_init();
 
     if (!conn->easy) {
-        fprintf(MSG_OUT, "curl_easy_init() failed, exiting!\n");
-        exit(2);
+        bytearray_dealloc(&conn->input);
+        free(conn);
+        luaL_error(L, "curl_easy_init() failed");
+        return 0;  // unreachable, luaL_error longjmps
     }
 
     //    printf("lua_gettop(L)=%d\n", lua_gettop(L));

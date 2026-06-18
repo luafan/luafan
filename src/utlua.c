@@ -111,13 +111,15 @@ void regress_get_socket_host(evutil_socket_t fd, char *host) {
 
 #if FAN_HAS_OPENSSL
 
-void die_most_horribly_from_openssl_error(const char *func) {
-    fprintf(stderr, "%s failed:\n", func);
-    ERR_print_errors_fp(stderr);
-    exit(EXIT_FAILURE);
+void die_most_horribly_from_openssl_error(lua_State *L, const char *func) {
+    char buf[256];
+    unsigned long err = ERR_peek_last_error();
+    ERR_error_string_n(err, buf, sizeof(buf));
+    ERR_clear_error();
+    luaL_error(L, "%s failed: %s", func, buf);
 }
 
-void server_setup_certs(SSL_CTX *ctx, const char *certificate_chain, const char *private_key) {
+void server_setup_certs(lua_State *L, SSL_CTX *ctx, const char *certificate_chain, const char *private_key) {
 #if DEBUG
     printf("Loading certificate chain from '%s'\n"
            "and private key from '%s'\n",
@@ -125,14 +127,14 @@ void server_setup_certs(SSL_CTX *ctx, const char *certificate_chain, const char 
 #endif
 
     if (1 != SSL_CTX_use_certificate_chain_file(ctx, certificate_chain)) {
-        die_most_horribly_from_openssl_error("SSL_CTX_use_certificate_chain_file");
+        die_most_horribly_from_openssl_error(L, "SSL_CTX_use_certificate_chain_file");
     }
 
     if (1 != SSL_CTX_use_PrivateKey_file(ctx, private_key, SSL_FILETYPE_PEM))
-        die_most_horribly_from_openssl_error("SSL_CTX_use_PrivateKey_file");
+        die_most_horribly_from_openssl_error(L, "SSL_CTX_use_PrivateKey_file");
 
     if (1 != SSL_CTX_check_private_key(ctx))
-        die_most_horribly_from_openssl_error("SSL_CTX_check_private_key");
+        die_most_horribly_from_openssl_error(L, "SSL_CTX_check_private_key");
 }
 #endif
 
