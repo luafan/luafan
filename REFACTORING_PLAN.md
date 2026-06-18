@@ -393,8 +393,8 @@ Phase 2 (Lua modules, P1)
 
 Phase 3 (Platform, P2)
   3.1 Consolidate platform ifdefs ───────── DONE (commit f37ae4b)
-  3.2 SSL version compat ────────────────── DONE (commit pending)
-  3.3 Build system modernization ────────── TODO
+  3.2 SSL version compat ────────────────── DONE (commit 973935c)
+  3.3 Build system modernization ────────── DONE (commit pending)
 
 Phase 4 (Testing, P2)
   4.1 Fix known failures ────────────────── DONE (commit ccb0a12)
