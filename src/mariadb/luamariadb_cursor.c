@@ -94,7 +94,7 @@ static void create_colinfo(lua_State *L, CURSOR_CTX *cur)
   {
     lua_pushstring(L, fields[i - 1].name);
     lua_rawseti(L, -3, i);
-    sprintf(typename, "%.20s(%ld)", getcolumntype(fields[i - 1].type),
+    snprintf(typename, sizeof(typename), "%.20s(%ld)", getcolumntype(fields[i - 1].type),
             fields[i - 1].length);
     lua_pushstring(L, typename);
     lua_rawseti(L, -2, i);
@@ -318,8 +318,6 @@ static void _pushtable(lua_State *L, CURSOR_CTX *cur, size_t off)
   /* Pushes the right table (colnames or coltypes) */
   lua_rawgeti(L, LUA_REGISTRYINDEX, *ref);
 }
-
-#define pushtable(L, c, m) (_pushtable(L, c, offsetof(CURSOR_CTX, m)))
 
 /*
 ** Return the list of field names.

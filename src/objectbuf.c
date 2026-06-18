@@ -12,7 +12,7 @@
 /* if none of the above mask was set, that means it's boolean value. */
 #define TRUE_FALSE_MASK 1 << 0
 
-#define MAX_U30 4294967296 // 2^32
+#define MAX_U30 4294967296 // exclusive upper bound for u32/u30 value range (2^32)
 
 #define CTX_INDEX_TABLES 1
 #define CTX_INDEX_NUMBERS 2

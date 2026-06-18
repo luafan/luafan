@@ -125,7 +125,7 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, void *data) {
 static const char *mcode_or_die(const char *where, CURLMcode code) {
     if (CURLM_OK != code) {
         const char *s = curl_multi_strerror(code);
-        fprintf(MSG_OUT, "ERROR: %s returns %s\n", where, s);
+        LOGD("ERROR: %s returns %s\n", where, s);
         return s;
     }
 

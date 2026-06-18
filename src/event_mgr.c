@@ -173,7 +173,7 @@ struct evdns_base *event_mgr_dnsbase() {
 }
 
 static void signal_handler(int sig) {
-    printf("%s: got singal %d\n", __func__, sig);
+    printf("%s: got signal %d\n", __func__, sig);
     switch (sig) {
         case SIGINT:
             signal_count++;

@@ -78,8 +78,7 @@ LUA_API int luafan_start(lua_State *L) {
             mainevent = malloc(sizeof(struct event));
             if (!mainevent) {
                 fprintf(stderr, "Memory allocation failed for main event: %zu bytes\n", sizeof(struct event));
-                luaL_error(L, "Memory allocation failure");
-                return 0;
+                return luaL_error(L, "Memory allocation failure");
             }
             evtimer_set(mainevent, main_handler, NULL);
             event_mgr_init();
@@ -128,8 +127,7 @@ LUA_API int luafan_sleep(lua_State *L) {
     struct sleep_args *args = malloc(sizeof(struct sleep_args));
     if (!args) {
         fprintf(stderr, "Memory allocation failed for sleep args: %zu bytes\n", sizeof(struct sleep_args));
-        luaL_error(L, "Memory allocation failure");
-        return 0;
+        return luaL_error(L, "Memory allocation failure");
     }
     memset(args, 0, sizeof(struct sleep_args));
 
@@ -163,8 +161,7 @@ LUA_API int hex2data(lua_State *L) {
     char *r = (char *)malloc(length / 2 + 1);
     if (!r) {
         fprintf(stderr, "Memory allocation failed for hex2data: %zu bytes\n", length / 2 + 1);
-        luaL_error(L, "Memory allocation failure");
-        return 0;
+        return luaL_error(L, "Memory allocation failure");
     }
     char *index = r;
 
@@ -194,8 +191,7 @@ LUA_API int data2hex(lua_State *L) {
     char *strbuf = (char *)malloc(numBytes * 2 + 1);
     if (!strbuf) {
         fprintf(stderr, "Memory allocation failed for data2hex: %zu bytes\n", numBytes * 2 + 1);
-        luaL_error(L, "Memory allocation failure");
-        return 0;
+        return luaL_error(L, "Memory allocation failure");
     }
     char *hex = strbuf;
     int i = 0;
@@ -305,7 +301,7 @@ static const struct luaL_Reg fanlib[] = {
     {"open", luafan_open},
     {"close", luafan_close},
     {"setprogname", luafan_setprogname},
-#ifndef DISABLE_AFFINIY
+#ifndef DISABLE_AFFINITY
     {"setaffinity", luafan_setaffinity},
     {"getaffinity", luafan_getaffinity},
     {"getcpucount", luafan_getcpucount},

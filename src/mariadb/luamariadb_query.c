@@ -46,7 +46,7 @@ static int real_query_result(lua_State *L, DB_CTX *ctx)
       }
     } else if (next_result > 0) {
       // Error occurred while getting next result
-      printf("mysql_next_result error: %s\n", mysql_error(&ctx->my_conn));
+      LOGE("mysql_next_result error: %s\n", mysql_error(&ctx->my_conn));
       break;
     } else {
       // next_result < 0, no more results

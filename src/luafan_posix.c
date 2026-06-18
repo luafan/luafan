@@ -76,7 +76,7 @@ LUA_API int luafan_getpgid(lua_State *L) {
     return luafan_push_result(L, result);
 }
 
-#ifndef DISABLE_AFFINIY
+#ifndef DISABLE_AFFINITY
 
 static int get_cpu_count() {
     return sysconf(_SC_NPROCESSORS_CONF);

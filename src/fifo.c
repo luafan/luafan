@@ -57,7 +57,7 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
 
     if (len <= 0) {
         if (len < 0 && (errno == EAGAIN || errno == EINTR)) {
-            printf("fifo_read_cb: %s\n", strerror(errno));
+            LOGE("fifo_read_cb: %s\n", strerror(errno));
             return;
         }
         if (fifo->onDisconnectedRef != LUA_NOREF) {
@@ -85,13 +85,9 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
             FAN_RESUME(cbs.co, mainthread, 1);
             FAN_CB_CLEANUP(mainthread, cbs);
         } else {
-            printf("fifo_read_cb:%s: %s\n", fifo->name, len < 0 && errno ? strerror(errno) : "pipe closed.");
+            LOGE("fifo_read_cb:%s: %s\n", fifo->name, len < 0 && errno ? strerror(errno) : "pipe closed.");
         }
 
-        // if (fifo->read_ev) {
-        //   event_free(fifo->read_ev);
-        //   fifo->read_ev = NULL;
-        // }
         return;
     }
 
@@ -137,7 +133,7 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
     struct stat st;
     if (lstat(fifoname, &st) == 0) {
         if (S_ISREG(st.st_mode)) {
-            luaL_error(L, "regual file exist: %s", fifoname);
+            luaL_error(L, "regular file exists: %s", fifoname);
         } else if (S_ISFIFO(st.st_mode)) {
             found_fifo = 1;
         }
@@ -231,8 +227,7 @@ LUA_API int luafan_fifo_send_request(lua_State *L) {
         return 1;
     } else {
         if (fifo->onSendReadyRef == LUA_NOREF) {
-            luaL_error(L, "onsendready not defined.");
-            return 0;
+            return luaL_error(L, "onsendready not defined.");
         } else {
             lua_pushboolean(L, false);
             lua_pushliteral(L, "not writable.");
@@ -280,7 +275,7 @@ LUA_API int luafan_fifo_send(lua_State *L) {
                 FAN_RESUME(cbs.co, mainthread, 1);
                 FAN_CB_CLEANUP(mainthread, cbs);
             } else {
-                printf("luafan_fifo_send:%s: %s\n", fifo->name, len < 0 && errno ? strerror(errno) : "pipe closed.");
+                LOGE("luafan_fifo_send:%s: %s\n", fifo->name, len < 0 && errno ? strerror(errno) : "pipe closed.");
             }
 after_send_disconnect:
 

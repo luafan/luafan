@@ -99,14 +99,14 @@ LUA_API int stmt_prepare_start(lua_State *L)
   int rc = mysql_stmt_attr_set(stmt, STMT_ATTR_CURSOR_TYPE, (void *)&type);
   if (rc != 0)
   {
-    printf("ATTR SET STMT_ATTR_CURSOR_TYPE %ld, rc=%d\n", type, rc);
+    LOGE("ATTR SET STMT_ATTR_CURSOR_TYPE %ld, rc=%d\n", type, rc);
   }
   /* ... check return value ... */
   rc = mysql_stmt_attr_set(stmt, STMT_ATTR_PREFETCH_ROWS,
                            (void *)&prefetch_rows);
   if (rc != 0)
   {
-    printf("ATTR SET STMT_ATTR_PREFETCH_ROWS %ld, rc=%d\n", prefetch_rows, rc);
+    LOGE("ATTR SET STMT_ATTR_PREFETCH_ROWS %ld, rc=%d\n", prefetch_rows, rc);
   }
 
   int ret = 0;

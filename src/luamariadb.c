@@ -68,7 +68,7 @@ int luamariadb_push_errno(lua_State *L, DB_CTX *ctx)
   if (errorcode)
   {
     lua_pushnil(L);
-    printf("mysql_error: %s\n", mysql_error(&ctx->my_conn));
+    LOGE("mysql_error: %s\n", mysql_error(&ctx->my_conn));
     lua_pushstring(L, mysql_error(&ctx->my_conn));
     return 2;
   }

@@ -154,7 +154,7 @@ TEST_CASE(test_utlua_coroutine_resume) {
 /* Test resume function pointer setting */
 TEST_CASE(test_utlua_resume_function_pointer) {
     // Test that we can get the current resume function
-    FAN_RESUME_TPYE current_resume = FAN_RESUME;
+    FAN_RESUME_TYPE current_resume = FAN_RESUME;
     TEST_ASSERT_NOT_NULL(current_resume);
     TEST_ASSERT_EQUAL(&_utlua_resume, current_resume);
 

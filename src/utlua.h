@@ -81,7 +81,7 @@ extern "C" {
 #include "bytearray.h"
 #include "event_mgr.h"
 
-#define READ_BUFF_LEN 64 * 1024
+#define READ_BUFF_LEN (64 * 1024)
 
 // Thread tracking debug switch - set to 1 to enable, 0 to disable
 #ifndef DEBUG_THREAD_TRACKING
@@ -145,11 +145,11 @@ extern "C" {
 
 lua_State *utlua_mainthread(lua_State *L);
 
-typedef int (*FAN_RESUME_TPYE)(lua_State *co, lua_State *from, int count);
+typedef int (*FAN_RESUME_TYPE)(lua_State *co, lua_State *from, int count);
 
-void utlua_set_resume(FAN_RESUME_TPYE resume);
+void utlua_set_resume(FAN_RESUME_TYPE resume);
 
-extern FAN_RESUME_TPYE FAN_RESUME;
+extern FAN_RESUME_TYPE FAN_RESUME;
 
 #if DEBUG_THREAD_TRACKING
 // Reference tracking global variables and functions

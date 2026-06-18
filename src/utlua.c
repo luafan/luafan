@@ -70,9 +70,9 @@ int _utlua_resume(lua_State *co, lua_State *from, int count) {
     return status;
 }
 
-FAN_RESUME_TPYE FAN_RESUME = &_utlua_resume;
+FAN_RESUME_TYPE FAN_RESUME = &_utlua_resume;
 
-void utlua_set_resume(FAN_RESUME_TPYE resume) {
+void utlua_set_resume(FAN_RESUME_TYPE resume) {
     FAN_RESUME = resume;
 }
 
