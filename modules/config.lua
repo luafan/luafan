@@ -30,7 +30,22 @@ local function load_config(dir)
     end
 end
 
-load_config(configd_dir)
+if _CONFIG_D_REGISTRY then
+    -- 从 amalgamated bundle 加载 config.d 模块
+    for name, src in pairs(_CONFIG_D_REGISTRY) do
+        local chunk, err = load(src, "@config.d/" .. name, "t", env)
+        if not chunk then
+            print(string.format("[config] bundle load error %s: %s", name, tostring(err)))
+        else
+            local ok, ret = pcall(chunk)
+            if not ok then
+                print(string.format("[config] bundle exec error %s: %s", name, tostring(ret)))
+            end
+        end
+    end
+else
+    load_config(configd_dir)
+end
 
 local t = {}
 for k, v in pairs(env) do
