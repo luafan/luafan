@@ -25,8 +25,9 @@ TEST_CASE(test_fifo_structure_definition) {
 
     FIFO test_fifo;
     memset(&test_fifo, 0, sizeof(FIFO));
+    test_fifo.socket = -1;  // Match production code: -1 sentinel (fd 0 is valid stdin)
 
-    TEST_ASSERT_EQUAL(0, test_fifo.socket);
+    TEST_ASSERT_EQUAL(-1, test_fifo.socket);
     TEST_ASSERT_NULL(test_fifo.name);
     TEST_ASSERT_EQUAL(0, test_fifo.delete_on_close);
     TEST_ASSERT_NULL(test_fifo.mainthread);
@@ -293,6 +294,7 @@ TEST_CASE(test_fifo_cleanup_patterns) {
 
     CleanupTest test;
     memset(&test, 0, sizeof(test));
+    test.socket = -1;  // Match production: -1 sentinel (fd 0 is valid stdin)
 
     // Setup test data
     test.name = strdup("test_fifo_cleanup");
@@ -305,17 +307,20 @@ TEST_CASE(test_fifo_cleanup_patterns) {
     TEST_ASSERT_EQUAL(5, test.socket);
     TEST_ASSERT_NOT_NULL(test.event_ptr);
 
-    // Simulate cleanup
+    // Simulate cleanup (matches fifo_close cleanup logic: >= 0 check)
     if (test.name) {
         free(test.name);
         test.name = NULL;
     }
-    test.socket = 0;
+    test.socket = -1;  // Production uses -1, not 0
     test.event_ptr = NULL;
 
     TEST_ASSERT_NULL(test.name);
-    TEST_ASSERT_EQUAL(0, test.socket);
+    TEST_ASSERT_EQUAL(-1, test.socket);
     TEST_ASSERT_NULL(test.event_ptr);
+
+    // Verify -1 sentinel means "no fd" (>= 0 check would skip close)
+    TEST_ASSERT_TRUE(test.socket < 0);
 }
 
 // Test FIFO data size validation

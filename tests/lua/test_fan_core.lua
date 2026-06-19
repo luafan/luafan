@@ -69,6 +69,15 @@ suite:test("process_functions", function()
     local dtable_size = fan.getdtablesize()
     TestFramework.assert_type(dtable_size, "number")
     TestFramework.assert_true(dtable_size > 0)
+
+    -- Test kill() requires explicit PID (no dangerous default -1)
+    local ok, err = pcall(fan.kill)
+    TestFramework.assert_false(ok) -- should error without PID arg
+
+    -- Test kill() with explicit PID (send signal 0 = error check only, no actual signal)
+    local pid2 = fan.getpid()
+    local result, errmsg = fan.kill(pid2, 0)
+    TestFramework.assert_true(result)
 end)
 
 -- Test hex conversion utilities
