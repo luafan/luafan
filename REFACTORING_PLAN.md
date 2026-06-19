@@ -117,10 +117,10 @@ The project supports Linux, macOS, Android, and iOS. Platform differences are co
 **What was done**: Extracted shared socket option helpers (`SO_SNDBUF`, `SO_RCVBUF`, `IP_BOUND_IF`) into `conn_config.h` as inline functions. TCP callers treat errors as fatal; UDP callers treat as non-fatal.
 **Deferred**: Full `conn_base_t` extraction — the actual field overlap between `tcpd_base_conn_t` and `udpd_base_conn_t` is only 5 fields (`mainthread`, `onReadRef`, `onSendReadyRef`, `host`, `port`), insufficient to justify the structural churn.
 
-#### 1.2 Split httpd.c into Focused Modules — DEFERRED
-**File affected**: `src/httpd.c` (currently ~2023 lines)
-**Status**: Deferred — WebSocket code is deeply coupled to the `Request` struct; splitting requires refactoring the shared state first.
-**Goal**: Each concern in its own file
+#### 1.2 Split httpd.c into Focused Modules — DONE
+**File affected**: `src/httpd.c` (was ~2023 lines, now ~470 lines)
+**Status**: DONE — httpd.c split into 4 files: httpd.c, httpd_websocket.c, httpd_request.c, httpd_metrics.c, with shared httpd_internal.h header
+**Goal**: Each concern in its own file — ACHIEVED
 
 **Current structure in httpd.c**:
 - evhttp binding + request dispatch
@@ -382,7 +382,7 @@ Phase 0 (prerequisites)
 
 Phase 1 (C core, P0)
   1.1 Extract shared socket options ─────── DONE (commit d1aed38) — conn_config.h
-  1.2 Split httpd.c ─────────────────────── DEFERRED — WebSocket code deeply coupled to Request struct
+  1.2 Split httpd.c ─────────────────────── DONE — httpd_internal.h + 4 modules (httpd.c, httpd_websocket.c, httpd_request.c, httpd_metrics.c)
   1.3 Standardize error handling ─────────── DONE (commit de3cdf6)
 
 Phase 2 (Lua modules, P1)

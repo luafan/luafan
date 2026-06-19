@@ -1,6 +1,7 @@
 # Object files
 *.o
 build
+build-normal
 build-asan
 build-tsan
 .DS_Store

@@ -62,6 +62,9 @@ build = {
             "src/fifo.c",
             "src/http.c",
             "src/httpd.c",
+            "src/httpd_request.c",
+            "src/httpd_websocket.c",
+            "src/httpd_metrics.c",
             "src/luasql.c",
             "src/luamariadb.c",
             -- MariaDB module sources
