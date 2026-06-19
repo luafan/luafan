@@ -5,7 +5,8 @@ local xpcall = xpcall
 local table = table
 local coroutine = coroutine
 
-local mariadb = require "fan.mariadb"
+local ok_mariadb, mariadb = pcall(require, "fan.mariadb")
+if not ok_mariadb then mariadb = nil end
 
 local orm = require "mariadb.orm"
 local config = require "config"
@@ -80,6 +81,10 @@ function pool_mt:push(ctx)
 end
 
 function pool_mt:safe(func, ...)
+    if not mariadb then
+        print("[mariadb.pool] fan.mariadb unavailable, skipping")
+        return nil
+    end
     local ctx = self:pop()
     local st, msg = xpcall(func, debug.traceback, ctx, ...)
     self:push(ctx)

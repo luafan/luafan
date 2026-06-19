@@ -1,4 +1,6 @@
-local mariadb = require "fan.mariadb"
+local ok_mariadb, mariadb = pcall(require, "fan.mariadb")
+if not ok_mariadb then mariadb = nil end
+
 local config = require "config"
 local orm_base = require "fan.orm_base"
 
@@ -14,7 +16,7 @@ local function make_adapter()
   adapter.limit_one = " limit 0,1"
   adapter.readonly_supported = true
   adapter.insert_handle_long_data = true
-  adapter.LONG_DATA_SENTINEL = mariadb.LONG_DATA
+  adapter.LONG_DATA_SENTINEL = mariadb and mariadb.LONG_DATA
 
   function adapter.create_ctx()
     return { _readonly = false }
