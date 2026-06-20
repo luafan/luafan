@@ -36,6 +36,8 @@ typedef struct _ConnInfo {
     lua_State *mainthread;
     lua_State *L;
 
+    int completed; // set to 1 after http_getpost_complete, prevents double-process
+
     int verbose;
 
     int onprogressref;
@@ -135,7 +137,17 @@ static const char *mcode_or_die(const char *where, CURLMcode code) {
 static void resume_cb(int fd, short kind, void *userp);
 
 static void http_getpost_complete(ConnInfo *conn) {
+    if (conn->completed) {
+        fprintf(stderr, "[http] WARNING: http_getpost_complete called twice on same conn\n");
+        return;
+    }
+    conn->completed = 1;
+
     lua_State *L = conn->L;
+    if (!L) {
+        fprintf(stderr, "[http] WARNING: http_getpost_complete called with NULL L\n");
+        return;
+    }
     lua_lock(L);
 
     if (conn->bodyref != LUA_NOREF) {
@@ -407,6 +419,7 @@ static int sock_cb(CURL *e, curl_socket_t s, int what, void *cbp, void *sockp) {
 }
 
 static size_t filldata(char *ptr, size_t size, size_t nmemb, ConnInfo *conn) {
+    if (conn->completed) return 0;
     int i = 0;
     //    fprintf(MSG_OUT, "filldata %zu %zu\n", size, nmemb);
     for (; i < size; i++) {
@@ -417,6 +430,7 @@ static size_t filldata(char *ptr, size_t size, size_t nmemb, ConnInfo *conn) {
 
 static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata) {
     ConnInfo *conn = (ConnInfo *)userdata;
+    if (conn->completed) return size * nmemb;
     lua_State *L = conn->L;
 
     lua_lock(L);
@@ -497,29 +511,26 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata) {
         lua_pushinteger(L, responseCode);
         lua_rawset(L, -3); // header table
 
-        fan_cb_setup_t cbs = fan_cb_setup(L, conn->onheaderref);
-        if (!cbs.co) {
-            lua_pop(L, 1); // pop header table
-            lua_unlock(L);
-            return size * nmemb;
-        }
-
-        // Guard: verify the registry slot still holds a function
-        if (!lua_isfunction(cbs.co, -1)) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, conn->onheaderref);
+        if (!lua_isfunction(L, -1)) {
             LOGE("http onheader: onheaderref=%d resolved to %s, expected function\n",
-                 conn->onheaderref, luaL_typename(cbs.co, -1));
-            lua_pop(cbs.co, 1);
+                 conn->onheaderref, luaL_typename(L, -1));
+            lua_pop(L, 1); // pop non-function
             lua_pop(L, 1); // pop header table
             lua_unlock(L);
-            FAN_CB_CLEANUP(L, cbs);
             return size * nmemb;
         }
 
-        lua_xmove(L, cbs.co, 1);
+        // push header table as argument
+        lua_pushvalue(L, -2); // copy header table above function
+        lua_remove(L, -3);    // remove original header table from below function
 
-        FAN_RESUME(cbs.co, L, 1);
-
-        FAN_CB_CLEANUP(L, cbs);
+        lua_unlock(L);
+        int pcall_status = lua_pcall(L, 1, 0, 0);
+        if (pcall_status != 0) {
+            LOGE("http onheader pcall error: %s\n", lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
     } else {
         lua_pop(L, 1); // pop header table
     }
@@ -531,124 +542,117 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata) {
 
 static int onprogress(void *clientp, double dltotal, double dlnow, double ultotal, double ulnow) {
     ConnInfo *conn = (ConnInfo *)clientp;
+    if (conn->completed) return 1; // abort
     lua_State *L = conn->mainthread;
 
     lua_lock(L);
-    fan_cb_setup_t cbs = fan_cb_setup(L, conn->onprogressref);
-    if (!cbs.co) {
-        lua_unlock(L);
-        return 0;
-    }
-
-    // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(cbs.co, -1)) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, conn->onprogressref);
+    if (!lua_isfunction(L, -1)) {
         LOGE("http onprogress: onprogressref=%d resolved to %s, expected function\n",
-             conn->onprogressref, luaL_typename(cbs.co, -1));
-        lua_pop(cbs.co, 1);
+             conn->onprogressref, luaL_typename(L, -1));
+        lua_pop(L, 1);
         lua_unlock(L);
-        FAN_CB_CLEANUP(L, cbs);
         return 0;
     }
-
-    lua_pushinteger(cbs.co, dltotal);
-    lua_pushinteger(cbs.co, dlnow);
-    lua_pushinteger(cbs.co, ultotal);
-    lua_pushinteger(cbs.co, ulnow);
-
+    lua_pushinteger(L, dltotal);
+    lua_pushinteger(L, dlnow);
+    lua_pushinteger(L, ultotal);
+    lua_pushinteger(L, ulnow);
     lua_unlock(L);
-    int status = FAN_RESUME(cbs.co, L, 4);
-    long ret = 0;
-    if (status == 0 && lua_gettop(cbs.co) > 0) {
-        if (lua_type(cbs.co, 1) == LUA_TNUMBER) {
-            ret = lua_tointeger(cbs.co, 1);
-        }
-    }
 
-    FAN_CB_CLEANUP(L, cbs);
+    int status = lua_pcall(L, 4, 1, 0);
+    long ret = 0;
+    if (status == 0 && lua_gettop(L) > 0) {
+        if (lua_type(L, -1) == LUA_TNUMBER) {
+            ret = lua_tointeger(L, -1);
+        }
+        lua_pop(L, 1);
+    } else if (status != 0) {
+        LOGE("http onprogress pcall error: %s\n", lua_tostring(L, -1));
+        lua_pop(L, 1);
+    }
 
     return (int)ret;
 }
 
 static size_t onwrite(char *ptr, size_t size, size_t nmemb, void *userdata) {
     ConnInfo *conn = (ConnInfo *)userdata;
+    if (conn->completed) return 0;
     lua_State *L = conn->mainthread;
 
     lua_lock(L);
-    fan_cb_setup_t cbs = fan_cb_setup(L, conn->onwriteref);
-    if (!cbs.co) {
-        lua_unlock(L);
-        return size * nmemb;
-    }
-
-    // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(cbs.co, -1)) {
+    // Use pcall instead of FAN_RESUME to prevent yielding inside curl callback.
+    // Yielding would let the event loop process other events (timers), which can
+    // trigger http_getpost_complete and unref our callback slots while we're still
+    // inside this curl callback — causing use-after-free.
+    lua_rawgeti(L, LUA_REGISTRYINDEX, conn->onwriteref);
+    if (!lua_isfunction(L, -1)) {
         LOGE("http onwrite: onwriteref=%d resolved to %s, expected function\n",
-             conn->onwriteref, luaL_typename(cbs.co, -1));
-        lua_pop(cbs.co, 1);
+             conn->onwriteref, luaL_typename(L, -1));
+        lua_pop(L, 1);
         lua_unlock(L);
-        FAN_CB_CLEANUP(L, cbs);
-        return size * nmemb;
+        return 0;
     }
-
-    lua_pushlstring(cbs.co, ptr, size * nmemb);
-
+    lua_pushlstring(L, ptr, size * nmemb);
     lua_unlock(L);
-    int status = FAN_RESUME(cbs.co, L, 1);
+
+    int status = lua_pcall(L, 1, 1, 0);
     long ret = 0;
-    if (status == 0 && lua_gettop(cbs.co) > 0) {
-        if (lua_type(cbs.co, 1) == LUA_TNUMBER) {
-            ret = lua_tointeger(cbs.co, 1);
+    if (status == 0 && lua_gettop(L) > 0) {
+        if (lua_type(L, -1) == LUA_TNUMBER) {
+            ret = lua_tointeger(L, -1);
+        } else {
+            ret = size * nmemb;
         }
+        lua_pop(L, 1);
     } else {
+        if (status != 0) {
+            LOGE("http onwrite pcall error: %s\n", lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
         ret = size * nmemb;
     }
-
-    FAN_CB_CLEANUP(L, cbs);
 
     return (int)ret;
 }
 
 static size_t onread(void *ptr, size_t size, size_t nmemb, void *userdata) {
     ConnInfo *conn = (ConnInfo *)userdata;
+    if (conn->completed) return 0;
     lua_State *L = conn->mainthread;
 
     lua_lock(L);
-    fan_cb_setup_t cbs = fan_cb_setup(L, conn->onreadref);
-    if (!cbs.co) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, conn->onreadref);
+    if (!lua_isfunction(L, -1)) {
+        LOGE("http onread: onreadref=%d resolved to %s, expected function\n",
+             conn->onreadref, luaL_typename(L, -1));
+        lua_pop(L, 1);
         lua_unlock(L);
         return 0;
     }
 
     size_t accept_size = size * nmemb;
-
-    // Guard: verify the registry slot still holds a function
-    if (!lua_isfunction(cbs.co, -1)) {
-        LOGE("http onread: onreadref=%d resolved to %s, expected function\n",
-             conn->onreadref, luaL_typename(cbs.co, -1));
-        lua_pop(cbs.co, 1);
-        lua_unlock(L);
-        FAN_CB_CLEANUP(L, cbs);
-        return 0;
-    }
-
-    lua_pushinteger(cbs.co, accept_size);
+    lua_pushinteger(L, accept_size);
 
     lua_unlock(L);
-    int status = FAN_RESUME(cbs.co, L, 1);
+    int status = lua_pcall(L, 1, 2, 0);
     long ret = 0;
-    if (status == 0 && lua_gettop(cbs.co) > 0) {
-        if (lua_isstring(cbs.co, 1)) {
+    if (status == 0) {
+        if (lua_isstring(L, 1)) {
             size_t len = 0;
-            const char *str = lua_tolstring(cbs.co, 1, &len);
+            const char *str = lua_tolstring(L, 1, &len);
             ret = accept_size < len ? accept_size : len;
             memcpy(ptr, str, ret);
-        } else if (lua_isnil(cbs.co, 1) && lua_gettop(cbs.co) > 1) {
-            if (lua_isstring(cbs.co, 2) && strcasecmp(lua_tostring(cbs.co, 2), "abort") == 0) {
+        } else if (lua_isnil(L, 1) && lua_gettop(L) > 1) {
+            if (lua_isstring(L, 2) && strcasecmp(lua_tostring(L, 2), "abort") == 0) {
                 ret = CURL_READFUNC_ABORT;
             }
         }
+        lua_settop(L, 0);
+    } else {
+        LOGE("http onread pcall error: %s\n", lua_tostring(L, -1));
+        lua_pop(L, 1);
     }
-    FAN_CB_CLEANUP(L, cbs);
     return ret;
 }
 
@@ -1152,7 +1156,14 @@ static int http_getpost(lua_State *L, int method) {
 
                 curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, len);
                 curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, data);
-            } else if (!lua_isnil(L, -1)) {
+            } else if (lua_isnil(L, -1)) {
+                // No body provided — for POST/PUT methods, set empty body to prevent
+                // curl from using fread() which blocks the event loop.
+                if (method == HTTP_POST || method == HTTP_PUT || method == HTTP_UPDATE) {
+                    curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, 0);
+                    curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, "");
+                }
+            } else {
                 err = "invalid body type in table parameter";
                 goto ERROR;
             }
