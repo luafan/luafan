@@ -3,6 +3,7 @@
 #include "tcpd_server.h"
 #include "evdns.h"
 #include <net/if.h>
+#include <sys/un.h>
 
 #ifdef __linux__
 #include <limits.h>
@@ -62,6 +63,9 @@ LUA_API int tcpd_connect(lua_State *L) {
     // Extract host and port
     DUP_STR_FROM_TABLE(L, client->base.host, 1, "host");
     SET_INT_FROM_TABLE(L, client->base.port, 1, "port");
+
+    // Extract optional unix socket path
+    DUP_STR_FROM_TABLE(L, client->base.unix_path, 1, "unix_path");
 
     // Extract optional evdns parameter
     struct evdns_base *custom_dnsbase = NULL;
@@ -136,14 +140,28 @@ LUA_API int tcpd_connect(lua_State *L) {
         return 1;
     }
 
-    // Connect to host
-    int rc = bufferevent_socket_connect_hostname(
-        client->base.buf, conn_dnsbase, AF_UNSPEC,
-        client->base.host, client->base.port);
-
-    if (rc < 0) {
-        LOGE("could not connect to %s:%d %s", client->base.host, client->base.port,
+    // Connect to host or unix socket
+    int rc;
+    if (client->base.unix_path) {
+        struct sockaddr_un sun;
+        memset(&sun, 0, sizeof(sun));
+        sun.sun_family = AF_UNIX;
+        strncpy(sun.sun_path, client->base.unix_path, sizeof(sun.sun_path) - 1);
+        rc = bufferevent_socket_connect(client->base.buf,
+            (struct sockaddr *)&sun, sizeof(sun));
+        if (rc < 0) {
+            LOGE("could not connect to unix:%s", client->base.unix_path);
+        }
+    } else {
+        rc = bufferevent_socket_connect_hostname(
+            client->base.buf, conn_dnsbase, AF_UNSPEC,
+            client->base.host, client->base.port);
+        if (rc < 0) {
+            LOGE("could not connect to %s:%d %s", client->base.host, client->base.port,
              evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
+        }
+    }
+    if (rc < 0) {
         tcpd_shutdown_bufferevent(client->base.buf);
         client->base.buf = NULL;
         return 1;

@@ -535,6 +535,12 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
         conn->host = NULL;
     }
 
+    // Free unix_path string
+    if (conn->unix_path) {
+        free(conn->unix_path);
+        conn->unix_path = NULL;
+    }
+
     // Clean up SSL context (will be implemented in SSL module)
     if (conn->ssl_ctx) {
         tcpd_ssl_context_release(conn->ssl_ctx, mt);

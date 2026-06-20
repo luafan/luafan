@@ -84,6 +84,7 @@ typedef struct tcpd_base_conn {
     // Connection info
     char *host;
     int port;
+    char *unix_path;  // if set, use AF_UNIX instead of TCP
     char ip[INET6_ADDRSTRLEN];
 } tcpd_base_conn_t;
 

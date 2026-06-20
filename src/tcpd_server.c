@@ -1,6 +1,7 @@
 #include "tcpd_server.h"
 #include "tcpd_ssl.h"
 #include <net/if.h>
+#include <sys/un.h>
 
 #ifdef __linux__
 #include <limits.h>
@@ -139,7 +140,18 @@ void tcpd_server_rebind(lua_State *L, tcpd_server_t *server) {
         server->listener = NULL;
     }
 
-    if (server->host) {
+    if (server->unix_path) {
+        // Unix domain socket bind
+        struct sockaddr_un sun;
+        memset(&sun, 0, sizeof(sun));
+        sun.sun_family = AF_UNIX;
+        strncpy(sun.sun_path, server->unix_path, sizeof(sun.sun_path) - 1);
+        unlink(server->unix_path);  // remove stale socket file
+        server->listener = evconnlistener_new_bind(
+            event_mgr_base(), tcpd_server_listener_cb, server,
+            LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE,
+            -1, (struct sockaddr *)&sun, sizeof(sun));
+    } else if (server->host) {
         char portbuf[6];
         evutil_snprintf(portbuf, sizeof(portbuf), "%d", server->port);
 
@@ -270,6 +282,7 @@ LUA_API int tcpd_bind(lua_State *L) {
     // Extract host and port
     DUP_STR_FROM_TABLE(L, server->host, 1, "host");
     SET_INT_FROM_TABLE(L, server->port, 1, "port");
+    DUP_STR_FROM_TABLE(L, server->unix_path, 1, "unix_path");
 
     // Extract configuration
     tcpd_config_from_lua_table(L, 1, &server->config);
@@ -512,6 +525,13 @@ static int tcpd_server_gc(lua_State *L) {
     if (server->host) {
         free(server->host);
         server->host = NULL;
+    }
+
+    // Clean up unix_path
+    if (server->unix_path) {
+        unlink(server->unix_path);  // remove socket file on close
+        free(server->unix_path);
+        server->unix_path = NULL;
     }
 
     // Clean up SSL context
