@@ -506,6 +506,13 @@ LUA_API int tcpd_accept_getpeername(lua_State *L) {
 }
 
 // Server garbage collection
+static int tcpd_server_gc(lua_State *L);  // forward declaration
+
+// Explicit close — same as GC but callable from Lua
+static int tcpd_server_close(lua_State *L) {
+    return tcpd_server_gc(L);
+}
+
 static int tcpd_server_gc(lua_State *L) {
     tcpd_server_t *server = luaL_checkudata(L, 1, LUA_TCPD_SERVER_TYPE);
 
@@ -586,6 +593,8 @@ void tcpd_server_register_metatables(lua_State *L) {
     lua_setfield(L, -2, "rebind");
     lua_pushcfunction(L, lua_tcpd_server_localinfo);
     lua_setfield(L, -2, "localinfo");
+    lua_pushcfunction(L, tcpd_server_close);
+    lua_setfield(L, -2, "close");
     lua_pushcfunction(L, tcpd_server_gc);
     lua_setfield(L, -2, "__gc");
     lua_pushstring(L, "server");
