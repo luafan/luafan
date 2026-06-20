@@ -56,7 +56,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        brew install cmake libevent openssl lua@5.3 curl mariadb-connector-c
+        brew install cmake libevent openssl lua@5.4 curl mariadb-connector-c
 
     - name: Build LuaFan (macOS arm64)
       run: |
@@ -64,7 +64,7 @@ jobs:
         cd build
         cmake .. \
           -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix openssl);$(brew --prefix libevent);$(brew --prefix mariadb-connector-c)" \
+          -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix openssl);$(brew --prefix libevent);$(brew --prefix mariadb-connector-c);$(brew --prefix lua@5.4)" \
           -DCMAKE_FIND_FRAMEWORK=NEVER
         make -j$(sysctl -n hw.ncpu)
 
@@ -80,7 +80,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        brew install cmake libevent openssl lua@5.3 curl mariadb-connector-c
+        brew install cmake libevent openssl lua@5.4 curl mariadb-connector-c
 
     - name: Build LuaFan (macOS x86_64)
       run: |
@@ -88,7 +88,7 @@ jobs:
         cd build
         cmake .. \
           -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix openssl);$(brew --prefix libevent);$(brew --prefix mariadb-connector-c)" \
+          -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix openssl);$(brew --prefix libevent);$(brew --prefix mariadb-connector-c);$(brew --prefix lua@5.4)" \
           -DCMAKE_FIND_FRAMEWORK=NEVER
         make -j$(sysctl -n hw.ncpu)
 
