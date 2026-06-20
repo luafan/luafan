@@ -65,6 +65,7 @@ build = {
             "src/httpd_request.c",
             "src/httpd_websocket.c",
             "src/httpd_metrics.c",
+            "src/popen.c",
             "src/luasql.c",
             "src/luamariadb.c",
             -- MariaDB module sources
@@ -108,6 +109,7 @@ build = {
       ["fan.reliable_udp"] = "modules/fan/reliable_udp.lua",
       ["mariadb.orm"] = "modules/mariadb/orm.lua",
       ["mariadb.pool"] = "modules/mariadb/pool.lua",
+      ["fan.connector.popen"] = "modules/fan/connector/popen.lua",
       ["fan.http.init"] = "modules/fan/http/init.lua",
       ["fan.http.http"] = "modules/fan/http/http.lua",
       ["config"] = "modules/config.lua",
