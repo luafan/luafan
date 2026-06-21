@@ -1483,8 +1483,6 @@ void unlock_function(CURL *handle, curl_lock_data data, void *userptr) {
 
 #define BUFF_LEN 1024
 
-static struct event *reset_timer_event;
-
 struct reset_dns_servers_arg {
     struct event *ev;
 };
@@ -1560,13 +1558,38 @@ extern void reset_dns_servers() {
 
     arg->ev = evtimer_new(event_mgr_base(), reset_dns_servers_cb, arg);
     struct timeval tv = {0, 1000};
-    event_add(reset_timer_event, &tv);
+    event_add(arg->ev, &tv);
 }
 
 #endif
 
+// Called from event_mgr.c's cleanup paths BEFORE the event_base is freed.
+// Tears down the curl multi handle and our timer events while the base is
+// still valid, so libcurl's internal callbacks (which remove sockets from
+// libevent) can run without dereferencing a freed base.
+void cleanup_http_curl(void) {
+    if (multi) {
+        // curl_multi_cleanup invokes socket/timer callbacks to detach pending
+        // sockets from the event base. The base must still be alive for those
+        // callbacks to succeed.
+        curl_multi_cleanup(multi);
+        multi = NULL;
+    }
+    if (timer_event) {
+        event_free(timer_event);
+        timer_event = NULL;
+    }
+    if (timer_check_multi_info) {
+        event_free(timer_check_multi_info);
+        timer_check_multi_info = NULL;
+    }
+    still_running = 0;
+}
+
 LUA_API int luaopen_fan_http_core(lua_State *L) {
     curl_global_init(CURL_GLOBAL_ALL);
+
+    struct event_base *cur_base = event_mgr_base();
 
 #if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
     if (!share_handle) {
@@ -1582,11 +1605,11 @@ LUA_API int luaopen_fan_http_core(lua_State *L) {
     }
 #endif
     if (!timer_event) {
-        timer_event = evtimer_new(event_mgr_base(), timer_cb, NULL);
+        timer_event = evtimer_new(cur_base, timer_cb, NULL);
     }
 
     if (!timer_check_multi_info) {
-        timer_check_multi_info = evtimer_new(event_mgr_base(), timer_check_multi_info_cb, NULL);
+        timer_check_multi_info = evtimer_new(cur_base, timer_check_multi_info_cb, NULL);
     }
 
     lua_newtable(L);

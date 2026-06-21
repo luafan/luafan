@@ -259,6 +259,12 @@ static void cleanup_dnsbase() {
     }
 }
 
+// Defined in http.c. Strongly linked — both TUs live in the same archive
+// (luafan). Tears down the curl multi handle and its evtimers. Must be called
+// while BOTH the event_base AND the Lua state are still alive: curl_multi_cleanup
+// drives multi_done → progress callbacks that touch Lua via clientp.
+extern void cleanup_http_curl(void);
+
 static void cleanup_eventbase() {
     if (base) {
         event_base_free(base);
@@ -275,6 +281,7 @@ static void reset_state() {
 static void full_cleanup() {
     cleanup_signals();
     cleanup_signal_events();
+    cleanup_http_curl();
     cleanup_openssl();
     cleanup_dnsbase();
     event_mgr_workers_shutdown();
@@ -335,8 +342,14 @@ int event_mgr_loop() {
         // which the embedder invokes after lua_close. If the embedder
         // never calls it, the bases leak at process exit — that is far
         // preferable to a crash.
+        //
+        // cleanup_http_curl() must run here, while BOTH the base and the
+        // Lua state are alive: curl_multi_cleanup drives multi_done →
+        // Curl_pgrsDone → onprogress, which dereferences L via clientp.
+        // Running it later (after lua_close) crashes in lua_rawgeti.
         cleanup_signals();
         cleanup_signal_events();
+        cleanup_http_curl();
         cleanup_openssl();
         cleanup_dnsbase();
         event_mgr_workers_stop_threads();
@@ -362,8 +375,12 @@ int event_mgr_loop_later_cleanup() {
         // run after this returns (lua_close → __gc → bufferevent_free) and
         // must be able to remove themselves from their owning worker base.
         // The worker bases are freed in event_mgr_loop_cleanup().
+        //
+        // cleanup_http_curl() must run here (not in event_mgr_loop_cleanup):
+        // curl_multi_cleanup → multi_done → onprogress dereferences L.
         cleanup_signals();
         cleanup_signal_events();
+        cleanup_http_curl();
         cleanup_openssl();
         cleanup_dnsbase();
         event_mgr_workers_stop_threads();
