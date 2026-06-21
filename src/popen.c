@@ -39,18 +39,23 @@ static void popen_try_disconnected(POPEN *p, const char *reason) {
     if (p->stdout_ev || p->stderr_ev) return;
     if (p->onDisconnectedRef == LUA_NOREF) return;
 
-    // Try to reap child
+    // Try to reap child — both pipes have EOF'd so the child is exiting.
+    // Retry with short delays to give the child time to exit.
     int status = 0;
     int exit_code = -1;
     if (p->child_pid > 0) {
-        pid_t ret = waitpid(p->child_pid, &status, WNOHANG);
-        if (ret > 0) {
-            if (WIFEXITED(status)) {
-                exit_code = WEXITSTATUS(status);
-            } else if (WIFSIGNALED(status)) {
-                exit_code = 128 + WTERMSIG(status);
+        for (int i = 0; i < 10; i++) {
+            pid_t ret = waitpid(p->child_pid, &status, WNOHANG);
+            if (ret > 0) {
+                if (WIFEXITED(status)) {
+                    exit_code = WEXITSTATUS(status);
+                } else if (WIFSIGNALED(status)) {
+                    exit_code = 128 + WTERMSIG(status);
+                }
+                p->child_pid = -1;
+                break;
             }
-            p->child_pid = -1;
+            if (i < 9) usleep(1000);  // 1ms between retries
         }
     }
 

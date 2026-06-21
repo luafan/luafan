@@ -12,6 +12,16 @@ file(GLOB MODULE_SOURCE
     "src/mariadb/*.c"
 )
 
+# Exclude mariadb if mysql headers are not available
+find_path(MYSQL_INCLUDE_DIR mysql/mysql.h
+    PATHS /usr/local/mysql/include /opt/homebrew/include /usr/include
+)
+if(NOT MYSQL_INCLUDE_DIR)
+    list(FILTER MODULE_SOURCE EXCLUDE REGEX ".*/mariadb/.*")
+    list(FILTER MODULE_SOURCE EXCLUDE REGEX "luamariadb\\.c$")
+    message(STATUS "mysql headers not found, excluding mariadb sources")
+endif()
+
 add_library(${MODULE_NAME} MODULE ${MODULE_SOURCE})
 
 # Platform-specific compile definitions (target-scoped)
@@ -31,10 +41,12 @@ endif()
 
 # Include directories (target-scoped)
 target_include_directories(${MODULE_NAME} PRIVATE
+    "/opt/homebrew/include/lua5.5"
     "/usr/include/lua5.3"
     "/usr/local/include/lua5.3"
     "/usr/local/include/luajit-2.0"
     "/usr/include/luajit-2.0"
+    "/opt/homebrew/opt/luajit/include/luajit-2.1"
     "/usr/local/mysql/include"
     "/usr/local/Cellar/mariadb/5.5.30/include/mysql"
     "/usr/local/Cellar/openssl/1.0.2g/include/"
@@ -59,7 +71,9 @@ target_link_libraries(${MODULE_NAME} crypto)
 
 target_link_libraries(${MODULE_NAME} curl)
 target_link_libraries(${MODULE_NAME} resolv)
-target_link_libraries(${MODULE_NAME} mysqlclient)
+if(MYSQL_INCLUDE_DIR)
+    target_link_libraries(${MODULE_NAME} mysqlclient)
+endif()
 
 SET_TARGET_PROPERTIES(
     ${MODULE_NAME}
@@ -91,6 +105,7 @@ target_include_directories(run_c_tests PRIVATE
     "/usr/local/include/lua5.3"
     "/usr/local/include/luajit-2.0"
     "/usr/include/luajit-2.0"
+    "/opt/homebrew/opt/luajit/include/luajit-2.1"
     "/usr/local/mysql/include"
     "/usr/local/include"
     "/opt/homebrew/include"
@@ -107,7 +122,11 @@ target_link_directories(run_c_tests PRIVATE
     "/opt/homebrew/lib"
     "/opt/homebrew/opt/libevent/lib"
 )
-target_link_libraries(run_c_tests event event_openssl ssl crypto curl resolv mysqlclient lua5.3 m)
+if(MYSQL_INCLUDE_DIR)
+    target_link_libraries(run_c_tests event event_openssl ssl crypto curl resolv mysqlclient lua5.3 m)
+else()
+    target_link_libraries(run_c_tests event event_openssl ssl crypto curl resolv lua5.3 m)
+endif()
 set_target_properties(run_c_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
