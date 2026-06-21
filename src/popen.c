@@ -221,6 +221,94 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     }
     lua_pop(L, 1);
 
+    // Parse env table (optional) — merge with inherited environ
+    // User-supplied keys override inherited values; missing keys are inherited.
+    char **envp = environ;
+    char **env_alloc = NULL;
+    int env_alloc_count = 0;
+    lua_getfield(L, 1, "env");
+    if (lua_type(L, -1) == LUA_TTABLE) {
+        // Count inherited environ entries
+        int env_count = 0;
+        while (environ[env_count]) env_count++;
+
+        // Count user env keys (and stash them as Lua values on top of stack)
+        // We'll iterate twice — once to size, once to fill.
+        int user_count = 0;
+        lua_pushnil(L);
+        while (lua_next(L, -2) != 0) {
+            if (lua_type(L, -2) == LUA_TSTRING) user_count++;
+            lua_pop(L, 1);
+        }
+
+        // Allocate envp: worst case env_count + user_count + 1 (NULL)
+        env_alloc = (char **)calloc(env_count + user_count + 1, sizeof(char *));
+        if (!env_alloc) {
+            lua_pop(L, 1);
+            return luaL_error(L, "out of memory (env)");
+        }
+        env_alloc_count = 0;
+
+        // Build a flat list of "KEY=VALUE" strings from user table first;
+        // each strdup'd so we can free them after spawn.
+        // Track keys to skip from inherited environ.
+        // Simple approach: insert user entries first; then inherited entries
+        // whose KEY= prefix doesn't match any user key.
+        const char **user_keys = (const char **)calloc(user_count + 1, sizeof(char *));
+        size_t *user_key_lens = (size_t *)calloc(user_count + 1, sizeof(size_t));
+        if (!user_keys || !user_key_lens) {
+            free(user_keys); free(user_key_lens); free(env_alloc); env_alloc = NULL;
+            lua_pop(L, 1);
+            return luaL_error(L, "out of memory (env keys)");
+        }
+
+        int ui = 0;
+        lua_pushnil(L);
+        while (lua_next(L, -2) != 0) {
+            if (lua_type(L, -2) == LUA_TSTRING && lua_type(L, -1) == LUA_TSTRING) {
+                const char *k = lua_tostring(L, -2);
+                const char *v = lua_tostring(L, -1);
+                size_t klen = strlen(k);
+                size_t vlen = strlen(v);
+                char *entry = (char *)malloc(klen + 1 + vlen + 1);
+                if (entry) {
+                    memcpy(entry, k, klen);
+                    entry[klen] = '=';
+                    memcpy(entry + klen + 1, v, vlen);
+                    entry[klen + 1 + vlen] = '\0';
+                    env_alloc[env_alloc_count++] = entry;
+                    user_keys[ui] = k;
+                    user_key_lens[ui] = klen;
+                    ui++;
+                }
+            }
+            lua_pop(L, 1);
+        }
+
+        // Append inherited environ entries whose key isn't shadowed
+        for (int i = 0; i < env_count; i++) {
+            const char *e = environ[i];
+            const char *eq = strchr(e, '=');
+            size_t klen = eq ? (size_t)(eq - e) : strlen(e);
+            int shadowed = 0;
+            for (int j = 0; j < ui; j++) {
+                if (user_key_lens[j] == klen && memcmp(user_keys[j], e, klen) == 0) {
+                    shadowed = 1; break;
+                }
+            }
+            if (!shadowed) {
+                // Inherited entries are stable strings in environ; safe to reuse pointer.
+                env_alloc[env_alloc_count++] = (char *)e;
+            }
+        }
+        env_alloc[env_alloc_count] = NULL;
+        envp = env_alloc;
+
+        free(user_keys);
+        free(user_key_lens);
+    }
+    lua_pop(L, 1);
+
     // Create pipes
     int pipe_stdin[2], pipe_stdout[2], pipe_stderr[2];
 
@@ -271,13 +359,33 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
 #endif
 
     pid_t pid;
-    int spawn_err = posix_spawnp(&pid, cmd_argv[0], &file_actions, &spawn_attr, cmd_argv, environ);
+    int spawn_err = posix_spawnp(&pid, cmd_argv[0], &file_actions, &spawn_attr, cmd_argv, envp);
 
     posix_spawn_file_actions_destroy(&file_actions);
     posix_spawnattr_destroy(&spawn_attr);
 
     // Free the dup'd command string if we made one
     free(cmd_dup); cmd_dup = NULL;
+
+    // Free user-allocated env entries (the first env_alloc_count entries that we malloc'd).
+    // Note: inherited environ pointers we appended later must NOT be freed.
+    // We freed user entries first in the array; count them by scanning until we hit one
+    // of environ[]. Simpler: track count of user entries separately.
+    if (env_alloc) {
+        // We malloc'd entries while ui-counting; rebuild ui by walking env_alloc until
+        // we reach the inherited section. We added user entries first, so positions 0..(ui-1)
+        // were malloc'd. But we lost `ui` scope; instead, we know each malloc'd entry's pointer
+        // is NOT inside environ[]. Check by pointer comparison against environ array.
+        for (int i = 0; i < env_alloc_count; i++) {
+            char *p = env_alloc[i];
+            int from_environ = 0;
+            for (int j = 0; environ[j]; j++) {
+                if (environ[j] == p) { from_environ = 1; break; }
+            }
+            if (!from_environ) free(p);
+        }
+        free(env_alloc);
+    }
 
     if (spawn_err != 0) {
         close(pipe_stdin[0]); close(pipe_stdin[1]);
