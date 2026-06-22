@@ -210,6 +210,118 @@ LUA_API int data2hex(lua_State *L) {
 }
 // -- end hex2data data2hex --
 
+// -- start utf8 validation/sanitization --
+// Walk a byte sequence and decode one UTF-8 codepoint starting at `p`.
+// Returns the number of bytes consumed (1..4) on success, or 0 if the bytes
+// at `p` don't form a well-formed code unit (overlong, stray continuation,
+// truncated multibyte, or out-of-range lead byte). `end` points one past the
+// last valid byte. No allocation; suitable for hot paths.
+static int utf8_decode_one(const unsigned char *p, const unsigned char *end) {
+    unsigned char b = p[0];
+    if (b < 0x80) return 1;
+    if (b < 0xC2) return 0;                // stray continuation or overlong lead
+    if (b < 0xE0) {
+        if (p + 2 > end) return 0;
+        if ((p[1] & 0xC0) != 0x80) return 0;
+        return 2;
+    }
+    if (b < 0xF0) {
+        if (p + 3 > end) return 0;
+        unsigned char b2 = p[1];
+        if (b == 0xE0) { if (b2 < 0xA0 || b2 > 0xBF) return 0; }
+        else if (b == 0xED) { if (b2 < 0x80 || b2 > 0x9F) return 0; }
+        else { if ((b2 & 0xC0) != 0x80) return 0; }
+        if ((p[2] & 0xC0) != 0x80) return 0;
+        return 3;
+    }
+    if (b < 0xF5) {
+        if (p + 4 > end) return 0;
+        unsigned char b2 = p[1];
+        if (b == 0xF0) { if (b2 < 0x90 || b2 > 0xBF) return 0; }
+        else if (b == 0xF4) { if (b2 < 0x80 || b2 > 0x8F) return 0; }
+        else { if ((b2 & 0xC0) != 0x80) return 0; }
+        if ((p[2] & 0xC0) != 0x80) return 0;
+        if ((p[3] & 0xC0) != 0x80) return 0;
+        return 4;
+    }
+    return 0;
+}
+
+LUA_API int luafan_is_valid_utf8(lua_State *L) {
+    size_t len = 0;
+    const char *s = luaL_optlstring(L, 1, "", &len);
+    const unsigned char *p = (const unsigned char *)s;
+    const unsigned char *end = p + len;
+    while (p < end) {
+        int n = utf8_decode_one(p, end);
+        if (n == 0) { lua_pushboolean(L, 0); return 1; }
+        p += n;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// Return the input if already valid UTF-8 (zero copy via lua_pushvalue).
+// Otherwise, allocate a new buffer and replace every malformed run with the
+// U+FFFD replacement character (EF BF BD, 3 bytes).
+LUA_API int luafan_sanitize_utf8(lua_State *L) {
+    size_t len = 0;
+    const char *s = luaL_optlstring(L, 1, "", &len);
+    const unsigned char *p = (const unsigned char *)s;
+    const unsigned char *end = p + len;
+
+    // Fast path: scan once, return original on the (overwhelmingly common) valid case.
+    const unsigned char *q = p;
+    while (q < end) {
+        int n = utf8_decode_one(q, end);
+        if (n == 0) break;
+        q += n;
+    }
+    if (q == end) {
+        lua_pushvalue(L, 1);
+        return 1;
+    }
+
+    // Repair path: copy valid prefix, then walk byte-by-byte emitting U+FFFD
+    // for each bad lead and skipping that byte. Worst-case grows by 3x.
+    size_t cap = len + 16;
+    char *out = (char *)malloc(cap);
+    if (!out) return luaL_error(L, "out of memory in sanitize_utf8");
+    size_t outlen = (size_t)(q - p);
+    memcpy(out, p, outlen);
+
+    while (q < end) {
+        int n = utf8_decode_one(q, end);
+        if (n > 0) {
+            if (outlen + (size_t)n > cap) {
+                cap = (outlen + n) * 2;
+                char *tmp = (char *)realloc(out, cap);
+                if (!tmp) { free(out); return luaL_error(L, "out of memory in sanitize_utf8"); }
+                out = tmp;
+            }
+            memcpy(out + outlen, q, n);
+            outlen += n;
+            q += n;
+        } else {
+            if (outlen + 3 > cap) {
+                cap = (outlen + 3) * 2;
+                char *tmp = (char *)realloc(out, cap);
+                if (!tmp) { free(out); return luaL_error(L, "out of memory in sanitize_utf8"); }
+                out = tmp;
+            }
+            out[outlen++] = (char)0xEF;
+            out[outlen++] = (char)0xBF;
+            out[outlen++] = (char)0xBD;
+            q += 1;
+        }
+    }
+
+    lua_pushlstring(L, out, outlen);
+    free(out);
+    return 1;
+}
+// -- end utf8 validation/sanitization --
+
 LUA_API int luafan_gettime(lua_State *L) {
     struct timeval v;
     gettimeofday(&v, NULL);
@@ -289,6 +401,9 @@ static const struct luaL_Reg fanlib[] = {
 
     {"data2hex", data2hex},
     {"hex2data", hex2data},
+
+    {"is_valid_utf8", luafan_is_valid_utf8},
+    {"sanitize_utf8", luafan_sanitize_utf8},
 
     {"fork", luafan_fork},
     {"getpid", luafan_getpid},
