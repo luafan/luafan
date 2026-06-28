@@ -26,7 +26,7 @@ local function request(method, check_body, args)
     if schema == "https" then
         args.ssl = true
         if not args.cainfo then
-            args.cainfo = config.cainfo or "cert.pem"
+            args.cainfo = config.cainfo or (WORKDIR or "") .. "cacert.pem"
         end
     end
 

@@ -26,12 +26,24 @@ local function make_adapter()
     stmt:bind_values(...)
   end
 
+  local SQLITE_ERRMSG = {
+    [1] = "SQLITE_ERROR", [2] = "SQLITE_INTERNAL", [3] = "SQLITE_PERM",
+    [4] = "SQLITE_ABORT", [5] = "SQLITE_BUSY", [6] = "SQLITE_LOCKED",
+    [7] = "SQLITE_NOMEM", [8] = "SQLITE_READONLY", [9] = "SQLITE_INTERRUPT",
+    [10] = "SQLITE_IOERR", [11] = "SQLITE_CORRUPT", [13] = "SQLITE_FULL",
+    [14] = "SQLITE_CANTOPEN", [15] = "SQLITE_PROTOCOL", [17] = "SCHEMA",
+    [18] = "TOOBIG", [19] = "CONSTRAINT", [20] = "MISMATCH",
+    [21] = "MISUSE", [22] = "NOLFS", [23] = "AUTH", [24] = "FORMAT",
+    [25] = "RANGE", [26] = "NOTADB", [27] = "NOTICE", [28] = "WARNING",
+  }
+
   function adapter.execute_stmt(stmt)
     local st = stmt:step()
     if st ~= sqlite3.DONE then
-      local msg = string.format("step failed: %d", st)
+      local code_name = SQLITE_ERRMSG[st] or "UNKNOWN"
+      local msg = string.format("step failed: %s (%d)", code_name, st)
       stmt:finalize()
-      error(msg)
+      error(msg .. "\n" .. debug.traceback("", 2))
     end
     return st
   end

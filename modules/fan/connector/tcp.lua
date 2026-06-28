@@ -167,6 +167,14 @@ local function connect(host, port, path, args)
     end
   end
 
+  -- Set default CA cert paths for SSL connections (same as fan.http)
+  if params.ssl and not params.cainfo then
+    params.cainfo = config.cainfo or (WORKDIR or "") .. "cacert.pem"
+  end
+  if params.ssl and not params.capath then
+    params.capath = config.capath
+  end
+
   t.conn = tcpd.connect(params)
 
   setmetatable(t, apt_mt)
