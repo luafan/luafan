@@ -13,7 +13,7 @@ NGHTTP2_VERSION=nghttp2-1.56.0
 apt update \
     && apt install -y libsqlite3-0 libsqlite3-dev tzdata wget liblua5.3-dev lua5.3 unzip zlib1g-dev make gcc libc-dev git cmake g++ bison libncurses5-dev golang-go ca-certificates ninja-build autoconf automake libtool pkg-config \
     && git clone https://github.com/lwthiker/curl-impersonate.git && cd curl-impersonate \
-    && curl -L https://github.com/google/boringssl/archive/$BORINGSSL_COMMIT.zip -o boringssl.zip \
+    && wget -q https://github.com/google/boringssl/archive/$BORINGSSL_COMMIT.zip -O boringssl.zip \
     && unzip -q boringssl.zip && mv boringssl-$BORINGSSL_COMMIT boringssl \
     && cd boringssl && for p in ../chrome/patches/boringssl-*.patch; do patch -p1 < $p; done \
     && mkdir build && cd build \
