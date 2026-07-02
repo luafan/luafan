@@ -33,16 +33,22 @@ RUN git clone https://github.com/lwthiker/curl-impersonate.git \
     && cmake -DCMAKE_BUILD_TYPE=Release \
              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
              -DCMAKE_C_FLAGS="-Wno-unknown-warning-option -Wno-stringop-overflow -Wno-array-bounds" \
+             -DBUILD_SHARED_LIBS=ON \
              -GNinja .. \
     && ninja \
     && mkdir -p lib \
-    && ln -sf ../crypto/libcrypto.a lib/libcrypto.a \
-    && ln -sf ../ssl/libssl.a lib/libssl.a \
+    && cp crypto/libcrypto.so lib/ && cp ssl/libssl.so lib/ \
     && cp -Rf ../include . \
     && cd ../.. \
     && cp -r boringssl/include/openssl /usr/local/include/ \
-    && cp boringssl/build/ssl/libssl.a /usr/local/lib/ \
-    && cp boringssl/build/crypto/libcrypto.a /usr/local/lib/ \
+    && cp boringssl/build/crypto/libcrypto.so /usr/local/lib/ \
+    && cp boringssl/build/ssl/libssl.so /usr/local/lib/ \
+    && ldconfig \
+    && cd /root \
+    && mkdir -p /usr/local/lib/pkgconfig \
+    && printf 'prefix=/usr/local\nexec_prefix=${prefix}\nlibdir=${exec_prefix}/lib\nincludedir=${prefix}/include\n\nName: OpenSSL-libcrypto\nDescription: BoringSSL crypto library\nVersion: 1.1.1\nLibs: -L${libdir} -lcrypto\nLibs.private: -lpthread\nCflags: -I${includedir}\n' > /usr/local/lib/pkgconfig/libcrypto.pc \
+    && printf 'prefix=/usr/local\nexec_prefix=${prefix}\nlibdir=${exec_prefix}/lib\nincludedir=${prefix}/include\n\nName: OpenSSL-libssl\nDescription: BoringSSL ssl library\nVersion: 1.1.1\nRequires.private: libcrypto\nLibs: -L${libdir} -lssl\nLibs.private: -lpthread\nCflags: -I${includedir}\n' > /usr/local/lib/pkgconfig/libssl.pc \
+    && printf 'prefix=/usr/local\nexec_prefix=${prefix}\nlibdir=${exec_prefix}/lib\nincludedir=${prefix}/include\n\nName: OpenSSL\nDescription: BoringSSL (OpenSSL compatible)\nVersion: 1.1.1\nRequires: libssl libcrypto\n' > /usr/local/lib/pkgconfig/openssl.pc \
     && echo '#ifndef SHLIB_VERSION_NUMBER' >> /usr/local/include/openssl/opensslv.h \
     && echo '#define SHLIB_VERSION_NUMBER "BoringSSL"' >> /usr/local/include/openssl/opensslv.h \
     && echo '#endif' >> /usr/local/include/openssl/opensslv.h
@@ -68,13 +74,15 @@ RUN cd curl-impersonate \
     && cmake --build . --config Release --target install \
     && cd ../../..
 
+
 # Build curl-impersonate (Chrome variant)
 RUN cd curl-impersonate \
     && wget https://curl.se/download/curl-8.1.1.tar.xz \
     && tar xf curl-8.1.1.tar.xz && cd curl-8.1.1 \
     && for p in ../chrome/patches/curl-*.patch; do patch -p1 < $p; done \
     && autoreconf -fi \
-    && ./configure --prefix=/usr/local \
+    && LDFLAGS="-L/usr/local/lib" LIBS="-lpthread" \
+       ./configure --prefix=/usr/local \
                    --with-nghttp2=/usr/local \
                    --with-brotli=/usr/local \
                    --with-openssl=/root/curl-impersonate/boringssl/build \
@@ -82,9 +90,10 @@ RUN cd curl-impersonate \
                    --enable-websockets \
                    --enable-shared \
                    USE_CURL_SSLKEYLOGFILE=true \
-                   LDFLAGS="-L/usr/local/lib" \
-                   LIBS="-lpthread" \
     && make -j$(nproc) && make install \
+    && ln -sf /usr/local/lib/libcurl-impersonate-chrome.so /usr/local/lib/libcurl.so \
+    && ln -sf /usr/local/lib/libcurl-impersonate-chrome.so.4 /usr/local/lib/libcurl.so.4 \
+    && ln -sf /usr/local/lib/libcurl-impersonate-chrome.a /usr/local/lib/libcurl.a \
     && ldconfig \
     && cd ../.. && rm -rf curl-impersonate
 
@@ -97,8 +106,9 @@ RUN wget https://github.com/libevent/libevent/releases/download/release-$LIBEVEN
              -DEVENT__LIBRARY_TYPE=BOTH \
              -DOPENSSL_ROOT_DIR=/usr/local \
              -DOPENSSL_INCLUDE_DIR=/usr/local/include \
-             -DOPENSSL_CRYPTO_LIBRARY=/usr/local/lib/libcrypto.a \
-             -DOPENSSL_SSL_LIBRARY=/usr/local/lib/libssl.a \
+             -DOPENSSL_CRYPTO_LIBRARY=/usr/local/lib/libcrypto.so \
+             -DOPENSSL_SSL_LIBRARY=/usr/local/lib/libssl.so \
+             -DEVENT__DISABLE_REGRESS=ON \
              .. \
     && make -j$(nproc) && make install \
     && cd ../.. && rm -rf libevent-$LIBEVENT_VERSION*

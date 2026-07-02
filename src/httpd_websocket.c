@@ -3,8 +3,6 @@
 #include "httpd_internal.h"
 #include <openssl/sha.h>
 #include <openssl/evp.h>
-#include <openssl/bio.h>
-#include <openssl/buffer.h>
 
 // ============================================================
 // WebSocket upgrade detection
@@ -35,24 +33,11 @@ static char* generate_websocket_accept_key(const char* client_key) {
     unsigned char hash[SHA_DIGEST_LENGTH];
     SHA1((unsigned char*)combined, strlen(combined), hash);
 
-    BIO *bio_mem = BIO_new(BIO_s_mem());
-    BIO *bio_b64 = BIO_new(BIO_f_base64());
-    BIO_set_flags(bio_b64, BIO_FLAGS_BASE64_NO_NL);
-    BIO_push(bio_b64, bio_mem);
-
-    BIO_write(bio_b64, hash, SHA_DIGEST_LENGTH);
-    BIO_flush(bio_b64);
-
-    BUF_MEM *buf_mem = NULL;
-    BIO_get_mem_ptr(bio_b64, &buf_mem);
-
-    char *accept_key = malloc(buf_mem->length + 1);
+    char *accept_key = malloc(((SHA_DIGEST_LENGTH + 2) / 3) * 4 + 1);
     if (accept_key) {
-        memcpy(accept_key, buf_mem->data, buf_mem->length);
-        accept_key[buf_mem->length] = '\0';
+        int len = EVP_EncodeBlock((unsigned char *)accept_key, hash, SHA_DIGEST_LENGTH);
+        accept_key[len] = '\0';
     }
-
-    BIO_free_all(bio_b64);
     return accept_key;
 }
 
