@@ -36,7 +36,7 @@ apk add --update bsd-compat-headers tzdata linux-headers git lua5.3-dev lua5.3 l
     && cmake --build . --config Release --target install && cd ../.. \
     && wget https://curl.se/download/curl-8.1.1.tar.xz && tar xf curl-8.1.1.tar.xz && cd curl-8.1.1 \
     && for p in ../chrome/patches/curl-*.patch; do patch -p1 < $p; done && autoreconf -fi \
-    && ./configure --prefix=/usr/local --with-nghttp2=/usr/local --with-brotli=/usr/local --with-openssl=/root/curl-impersonate/boringssl/build --with-zlib --enable-websockets USE_CURL_SSLKEYLOGFILE=true LIBS="-lpthread" \
+    && ./configure --prefix=/usr/local --with-nghttp2=/usr/local --with-brotli=/usr/local --with-openssl=/root/curl-impersonate/boringssl/build --with-zlib --enable-websockets --enable-shared USE_CURL_SSLKEYLOGFILE=true LDFLAGS="-L/usr/local/lib" LIBS="-lpthread" \
     && make -j$(nproc) && make install && cd ../.. && rm -rf curl-impersonate \
     && wget https://github.com/libevent/libevent/releases/download/release-$LIBEVENT_VERSION/libevent-$LIBEVENT_VERSION.tar.gz && tar xzf libevent-$LIBEVENT_VERSION.tar.gz \
     && cd libevent-$LIBEVENT_VERSION && mkdir build && cd build \
