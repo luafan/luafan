@@ -33,10 +33,6 @@ apt update \
     && luarocks install lmd5 \
     && luarocks install lua-iconv \
     && luarocks install lsqlite3 \
-    && cd /tmp && luarocks unpack openssl && cd openssl-*/openssl-* \
-    && sed -i '/#include <openssl\/ts.h>/d' src/openssl.h \
-    && sed -i 's/#define OPENSSL_HAVE_TS//' src/openssl.h \
-    && luarocks make && cd / && rm -rf /tmp/openssl-* \
     && cd /root && cd luarocks-$LUAROCKS_VERSION && make uninstall && cd .. && rm -rf luarocks* \
     && apt-get -y remove g++ bison libncurses5-dev liblua5.3-dev libc-dev zlib1g-dev unzip cmake make gcc binutils libc-dev-bin git golang-go \
     && apt-get -y autoremove \

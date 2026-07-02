@@ -34,10 +34,6 @@ apk add --update bsd-compat-headers tzdata linux-headers git lua5.3-dev lua5.3 l
     && luarocks install lmd5 \
     && luarocks install lua-iconv \
     && luarocks install lsqlite3 \
-    && cd /tmp && luarocks unpack openssl && cd openssl-*/openssl-* \
-    && sed -i '/#include <openssl\/ts.h>/d' src/openssl.h \
-    && sed -i 's/#define OPENSSL_HAVE_TS//' src/openssl.h \
-    && luarocks make && cd / && rm -rf /tmp/openssl-* \
     && cd /root && cd luarocks-$LUAROCKS_VERSION && make uninstall && cd .. && rm -rf luarocks* \
     && apk del linux-headers git lua5.3-dev g++ bison ncurses-dev libc-dev wget cmake make gcc unzip bsd-compat-headers perl go \
     && rm -rf /usr/include /usr/local/include /usr/local/share/doc /usr/local/share/man /usr/local/share/lua/5.3/luarocks /usr/local/mysql/lib/*.a /usr/local/mysql/include /usr/local/bin /var/cache/apk/* .cache

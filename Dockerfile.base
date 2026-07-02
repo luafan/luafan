@@ -78,10 +78,3 @@ RUN luarocks install compat53 && luarocks install lpeg \
     && luarocks install lua-protobuf && luarocks install lmd5 \
     && luarocks install lua-iconv && luarocks install lsqlite3
 
-# lua-openssl: patch out timestamp module (BoringSSL has no openssl/ts.h)
-RUN cd /tmp && luarocks unpack openssl \
-    && cd openssl-*/openssl-* \
-    && sed -i '/#include <openssl\/ts.h>/d' src/openssl.h \
-    && sed -i 's/#define OPENSSL_HAVE_TS//' src/openssl.h \
-    && luarocks make \
-    && cd / && rm -rf /tmp/openssl-*
