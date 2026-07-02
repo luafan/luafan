@@ -16,6 +16,9 @@
 // #define FAN_HAS_LUAJIT  1
 
 #include <openssl/opensslv.h>
+#ifdef OPENSSL_IS_BORINGSSL
+#include <openssl/base.h>
+#endif
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>

@@ -1,8 +1,8 @@
-package = "luafan"
-version = "0.7-3"
+package = "luafanlite"
+version = "0.8-0"
 source = {
    url = "git://github.com/luafan/luafan",
-   tag = "v0.7.3"
+   tag = "v0.8.0"
 }
 
 description = {
@@ -19,9 +19,6 @@ dependencies = {
 }
 
 external_dependencies = {
-   MARIADB = {
-      header = "mysql/mysql.h"
-   },
    OPENSSL = {
       header = "openssl/opensslv.h"
    },
@@ -66,35 +63,17 @@ build = {
             "src/httpd_websocket.c",
             "src/httpd_metrics.c",
             "src/popen.c",
-            "src/luasql.c",
-            "src/luamariadb.c",
-            -- MariaDB module sources
-            "src/mariadb/luamariadb_connect.c",
-            "src/mariadb/luamariadb_close.c",
-            "src/mariadb/luamariadb_query.c",
-            "src/mariadb/luamariadb_prepare.c",
-            "src/mariadb/luamariadb_ping.c",
-            "src/mariadb/luamariadb_commit.c",
-            "src/mariadb/luamariadb_rollback.c",
-            "src/mariadb/luamariadb_autocommit.c",
-            "src/mariadb/luamariadb_setcharset.c",
-            "src/mariadb/luamariadb_stmt.c",
-            "src/mariadb/luamariadb_cursor.c",
-            "src/mariadb/luamariadb_stmt_close.c",
-            "src/mariadb/luamariadb_stmt_fetch.c",
-            "src/mariadb/luamariadb_stmt_storeresult.c",
-            "src/mariadb/luamariadb_stmt_sendlongdata.c",
-            "src/mariadb/luamariadb_stmt_execute.c",
          },
          defines = { "FAN_HAS_OPENSSL=1", "FAN_HAS_LUAJIT=1", "_GNU_SOURCE=1" },
-         libraries = { "event", "event_openssl", "ssl", "crypto", "curl", "resolv", "mysqlclient" },
-         incdirs = { "$(CURL_INCDIR)", "$(LIBEVENT_INCDIR)", "$(OPENSSL_INCDIR)", "$(MARIADB_INCDIR)" },
-         libdirs = { "$(CURL_LIBDIR)", "$(LIBEVENT_LIBDIR)", "$(OPENSSL_LIBDIR)", "$(MARIADB_LIBDIR)" }
+         libraries = { "event", "event_openssl", "ssl", "crypto", "pthread", "curl", "resolv" },
+         incdirs = { "$(CURL_INCDIR)", "$(LIBEVENT_INCDIR)", "$(OPENSSL_INCDIR)" },
+         libdirs = { "$(CURL_LIBDIR)", "$(LIBEVENT_LIBDIR)", "$(OPENSSL_LIBDIR)" }
       },
       ["fan.connector.init"] = "modules/fan/connector/init.lua",
       ["fan.connector.tcp"] = "modules/fan/connector/tcp.lua",
       ["fan.connector.udp"] = "modules/fan/connector/udp.lua",
       ["fan.connector.fifo"] = "modules/fan/connector/fifo.lua",
+      ["fan.connector.popen"] = "modules/fan/connector/popen.lua",
       ["fan.worker.init"] = "modules/fan/worker/init.lua",
       ["fan.pool"] = "modules/fan/pool.lua",
       ["fan.stream.init"] = "modules/fan/stream/init.lua",
@@ -107,9 +86,6 @@ build = {
       ["fan.utils"] = "modules/fan/utils.lua",
       ["fan.orm_base"] = "modules/fan/orm_base.lua",
       ["fan.reliable_udp"] = "modules/fan/reliable_udp.lua",
-      ["mariadb.orm"] = "modules/mariadb/orm.lua",
-      ["mariadb.pool"] = "modules/mariadb/pool.lua",
-      ["fan.connector.popen"] = "modules/fan/connector/popen.lua",
       ["fan.http.init"] = "modules/fan/http/init.lua",
       ["fan.http.http"] = "modules/fan/http/http.lua",
       ["config"] = "modules/config.lua",

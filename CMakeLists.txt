@@ -49,7 +49,6 @@ target_include_directories(${MODULE_NAME} PRIVATE
     "/opt/homebrew/opt/luajit/include/luajit-2.1"
     "/usr/local/mysql/include"
     "/usr/local/Cellar/mariadb/5.5.30/include/mysql"
-    "/usr/local/Cellar/openssl/1.0.2g/include/"
     "/usr/local/include"
     "/opt/homebrew/include"
     "/opt/homebrew/opt/libevent/include"
@@ -58,7 +57,6 @@ target_include_directories(${MODULE_NAME} PRIVATE
 # Link directories (target-scoped)
 target_link_directories(${MODULE_NAME} PRIVATE
     "/usr/local/mysql/lib"
-    "/usr/local/Cellar/openssl/1.0.2g/lib"
     "/usr/local/lib"
     "/opt/homebrew/lib"
     "/opt/homebrew/opt/libevent/lib"
@@ -68,6 +66,7 @@ target_link_libraries(${MODULE_NAME} event)
 target_link_libraries(${MODULE_NAME} event_openssl)
 target_link_libraries(${MODULE_NAME} ssl)
 target_link_libraries(${MODULE_NAME} crypto)
+target_link_libraries(${MODULE_NAME} pthread)
 
 target_link_libraries(${MODULE_NAME} curl)
 target_link_libraries(${MODULE_NAME} resolv)
@@ -117,15 +116,14 @@ target_compile_definitions(run_c_tests PRIVATE
 )
 target_link_directories(run_c_tests PRIVATE
     "/usr/local/mysql/lib"
-    "/usr/local/Cellar/openssl/1.0.2g/lib"
     "/usr/local/lib"
     "/opt/homebrew/lib"
     "/opt/homebrew/opt/libevent/lib"
 )
 if(MYSQL_INCLUDE_DIR)
-    target_link_libraries(run_c_tests event event_openssl ssl crypto curl resolv mysqlclient lua5.3 m)
+    target_link_libraries(run_c_tests event event_openssl ssl crypto pthread curl resolv mysqlclient lua5.3 m)
 else()
-    target_link_libraries(run_c_tests event event_openssl ssl crypto curl resolv lua5.3 m)
+    target_link_libraries(run_c_tests event event_openssl ssl crypto pthread curl resolv lua5.3 m)
 endif()
 set_target_properties(run_c_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

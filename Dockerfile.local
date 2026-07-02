@@ -1,11 +1,11 @@
 FROM luafan/luafan-ubuntu:local_base
 
-ENV LUAFAN_VERSION=0.7-3
+ENV LUAFAN_VERSION=0.8-0
 
 COPY . /root/luafan/
 RUN cd /root/luafan \
     && CFLAGS="-g -O2" \
        luarocks make luafan-$LUAFAN_VERSION.rockspec \
        MARIADB_DIR=/usr/local/mysql \
-       CURL_INCDIR=/usr/include/$(uname -m)-linux-gnu \
+       CURL_INCDIR=/usr/local/include \
     && cd .. && rm -rf luafan

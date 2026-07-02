@@ -1,8 +1,8 @@
 package = "luafanmicro"
-version = "0.7-3"
+version = "0.8-0"
 source = {
    url = "git://github.com/luafan/luafan",
-   tag = "v0.7.3"
+   tag = "v0.8.0"
 }
 
 description = {

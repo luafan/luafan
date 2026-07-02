@@ -478,8 +478,9 @@ LUA_API int utd_bind(lua_State *L) {
                             SSL_OP_NO_COMPRESSION |
                             SSL_OP_CIPHER_SERVER_PREFERENCE);
 
-        SSL_CTX_set_cipher_list(ctx, "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS");
+        SSL_CTX_set_cipher_list(ctx, "ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL:!MD5:!DSS");
 
+#ifndef OPENSSL_IS_BORINGSSL
         EC_KEY *ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
         if (!ecdh) {
             die_most_horribly_from_openssl_error(L, "EC_KEY_new_by_curve_name");
@@ -488,6 +489,7 @@ LUA_API int utd_bind(lua_State *L) {
         if (1 != SSL_CTX_set_tmp_ecdh(ctx, ecdh)) {
             die_most_horribly_from_openssl_error(L, "SSL_CTX_set_tmp_ecdh");
         }
+#endif
 
         server_setup_certs(L, ctx, cert, key);
 
