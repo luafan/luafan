@@ -6,7 +6,9 @@ ENV LUAROCKS_VERSION=3.13.0
 ENV MARIADB_VERSION=5.5.68
 ENV BORINGSSL_COMMIT=1b7fdbd9101dedc3e0aa3fcf4ff74eacddb34ecc
 ENV LIBEVENT_VERSION=2.1.12-stable
-ENV CURL_VERSION=8.7.1
+ENV CURL_IMPERSONATE_VERSION=0.6.1
+ENV BROTLI_VERSION=1.0.9
+ENV NGHTTP2_VERSION=nghttp2-1.56.0
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
@@ -14,26 +16,75 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && apt install -y libsqlite3-0 libsqlite3-dev tzdata wget liblua5.3-dev lua5.3 unzip \
        zlib1g-dev make gcc libc-dev git \
        cmake g++ bison libncurses5-dev golang-go ca-certificates \
+       ninja-build autoconf automake libtool pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 RUN apt update && apt install -y gdb && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /root
 
-# Build BoringSSL
-RUN git clone https://boringssl.googlesource.com/boringssl \
-    && cd boringssl && git checkout $BORINGSSL_COMMIT \
+# Build BoringSSL (with curl-impersonate patches)
+RUN git clone https://github.com/lwthiker/curl-impersonate.git \
+    && cd curl-impersonate \
+    && curl -L https://github.com/google/boringssl/archive/$BORINGSSL_COMMIT.zip -o boringssl.zip \
+    && unzip -q boringssl.zip && mv boringssl-$BORINGSSL_COMMIT boringssl \
+    && cd boringssl && for p in ../chrome/patches/boringssl-*.patch; do patch -p1 < $p; done \
     && mkdir build && cd build \
-    && cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON .. \
-    && make -j$(nproc) \
-    && cd .. \
-    && cp -r include/openssl /usr/local/include/ \
-    && cp build/ssl/libssl.a /usr/local/lib/ \
-    && cp build/crypto/libcrypto.a /usr/local/lib/ \
+    && cmake -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+             -DCMAKE_C_FLAGS="-Wno-unknown-warning-option -Wno-stringop-overflow -Wno-array-bounds" \
+             -GNinja .. \
+    && ninja \
+    && mkdir -p lib \
+    && ln -sf ../crypto/libcrypto.a lib/libcrypto.a \
+    && ln -sf ../ssl/libssl.a lib/libssl.a \
+    && cp -Rf ../include . \
+    && cd ../.. \
+    && cp -r boringssl/include/openssl /usr/local/include/ \
+    && cp boringssl/build/ssl/libssl.a /usr/local/lib/ \
+    && cp boringssl/build/crypto/libcrypto.a /usr/local/lib/ \
     && echo '#ifndef SHLIB_VERSION_NUMBER' >> /usr/local/include/openssl/opensslv.h \
     && echo '#define SHLIB_VERSION_NUMBER "BoringSSL"' >> /usr/local/include/openssl/opensslv.h \
-    && echo '#endif' >> /usr/local/include/openssl/opensslv.h \
-    && cd .. && rm -rf boringssl
+    && echo '#endif' >> /usr/local/include/openssl/opensslv.h
+
+# Build nghttp2 (HTTP/2 support for curl-impersonate)
+RUN cd curl-impersonate \
+    && wget https://github.com/nghttp2/nghttp2/releases/download/v1.56.0/$NGHTTP2_VERSION.tar.bz2 \
+    && tar xjf $NGHTTP2_VERSION.tar.bz2 && cd $NGHTTP2_VERSION \
+    && ./configure --prefix=/usr/local --with-pic --enable-lib-only \
+                   --disable-shared --disable-python-bindings \
+    && make -j$(nproc) && make install \
+    && cd ../..
+
+# Build brotli
+RUN cd curl-impersonate \
+    && wget https://github.com/google/brotli/archive/refs/tags/v$BROTLI_VERSION.tar.gz -O brotli-$BROTLI_VERSION.tar.gz \
+    && tar xzf brotli-$BROTLI_VERSION.tar.gz && cd brotli-$BROTLI_VERSION \
+    && mkdir out && cd out \
+    && cmake -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_INSTALL_PREFIX=/usr/local \
+             -DCMAKE_INSTALL_LIBDIR=lib \
+             .. \
+    && cmake --build . --config Release --target install \
+    && cd ../../..
+
+# Build curl-impersonate (Chrome variant)
+RUN cd curl-impersonate \
+    && wget https://curl.se/download/curl-8.1.1.tar.xz \
+    && tar xf curl-8.1.1.tar.xz && cd curl-8.1.1 \
+    && for p in ../chrome/patches/curl-*.patch; do patch -p1 < $p; done \
+    && autoreconf -fi \
+    && ./configure --prefix=/usr/local \
+                   --with-nghttp2=/usr/local \
+                   --with-brotli=/usr/local \
+                   --with-openssl=/root/curl-impersonate/boringssl/build \
+                   --with-zlib \
+                   --enable-websockets \
+                   USE_CURL_SSLKEYLOGFILE=true \
+                   LIBS="-lpthread" \
+    && make -j$(nproc) && make install \
+    && ldconfig \
+    && cd ../.. && rm -rf curl-impersonate
 
 # Build libevent with BoringSSL
 RUN wget https://github.com/libevent/libevent/releases/download/release-$LIBEVENT_VERSION/libevent-$LIBEVENT_VERSION.tar.gz \
@@ -49,17 +100,6 @@ RUN wget https://github.com/libevent/libevent/releases/download/release-$LIBEVEN
              .. \
     && make -j$(nproc) && make install \
     && cd ../.. && rm -rf libevent-$LIBEVENT_VERSION*
-
-# Build curl with BoringSSL
-RUN wget https://curl.se/download/curl-$CURL_VERSION.tar.gz \
-    && tar xzf curl-$CURL_VERSION.tar.gz \
-    && cd curl-$CURL_VERSION \
-    && ./configure --with-openssl=/usr/local --without-libpsl \
-                   LDFLAGS="-L/usr/local/lib" CPPFLAGS="-I/usr/local/include" \
-                   LIBS="-lpthread" \
-    && make -j$(nproc) && make install \
-    && ldconfig \
-    && cd .. && rm -rf curl-$CURL_VERSION*
 
 RUN wget https://luarocks.github.io/luarocks/releases/luarocks-$LUAROCKS_VERSION.tar.gz \
     && tar xzf luarocks-$LUAROCKS_VERSION.tar.gz \
@@ -77,4 +117,3 @@ RUN luarocks install compat53 && luarocks install lpeg \
     && luarocks install lzlib && luarocks install lbase64 \
     && luarocks install lua-protobuf && luarocks install lmd5 \
     && luarocks install lua-iconv && luarocks install lsqlite3
-
