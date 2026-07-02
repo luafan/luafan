@@ -7,6 +7,10 @@
 
 #include <curl/curl.h>
 
+#ifndef CURL_IMPERSONATE
+CURLcode curl_easy_impersonate(CURL *easy, const char *target, int default_headers);
+#endif
+
 #define MSG_OUT stdout /* Send info to stdout, change to stderr if you want */
 
 static struct event *timer_event;
@@ -847,7 +851,14 @@ static int http_getpost(lua_State *L, int method) {
         }
         lua_pop(L, 1);
 
-        //    LOGD("verbose = %d", args->verbose);
+        lua_getfield(L, 1, "impersonate");
+        if (lua_isstring(L, -1)) {
+            curl_easy_impersonate(conn->easy, lua_tostring(L, -1), 0);
+        } else if (!lua_isnil(L, -1)) {
+            LOGE("invalid impersonate type in table parameter");
+        }
+        lua_pop(L, 1);
+
         if (conn->verbose) {
             curl_easy_setopt(conn->easy, CURLOPT_VERBOSE, 1);
             curl_easy_setopt(conn->easy, CURLOPT_DEBUGFUNCTION, debug_callback);
