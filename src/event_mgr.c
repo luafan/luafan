@@ -294,7 +294,11 @@ int event_mgr_init() {
         initialized = 1;
 
         dnsbase = evdns_base_new(event_mgr_base(), EVDNS_BASE_INITIALIZE_NAMESERVERS);
-        evdns_base_set_option(dnsbase, "randomize-case:", "0");
+        if (dnsbase) {
+            evdns_base_set_option(dnsbase, "randomize-case:", "0");
+        } else {
+            fprintf(stderr, "event_mgr_init: evdns_base_new failed (no network?), DNS resolution unavailable\n");
+        }
 
 #if FAN_HAS_OPENSSL && OPENSSL_VERSION_NUMBER < 0x1010000fL
         SSL_library_init();

@@ -14,14 +14,38 @@ static struct event *timer_check_multi_info;
 static CURLM *multi;
 static int still_running;
 
-#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
-extern char *proxyHost;
-extern long proxyPort;
-extern char *proxyUsername;
-extern char *proxyPassword;
-extern int proxyType;
+/* Proxy + DNS globals defined here for all platforms. External code (iOS app
+   TunnelService.m, Android JNI bridge, future macOS settings UI) may override
+   these via extern + strong definition; our definitions are weak so the
+   stronger app-supplied one wins at link time. */
+__attribute__((weak)) char *proxyHost = NULL;
+__attribute__((weak)) long proxyPort = 0;
+__attribute__((weak)) char *proxyUsername = NULL;
+__attribute__((weak)) char *proxyPassword = NULL;
+__attribute__((weak)) int proxyType = INT16_MAX;  /* sentinel: "no proxy configured" */
+__attribute__((weak)) char *dns_servers = NULL;
+
 extern int GLOBAL_VERBOSE;
+
+#if defined(ANDROID) || defined(__ANDROID__)
+#include "jni.h"
+#include <curl/curl.h>
+extern JavaVM *cachedJVM;
+#define IncrNetworkActivity() (void)0;
+#define DecrNetworkActivity() (void)0;
+#elif TARGET_OS_IPHONE
+extern void IncrNetworkActivity();
+extern void DecrNetworkActivity();
+#else
+/* No iOS-style network-activity indicator on macOS. */
+#define IncrNetworkActivity() (void)0;
+#define DecrNetworkActivity() (void)0;
 #endif
+
+/* incrRef/decrRef are defined in lua-apple/lua53/luauser.c on all Apple platforms
+   and in the Android JNI bridge — declare unconditionally. */
+extern void incrRef(lua_State *L);
+extern void decrRef(lua_State *L);
 
 /* Information associated with a specific easy handle */
 typedef struct _ConnInfo {
@@ -54,7 +78,36 @@ typedef struct _ConnInfo {
     //    struct curl_slist *headers;
 
     struct curl_slist *resolve;
+
+    struct _ConnInfo *next; // linked list for in-flight tracking
+    struct _ConnInfo *prev;
 } ConnInfo;
+
+/* Doubly-linked list head for all in-flight connections.
+   Used by cleanup_http_curl() to decrRef for requests that never completed. */
+static ConnInfo *inflight_head = NULL;
+
+static void inflight_add(ConnInfo *conn) {
+    conn->prev = NULL;
+    conn->next = inflight_head;
+    if (inflight_head) {
+        inflight_head->prev = conn;
+    }
+    inflight_head = conn;
+}
+
+static void inflight_remove(ConnInfo *conn) {
+    if (conn->prev) {
+        conn->prev->next = conn->next;
+    } else {
+        inflight_head = conn->next;
+    }
+    if (conn->next) {
+        conn->next->prev = conn->prev;
+    }
+    conn->prev = NULL;
+    conn->next = NULL;
+}
 
 typedef struct {
     struct event *resume_timer;
@@ -72,38 +125,7 @@ typedef struct _SockInfo {
     int evset;
 } SockInfo;
 
-#if defined(ANDROID) || defined(__ANDROID__)
-
-#include "jni.h"
-
-#include <curl/curl.h>
-extern JavaVM *cachedJVM;
-extern char *dns_servers;
-#define IncrNetworkActivity() (void)0;
-#define DecrNetworkActivity() (void)0;
-extern void incrRef(lua_State *L);
-extern void decrRef(lua_State *L);
-
-#elif TARGET_OS_IPHONE
-
-static char *dns_servers = NULL;
-extern void IncrNetworkActivity();
-extern void DecrNetworkActivity();
-extern void incrRef(lua_State *L);
-extern void decrRef(lua_State *L);
-
-#else
-
-#define IncrNetworkActivity() (void)0;
-#define DecrNetworkActivity() (void)0;
-#define incrRef(L) (void)0;
-#define decrRef(L) (void)0;
-
-#endif
-
-#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
 static CURLSH *share_handle = NULL;
-#endif
 
 #define CURL_TIMEOUT_DEFAULT 60
 
@@ -142,10 +164,16 @@ static void http_getpost_complete(ConnInfo *conn) {
         return;
     }
     conn->completed = 1;
+    inflight_remove(conn);
 
     lua_State *L = conn->L;
     if (!L) {
         fprintf(stderr, "[http] WARNING: http_getpost_complete called with NULL L\n");
+        // Still need to decrRef — use mainthread stored at request time
+        if (conn->mainthread) {
+            DecrNetworkActivity();
+            decrRef(conn->mainthread);
+        }
         return;
     }
     lua_lock(L);
@@ -266,10 +294,12 @@ static void http_getpost_complete(ConnInfo *conn) {
     if (!info) {
         // Critical fix: Handle memory allocation failure
         fprintf(stderr, "Memory allocation failed for ResumeInfo: %zu bytes\n", sizeof(ResumeInfo));
+        lua_State *mainthread = utlua_mainthread(L);
         // Cannot safely resume, but we need to clean up coref
         if (conn->coref != LUA_NOREF) {
-            luaL_unref(utlua_mainthread(L), LUA_REGISTRYINDEX, conn->coref);
+            luaL_unref(mainthread, LUA_REGISTRYINDEX, conn->coref);
         }
+        decrRef(mainthread);
         return;
     }
     info->L = L;
@@ -830,11 +860,7 @@ static int http_getpost(lua_State *L, int method) {
     if (lua_istable(L, 1)) {
         lua_pushliteral(L, "verbose");
         lua_gettable(L, 1);
-#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
         conn->verbose = luaL_optnumber(L, -1, GLOBAL_VERBOSE);
-#else
-        conn->verbose = luaL_optnumber(L, -1, 0);
-#endif
         lua_pop(L, 1);
 
         lua_pushliteral(L, "url");
@@ -864,13 +890,11 @@ static int http_getpost(lua_State *L, int method) {
         } else if (!lua_isnil(L, -1)) {
             LOGE("invalid dns_servers type in table parameter");
         }
-#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
         else {
             if (dns_servers) {
                 curl_easy_setopt(conn->easy, CURLOPT_DNS_SERVERS, dns_servers);
             }
         }
-#endif
         lua_pop(L, 1);
 
         lua_getfield(L, 1, "onprogress");
@@ -1071,8 +1095,6 @@ static int http_getpost(lua_State *L, int method) {
             goto ERROR;
         }
 
-#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
-
         if (proxyType != INT16_MAX) {
             curl_easy_setopt(conn->easy, CURLOPT_PROXYTYPE, proxyType);
             if (proxyHost) {
@@ -1091,7 +1113,6 @@ static int http_getpost(lua_State *L, int method) {
             curl_easy_setopt(conn->easy, CURLOPT_NOPROXY, "127.0.0.1,localhost");
         }
 
-#endif
         lua_pushliteral(L, "proxytunnel");
         lua_gettable(L, 1);
         if (lua_isnumber(L, -1)) {
@@ -1271,9 +1292,10 @@ static int http_getpost(lua_State *L, int method) {
         curl_multi_setopt(multi, CURLMOPT_SOCKETDATA, NULL);
         curl_multi_setopt(multi, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
         curl_multi_setopt(multi, CURLMOPT_TIMERDATA, NULL);
-#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
-        curl_multi_setopt(multi, CURLOPT_SHARE, share_handle);
-#endif
+    }
+
+    if (share_handle) {
+        curl_easy_setopt(conn->easy, CURLOPT_SHARE, share_handle);
     }
 
     CURLMcode rc = curl_multi_add_handle(multi, conn->easy);
@@ -1284,6 +1306,7 @@ static int http_getpost(lua_State *L, int method) {
 
     IncrNetworkActivity();
 
+    inflight_add(conn);
     incrRef(L);
     if (oncompleteref != LUA_NOREF) {
         luaL_unref(L, LUA_REGISTRYINDEX, oncompleteref);
@@ -1462,8 +1485,6 @@ static const luaL_Reg httplib[] = {{"get", http_get},
                                    {"unescape", http_unescape},
                                    {NULL, NULL}};
 
-#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
-
 static pthread_mutex_t share_lock;
 
 void lock_function(CURL *handle, curl_lock_data data, curl_lock_access access, void *userptr) {
@@ -1473,9 +1494,8 @@ void lock_function(CURL *handle, curl_lock_data data, curl_lock_access access, v
 void unlock_function(CURL *handle, curl_lock_data data, void *userptr) {
     pthread_mutex_unlock(&share_lock);
 }
-#endif
 
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE || (defined(__APPLE__) && !defined(ANDROID) && !defined(__ANDROID__))
 #include <arpa/inet.h>
 #include <resolv.h>
 #include <sys/socket.h>
@@ -1498,9 +1518,10 @@ static void reset_dns_servers_cb(int fd, short kind, void *userp) {
         dns_servers = NULL;
     }
 
-    evdns_base_clear_nameservers_and_suspend(event_mgr_dnsbase());
-
     struct evdns_base *dns_base = event_mgr_dnsbase();
+    if (dns_base) {
+        evdns_base_clear_nameservers_and_suspend(dns_base);
+    }
 
     struct __res_state res = {0};
     int result = res_ninit(&res);
@@ -1514,7 +1535,9 @@ static void reset_dns_servers_cb(int fd, short kind, void *userp) {
                 char ip[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &(addr_union[i].sin.sin_addr), ip, INET_ADDRSTRLEN);
 
-                evdns_base_nameserver_ip_add(dns_base, ip);
+                if (dns_base) {
+                    evdns_base_nameserver_ip_add(dns_base, ip);
+                }
 
                 memcpy(buf + offset, ip, strlen(ip));
                 offset += strlen(ip);
@@ -1527,7 +1550,9 @@ static void reset_dns_servers_cb(int fd, short kind, void *userp) {
             } else if (addr_union[i].sin6.sin6_family == AF_INET6) {
                 char ip[INET6_ADDRSTRLEN];
                 inet_ntop(AF_INET6, &(addr_union[i].sin6.sin6_addr), ip, INET6_ADDRSTRLEN);
-                evdns_base_nameserver_ip_add(dns_base, ip);
+                if (dns_base) {
+                    evdns_base_nameserver_ip_add(dns_base, ip);
+                }
 
                 memcpy(buf + offset, ip, strlen(ip));
                 offset += strlen(ip);
@@ -1545,7 +1570,9 @@ static void reset_dns_servers_cb(int fd, short kind, void *userp) {
     }
     res_ndestroy(&res);
 
-    evdns_base_resume(event_mgr_dnsbase());
+    if (dns_base) {
+        evdns_base_resume(dns_base);
+    }
 
     dns_servers = strdup(buf);
 
@@ -1568,6 +1595,64 @@ extern void reset_dns_servers() {
 // still valid, so libcurl's internal callbacks (which remove sockets from
 // libevent) can run without dereferencing a freed base.
 void cleanup_http_curl(void) {
+    // First, drain all in-flight connections that never received CURLMSG_DONE.
+    // Each one holds an incrRef that would otherwise leak.
+    while (inflight_head) {
+        ConnInfo *conn = inflight_head;
+        inflight_remove(conn);
+
+        if (!conn->completed) {
+            conn->completed = 1;
+            lua_State *L = conn->L;
+            lua_State *mainthread = conn->mainthread ? conn->mainthread : (L ? utlua_mainthread(L) : NULL);
+
+            if (L) {
+                lua_lock(L);
+                if (conn->bodyref != LUA_NOREF) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, conn->bodyref);
+                }
+                if (conn->onprogressref != LUA_NOREF) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, conn->onprogressref);
+                }
+                if (conn->onheaderref != LUA_NOREF) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, conn->onheaderref);
+                }
+                if (conn->onreadref != LUA_NOREF) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, conn->onreadref);
+                }
+                if (conn->onwriteref != LUA_NOREF) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, conn->onwriteref);
+                }
+                luaL_unref(L, LUA_REGISTRYINDEX, conn->headerref);
+                luaL_unref(L, LUA_REGISTRYINDEX, conn->retref);
+                if (conn->coref != LUA_NOREF) {
+                    lua_State *unref_L = mainthread ? mainthread : L;
+                    luaL_unref(unref_L, LUA_REGISTRYINDEX, conn->coref);
+                }
+                lua_unlock(L);
+            }
+
+            bytearray_dealloc(&conn->input);
+            DecrNetworkActivity();
+
+            if (mainthread) {
+                decrRef(mainthread);
+            }
+        }
+
+        if (conn->outputHeaders) {
+            curl_slist_free_all(conn->outputHeaders);
+        }
+        if (conn->resolve) {
+            curl_slist_free_all(conn->resolve);
+        }
+        if (conn->easy) {
+            curl_multi_remove_handle(multi, conn->easy);
+            curl_easy_cleanup(conn->easy);
+        }
+        free(conn);
+    }
+
     if (multi) {
         // curl_multi_cleanup invokes socket/timer callbacks to detach pending
         // sockets from the event base. The base must still be alive for those
@@ -1591,19 +1676,21 @@ LUA_API int luaopen_fan_http_core(lua_State *L) {
 
     struct event_base *cur_base = event_mgr_base();
 
-#if TARGET_OS_IPHONE || defined(ANDROID) || defined(__ANDROID__)
     if (!share_handle) {
         share_handle = curl_share_init();
         curl_share_setopt(share_handle, CURLSHOPT_LOCKFUNC, lock_function);
         curl_share_setopt(share_handle, CURLSHOPT_UNLOCKFUNC, unlock_function);
         curl_share_setopt(share_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+        curl_share_setopt(share_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION);
+#ifdef CURL_LOCK_DATA_CONNECT
+        curl_share_setopt(share_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT);
+#endif
 
         pthread_mutexattr_t a;
         pthread_mutexattr_init(&a);
         pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
         pthread_mutex_init(&share_lock, &a);
     }
-#endif
     if (!timer_event) {
         timer_event = evtimer_new(cur_base, timer_cb, NULL);
     }
