@@ -42,10 +42,18 @@ extern void DecrNetworkActivity();
 #define DecrNetworkActivity() (void)0;
 #endif
 
-/* incrRef/decrRef are defined in lua-apple/lua53/luauser.c on all Apple platforms
-   and in the Android JNI bridge — declare unconditionally. */
+/* incrRef/decrRef are defined in lua-apple/lua53/luauser.c on Apple platforms
+   and in the Android JNI bridge. On Linux they are no-ops. */
+#if TARGET_OS_MAC
 extern void incrRef(lua_State *L);
 extern void decrRef(lua_State *L);
+#elif TARGET_OS_IPHONE
+extern void incrRef(lua_State *L);
+extern void decrRef(lua_State *L);
+#else
+#define incrRef(L) (void)0;
+#define decrRef(L) (void)0;
+#endif
 
 /* Information associated with a specific easy handle */
 typedef struct _ConnInfo {
