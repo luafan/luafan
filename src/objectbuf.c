@@ -533,12 +533,12 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
 
     int last_top = index + 1;
 
-    if (!sym_idx) {
-        lua_pushboolean(L, false);
-        lua_rawseti(L, index_map_idx, FALSE_INDEX);
-        lua_pushboolean(L, true);
-        lua_rawseti(L, index_map_idx, TRUE_INDEX);
-    }
+    // bool indices must always exist in index_map, including symbol decode path.
+    // Otherwise vi=1/2 (false/true) may not resolve when sym_map_vk lacks bool entries.
+    lua_pushboolean(L, false);
+    lua_rawseti(L, index_map_idx, FALSE_INDEX);
+    lua_pushboolean(L, true);
+    lua_rawseti(L, index_map_idx, TRUE_INDEX);
 
     if (flag & HAS_NUMBER_MASK) {
         last_top = index + 1;

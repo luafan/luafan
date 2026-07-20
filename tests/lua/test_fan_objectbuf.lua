@@ -310,6 +310,62 @@ suite:test("error_handling", function()
     end
 end)
 
+-- Regression: random garbage may decode to scalars; protocol validator must reject non-frame values.
+suite:test("garbage_decode_protocol_guard", function()
+    local function is_valid_frame(v)
+        if type(v) ~= "table" then return false end
+        if type(v.v) ~= "number" then return false end
+        if type(v.type) ~= "string" or v.type == "" then return false end
+        return true
+    end
+
+    -- Silence decode() internal print(msg, hex) on malformed inputs to avoid log/memory amplification in tests.
+    local original_print = print
+    print = function(...) end
+
+    local trials = 128
+    local scalar_count = 0
+    local frame_like_count = 0
+    local decode_ok_count = 0
+
+    math.randomseed(12345)
+    for i = 1, trials do
+        local len = (i % 12) + 1 -- 1..12
+        local bytes = {}
+        for j = 1, len do
+            bytes[j] = string.char(math.random(0, 255))
+        end
+        local raw = table.concat(bytes)
+
+        local ok, out = pcall(objectbuf.decode, raw)
+        if ok then
+            decode_ok_count = decode_ok_count + 1
+            local ty = type(out)
+            if ty ~= "table" then
+                scalar_count = scalar_count + 1
+            end
+            if is_valid_frame(out) then
+                frame_like_count = frame_like_count + 1
+            end
+        end
+    end
+
+    print = original_print
+
+    -- Decode may succeed on garbage (e.g. booleans/nil/scalars); this is acceptable.
+    TestFramework.assert_true(decode_ok_count >= 1)
+    TestFramework.assert_true(scalar_count >= 1)
+
+    -- Strict protocol guard must reject random garbage as valid frame.
+    TestFramework.assert_equal(0, frame_like_count)
+
+    -- Sanity: a real frame must pass validator.
+    local frame = {v = 1, type = "hello", id = "h1"}
+    local encoded = objectbuf.encode(frame)
+    local decoded = objectbuf.decode(encoded)
+    TestFramework.assert_true(is_valid_frame(decoded))
+end)
+
 -- Test encoding efficiency
 suite:test("encoding_efficiency", function()
     -- Test that encoded size is reasonable for different data types
