@@ -1,6 +1,8 @@
 #include "tcpd_ssl.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #if FAN_HAS_OPENSSL
 
@@ -167,12 +169,12 @@ int tcpd_ssl_context_configure(tcpd_ssl_context_t *ctx, lua_State *L, int table_
         return -1;
     }
 
-    // Configure SSL_CTX
+    // Configure SSL_CTX trust store for peer verify.
     if (ctx->ca_info || ctx->ca_path) {
         tcpd_ssl_setup_ca_verification(ctx->ssl_ctx, ctx->ca_info, ctx->ca_path);
     } else {
-        // Use default cert.pem if no CA specified
-        tcpd_ssl_setup_ca_verification(ctx->ssl_ctx, "cert.pem", NULL);
+        // No explicit cainfo/capath: OpenSSL defaults + common bundle paths.
+        tcpd_ssl_setup_default_ca_verification(ctx->ssl_ctx);
     }
 
     // Set up certificate and key if specified
@@ -250,8 +252,8 @@ char* tcpd_ssl_generate_cache_key_from_table(lua_State *L, int table_index) {
     if (cainfo) {
         bytearray_writebuffer(&ba, cainfo, strlen(cainfo));
     } else {
-        // Use default cert.pem if no CA specified (like in original)
-        bytearray_writebuffer(&ba, "cert.pem", 8);
+        // Shared default-CA path set (see tcpd_ssl_setup_default_ca_verification)
+        bytearray_writebuffer(&ba, "default_ca", 10);
     }
     lua_pop(L, 1);
 
@@ -514,7 +516,7 @@ int tcpd_ssl_load_pkcs12(SSL_CTX *ctx, const char *p12_path, const char *passwor
     return result;
 }
 
-// Setup CA verification
+// Setup CA verification from explicit file and/or directory.
 int tcpd_ssl_setup_ca_verification(SSL_CTX *ctx, const char *ca_info, const char *ca_path) {
     if (!ctx) return -1;
 
@@ -525,6 +527,61 @@ int tcpd_ssl_setup_ca_verification(SSL_CTX *ctx, const char *ca_info, const char
     }
 
     return 0;
+}
+
+// Default trust store when caller did not set cainfo/capath.
+// Order: OpenSSL compiled-in defaults, then common system/app bundles.
+// Returns 0 on success, -1 if nothing could be loaded.
+int tcpd_ssl_setup_default_ca_verification(SSL_CTX *ctx) {
+    if (!ctx) return -1;
+
+    if (SSL_CTX_set_default_verify_paths(ctx) == 1) {
+        return 0;
+    }
+    ERR_clear_error();
+
+    // File bundles (cwd first for app-shipped cacert.pem next to binary/service).
+    static const char *const ca_files[] = {
+        "cacert.pem",
+        "cert.pem",
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/ssl/ca-bundle.pem",
+        "/usr/local/etc/openssl@3/cert.pem",
+        "/opt/homebrew/etc/openssl@3/cert.pem",
+        "/usr/local/etc/openssl/cert.pem",
+        "/opt/homebrew/etc/openssl/cert.pem",
+        NULL,
+    };
+    for (const char *const *p = ca_files; *p; ++p) {
+        if (access(*p, R_OK) != 0) {
+            continue;
+        }
+        if (SSL_CTX_load_verify_locations(ctx, *p, NULL) == 1) {
+            return 0;
+        }
+        ERR_clear_error();
+    }
+
+    // Hashed cert directory (Debian/Ubuntu style).
+    static const char *const ca_dirs[] = {
+        "/etc/ssl/certs",
+        "/etc/pki/tls/certs",
+        NULL,
+    };
+    for (const char *const *p = ca_dirs; *p; ++p) {
+        if (access(*p, R_OK | X_OK) != 0) {
+            continue;
+        }
+        if (SSL_CTX_load_verify_locations(ctx, NULL, *p) == 1) {
+            return 0;
+        }
+        ERR_clear_error();
+    }
+
+    printf("SSL default CA load failed (no OpenSSL defaults and no common cacert found)\n");
+    return -1;
 }
 
 // SSL certificate verification callback (for older OpenSSL)

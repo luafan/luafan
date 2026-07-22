@@ -49,11 +49,13 @@ keys in the `arg`:
 
 * `cainfo: string?`
 
-	file path to cacert.pem
+	file path to a CA bundle (PEM). If both `cainfo` and `capath` are omitted,
+	tcpd loads OpenSSL default verify paths, then common system bundles
+	(`cacert.pem` / `cert.pem` in cwd, `/etc/ssl/cert.pem`, distro CA bundles, etc.).
 
 * `capath: string?`
 
-	directory path of cacert.pem
+	directory of hashed CA certs (OpenSSL `CApath`)
 
 * `ssl_verifyhost: integer?`
 

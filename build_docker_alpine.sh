@@ -7,6 +7,7 @@ MARIADB_VERSION=5.5.68
 OPENSSL_VERSION=1.1.1w
 
 apk add --update bsd-compat-headers tzdata linux-headers git lua5.3-dev lua5.3 libstdc++ wget ca-certificates gcc libc-dev unzip cmake g++ make libevent libevent-dev curl-dev curl ncurses-dev bison openssl-dev openssl perl sqlite-dev \
+    && update-ca-certificates \
     && ln -s /usr/bin/lua5.3 /usr/bin/lua \
     && wget https://luarocks.github.io/luarocks/releases/luarocks-$LUAROCKS_VERSION.tar.gz && tar xzf luarocks-$LUAROCKS_VERSION.tar.gz && cd luarocks-$LUAROCKS_VERSION && ./configure && make build && make install && cd .. \
     && wget https://github.com/MariaDB/server/archive/mariadb-$MARIADB_VERSION.tar.gz && tar xzf mariadb-$MARIADB_VERSION.tar.gz \

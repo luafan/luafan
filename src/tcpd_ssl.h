@@ -81,6 +81,7 @@ tcpd_ssl_hostname_validation_result_t tcpd_ssl_validate_hostname(const char *hos
 int tcpd_ssl_load_cert_and_key(SSL_CTX *ctx, const char *cert_file, const char *key_file);
 int tcpd_ssl_load_pkcs12(SSL_CTX *ctx, const char *p12_path, const char *password);
 int tcpd_ssl_setup_ca_verification(SSL_CTX *ctx, const char *ca_info, const char *ca_path);
+int tcpd_ssl_setup_default_ca_verification(SSL_CTX *ctx);
 
 // SSL verification callbacks
 int tcpd_ssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx);

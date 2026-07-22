@@ -9,10 +9,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && apt update \
-    && apt install -y libsqlite3-0 libsqlite3-dev tzdata wget liblua5.3-dev lua5.3 unzip \
+    && apt install -y ca-certificates libsqlite3-0 libsqlite3-dev tzdata wget liblua5.3-dev lua5.3 unzip \
        zlib1g-dev make gcc libc-dev libcurl4-openssl-dev libcurl4 libevent-dev git \
        libevent-2.1-7 libevent-core-2.1-7 libevent-extra-2.1-7 libevent-openssl-2.1-7 \
        cmake g++ bison libncurses5-dev \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN apt update && apt install -y gdb && rm -rf /var/lib/apt/lists/*
