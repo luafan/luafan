@@ -1,10 +1,19 @@
 // httpd_websocket.c — WebSocket frame parsing, send/recv, accept, cleanup
+// Includes RFC 7692 permessage-deflate when client offers it.
 
 #include "httpd_internal.h"
+#include <ctype.h>
+#include <string.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
+
+/* Cap inflated payload to avoid zip bombs (chat frames stay well below this). */
+#define WS_PMD_MAX_INFLATE (16 * 1024 * 1024)
+#define WS_PMD_TRAILER_LEN 4
+
+static const unsigned char WS_PMD_TRAILER[WS_PMD_TRAILER_LEN] = {0x00, 0x00, 0xff, 0xff};
 
 // ============================================================
 // WebSocket upgrade detection
@@ -54,6 +63,331 @@ static char* generate_websocket_accept_key(const char* client_key) {
 
     BIO_free_all(bio_b64);
     return accept_key;
+}
+
+// ============================================================
+// permessage-deflate (RFC 7692)
+// ============================================================
+
+static void ws_pmd_end_streams(Request *request) {
+    if (!request) return;
+    if (request->ws_inflate_ok) {
+        inflateEnd(&request->ws_inflate);
+        request->ws_inflate_ok = 0;
+    }
+    if (request->ws_deflate_ok) {
+        deflateEnd(&request->ws_deflate);
+        request->ws_deflate_ok = 0;
+    }
+    request->ws_pmd = 0;
+}
+
+static int ws_pmd_clamp_bits(int bits) {
+    if (bits < 8) return 8;
+    if (bits > 15) return 15;
+    return bits;
+}
+
+/* Parse Sec-WebSocket-Extensions for permessage-deflate offer. */
+static int ws_pmd_parse_offer(const char *ext, Request *request) {
+    if (!ext || !request) return 0;
+
+    const char *p = ext;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+
+        const char *name = p;
+        while (*p && *p != ';' && *p != ',' && !isspace((unsigned char)*p)) p++;
+        size_t name_len = (size_t)(p - name);
+
+        int is_pmd = (name_len == 18 && strncasecmp(name, "permessage-deflate", 18) == 0);
+        int client_nct = 0, server_nct = 0;
+        int client_bits = 0; /* 0=absent, -1=bare, 8..15=value */
+        int server_bits = 0;
+
+        while (*p == ' ' || *p == '\t') p++;
+        while (*p == ';') {
+            p++;
+            while (*p == ' ' || *p == '\t') p++;
+            const char *param = p;
+            while (*p && *p != ';' && *p != ',' && *p != '=' && !isspace((unsigned char)*p)) p++;
+            size_t param_len = (size_t)(p - param);
+            while (*p == ' ' || *p == '\t') p++;
+
+            int has_value = 0;
+            const char *val = NULL;
+            size_t val_len = 0;
+            if (*p == '=') {
+                p++;
+                while (*p == ' ' || *p == '\t') p++;
+                has_value = 1;
+                if (*p == '"') {
+                    p++;
+                    val = p;
+                    while (*p && *p != '"') p++;
+                    val_len = (size_t)(p - val);
+                    if (*p == '"') p++;
+                } else {
+                    val = p;
+                    while (*p && *p != ';' && *p != ',' && !isspace((unsigned char)*p)) p++;
+                    val_len = (size_t)(p - val);
+                }
+                while (*p == ' ' || *p == '\t') p++;
+            }
+
+            if (!is_pmd || param_len == 0) continue;
+
+            /* Lengths: client/server_no_context_takeover=26, *_max_window_bits=22 */
+            if (param_len == 26 && strncasecmp(param, "client_no_context_takeover", 26) == 0) {
+                client_nct = 1;
+            } else if (param_len == 26 && strncasecmp(param, "server_no_context_takeover", 26) == 0) {
+                server_nct = 1;
+            } else if (param_len == 22 && strncasecmp(param, "client_max_window_bits", 22) == 0) {
+                if (!has_value) {
+                    client_bits = -1;
+                } else if (val_len > 0 && val_len <= 2) {
+                    int n = 0, ok = 1;
+                    size_t i;
+                    for (i = 0; i < val_len; i++) {
+                        if (val[i] < '0' || val[i] > '9') { ok = 0; break; }
+                        n = n * 10 + (val[i] - '0');
+                    }
+                    if (ok && n >= 8 && n <= 15) client_bits = n;
+                    else return 0; /* invalid bits → reject extension */
+                } else {
+                    return 0;
+                }
+            } else if (param_len == 22 && strncasecmp(param, "server_max_window_bits", 22) == 0) {
+                if (!has_value || val_len == 0 || val_len > 2) return 0;
+                int n = 0, ok = 1;
+                size_t i;
+                for (i = 0; i < val_len; i++) {
+                    if (val[i] < '0' || val[i] > '9') { ok = 0; break; }
+                    n = n * 10 + (val[i] - '0');
+                }
+                if (!ok || n < 8 || n > 15) return 0;
+                server_bits = n;
+            }
+            /* Unknown parameters: ignore (forward-compatible). */
+        }
+
+        if (is_pmd) {
+            request->ws_pmd = 1;
+            /* Always independent messages: safer for mixed clients (Lua one-shot codec). */
+            request->ws_pmd_client_no_context_takeover = 1;
+            request->ws_pmd_server_no_context_takeover = 1;
+            (void)client_nct;
+            (void)server_nct;
+            /* inflate uses client's compressor window */
+            if (client_bits == -1 || client_bits == 0) {
+                request->ws_pmd_client_max_window_bits = 15;
+            } else {
+                request->ws_pmd_client_max_window_bits = ws_pmd_clamp_bits(client_bits);
+            }
+            /* deflate uses server window (client may cap it) */
+            if (server_bits == 0) {
+                request->ws_pmd_server_max_window_bits = 15;
+            } else {
+                request->ws_pmd_server_max_window_bits = ws_pmd_clamp_bits(server_bits);
+            }
+            return 1;
+        }
+
+        while (*p && *p != ',') p++;
+    }
+    return 0;
+}
+
+static int ws_pmd_init_streams(Request *request) {
+    if (!request || !request->ws_pmd) return 0;
+
+    memset(&request->ws_inflate, 0, sizeof(request->ws_inflate));
+    memset(&request->ws_deflate, 0, sizeof(request->ws_deflate));
+
+    int cbits = ws_pmd_clamp_bits(request->ws_pmd_client_max_window_bits
+                                  ? request->ws_pmd_client_max_window_bits : 15);
+    int sbits = ws_pmd_clamp_bits(request->ws_pmd_server_max_window_bits
+                                  ? request->ws_pmd_server_max_window_bits : 15);
+
+    /* Negative windowBits = raw DEFLATE (no zlib wrapper). */
+    if (inflateInit2(&request->ws_inflate, -cbits) != Z_OK) {
+        return -1;
+    }
+    request->ws_inflate_ok = 1;
+
+    if (deflateInit2(&request->ws_deflate, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
+                     -sbits, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        inflateEnd(&request->ws_inflate);
+        request->ws_inflate_ok = 0;
+        return -1;
+    }
+    request->ws_deflate_ok = 1;
+    return 0;
+}
+
+/* Build response extension token (static buffer; only used during accept). */
+static void ws_pmd_format_response(Request *request, char *out, size_t out_len) {
+    if (!out || out_len == 0) return;
+    out[0] = '\0';
+    if (!request || !request->ws_pmd) return;
+
+    /* Echo negotiated parameters; always include window bits we chose. */
+    snprintf(out, out_len,
+             "permessage-deflate; server_max_window_bits=%d; client_max_window_bits=%d%s%s",
+             ws_pmd_clamp_bits(request->ws_pmd_server_max_window_bits
+                               ? request->ws_pmd_server_max_window_bits : 15),
+             ws_pmd_clamp_bits(request->ws_pmd_client_max_window_bits
+                               ? request->ws_pmd_client_max_window_bits : 15),
+             request->ws_pmd_server_no_context_takeover
+                 ? "; server_no_context_takeover" : "",
+             request->ws_pmd_client_no_context_takeover
+                 ? "; client_no_context_takeover" : "");
+}
+
+/*
+ * Inflate a compressed message payload in place on frame.
+ * Appends RFC 7692 empty DEFLATE block trailer before inflate.
+ * Returns 0 on success, -1 on error.
+ */
+static int ws_pmd_inflate_frame(Request *request, websocket_frame_t *frame) {
+    if (!request || !frame || !request->ws_inflate_ok) return -1;
+
+    size_t in_len = (size_t)frame->payload_len;
+    unsigned char *in_buf = NULL;
+    size_t feed_len = in_len + WS_PMD_TRAILER_LEN;
+
+    in_buf = (unsigned char *)malloc(feed_len ? feed_len : 1);
+    if (!in_buf) return -1;
+    if (in_len > 0 && frame->payload) {
+        memcpy(in_buf, frame->payload, in_len);
+    }
+    memcpy(in_buf + in_len, WS_PMD_TRAILER, WS_PMD_TRAILER_LEN);
+
+    size_t cap = in_len ? in_len * 4 : 64;
+    if (cap < 256) cap = 256;
+    if (cap > WS_PMD_MAX_INFLATE) cap = WS_PMD_MAX_INFLATE;
+    unsigned char *out = (unsigned char *)malloc(cap);
+    if (!out) {
+        free(in_buf);
+        return -1;
+    }
+
+    request->ws_inflate.next_in = in_buf;
+    request->ws_inflate.avail_in = (uInt)feed_len;
+    size_t total = 0;
+    int zrc;
+
+    for (;;) {
+        if (total >= WS_PMD_MAX_INFLATE) {
+            free(in_buf);
+            free(out);
+            return -1;
+        }
+        if (cap - total < 64) {
+            size_t ncap = cap * 2;
+            if (ncap > WS_PMD_MAX_INFLATE) ncap = WS_PMD_MAX_INFLATE;
+            if (ncap <= cap) {
+                free(in_buf);
+                free(out);
+                return -1;
+            }
+            unsigned char *n = (unsigned char *)realloc(out, ncap);
+            if (!n) {
+                free(in_buf);
+                free(out);
+                return -1;
+            }
+            out = n;
+            cap = ncap;
+        }
+        request->ws_inflate.next_out = out + total;
+        request->ws_inflate.avail_out = (uInt)(cap - total);
+        zrc = inflate(&request->ws_inflate, Z_SYNC_FLUSH);
+        total = (size_t)(request->ws_inflate.next_out - out);
+        if (zrc == Z_STREAM_END) break;
+        if (zrc == Z_OK || zrc == Z_BUF_ERROR) {
+            /* Need more output space? */
+            if (request->ws_inflate.avail_in > 0 && request->ws_inflate.avail_out == 0) {
+                continue;
+            }
+            /* All input consumed (trailer included). */
+            if (request->ws_inflate.avail_in == 0) break;
+            continue;
+        }
+        free(in_buf);
+        free(out);
+        return -1;
+    }
+
+    free(in_buf);
+    if (frame->payload) free(frame->payload);
+    frame->payload = (char *)out;
+    frame->payload_len = (uint64_t)total;
+    frame->rsv1 = 0;
+
+    if (request->ws_pmd_client_no_context_takeover) {
+        if (inflateReset(&request->ws_inflate) != Z_OK) return -1;
+    }
+    return 0;
+}
+
+/*
+ * Deflate payload for outgoing data frame. Caller frees *out_payload.
+ * Returns 0 on success. On failure leaves *out_* unset.
+ */
+static int ws_pmd_deflate_payload(Request *request, const char *data, size_t data_len,
+                                  char **out_payload, size_t *out_len) {
+    if (!request || !out_payload || !out_len || !request->ws_deflate_ok) return -1;
+
+    size_t cap = data_len + 64;
+    if (cap < 128) cap = 128;
+    unsigned char *out = (unsigned char *)malloc(cap);
+    if (!out) return -1;
+
+    request->ws_deflate.next_in = (Bytef *)(data ? data : "");
+    request->ws_deflate.avail_in = (uInt)data_len;
+    size_t total = 0;
+    int zrc;
+
+    for (;;) {
+        if (cap - total < 64) {
+            size_t ncap = cap * 2;
+            unsigned char *n = (unsigned char *)realloc(out, ncap);
+            if (!n) {
+                free(out);
+                return -1;
+            }
+            out = n;
+            cap = ncap;
+        }
+        request->ws_deflate.next_out = out + total;
+        request->ws_deflate.avail_out = (uInt)(cap - total);
+        zrc = deflate(&request->ws_deflate, Z_SYNC_FLUSH);
+        total = (size_t)(request->ws_deflate.next_out - out);
+        if (zrc != Z_OK) {
+            free(out);
+            return -1;
+        }
+        if (request->ws_deflate.avail_in == 0 && request->ws_deflate.avail_out > 0) break;
+    }
+
+    /* Strip trailing 0x00 0x00 0xff 0xff empty block (RFC 7692 §7.2.1). */
+    if (total >= WS_PMD_TRAILER_LEN &&
+        memcmp(out + total - WS_PMD_TRAILER_LEN, WS_PMD_TRAILER, WS_PMD_TRAILER_LEN) == 0) {
+        total -= WS_PMD_TRAILER_LEN;
+    }
+
+    if (request->ws_pmd_server_no_context_takeover) {
+        if (deflateReset(&request->ws_deflate) != Z_OK) {
+            free(out);
+            return -1;
+        }
+    }
+
+    *out_payload = (char *)out;
+    *out_len = total;
+    return 0;
 }
 
 // ============================================================
@@ -134,11 +468,11 @@ static int websocket_parse_frame(struct evbuffer *input, websocket_frame_t *fram
 }
 
 static struct evbuffer* websocket_create_frame(websocket_opcode_t opcode, const char *payload,
-                                             uint64_t payload_len, int fin) {
+                                             uint64_t payload_len, int fin, int rsv1) {
     struct evbuffer *frame = evbuffer_new();
     if (!frame) return NULL;
 
-    uint8_t first_byte = (fin ? 0x80 : 0x00) | (opcode & 0x0F);
+    uint8_t first_byte = (fin ? 0x80 : 0x00) | (rsv1 ? 0x40 : 0x00) | (opcode & 0x0F);
     evbuffer_add(frame, &first_byte, 1);
 
     if (payload_len < 126) {
@@ -287,6 +621,7 @@ void ws_connection_cleanup(Request *request) {
     }
 
     ws_frame_queue_clear(request);
+    ws_pmd_end_streams(request);
 
     if (request->ws_bev) {
         struct bufferevent *bev = request->ws_bev;
@@ -382,11 +717,28 @@ void ws_readcb(struct bufferevent *bev, void *ctx) {
             return;
         }
 
+        /* RSV2/RSV3 never negotiated; RSV1 only with permessage-deflate on data. */
+        int is_data = (frame.opcode == WS_OPCODE_TEXT || frame.opcode == WS_OPCODE_BINARY
+                       || frame.opcode == WS_OPCODE_CONTINUATION);
+        int rsv_bad = frame.rsv2 || frame.rsv3
+            || (frame.rsv1 && (!request->ws_pmd || !is_data
+                               || frame.opcode == WS_OPCODE_CONTINUATION));
+        if (rsv_bad) {
+            websocket_frame_free(&frame);
+            request->ws_state = WS_STATE_CLOSED;
+            if (request->_ref_ != LUA_NOREF) {
+                ws_resume_with_error(request, "protocol error: unexpected RSV");
+            } else {
+                ws_connection_cleanup(request);
+            }
+            return;
+        }
+
         switch (frame.opcode) {
             case WS_OPCODE_PING:
                 if (request->ws_bev && request->ws_state == WS_STATE_OPEN) {
                     struct evbuffer *pong = websocket_create_frame(
-                        WS_OPCODE_PONG, frame.payload, frame.payload_len, 1);
+                        WS_OPCODE_PONG, frame.payload, frame.payload_len, 1, 0);
                     if (pong) {
                         bufferevent_write_buffer(request->ws_bev, pong);
                         evbuffer_free(pong);
@@ -403,7 +755,7 @@ void ws_readcb(struct bufferevent *bev, void *ctx) {
                 request->ws_state = WS_STATE_CLOSED;
                 if (request->ws_bev) {
                     struct evbuffer *close_resp = websocket_create_frame(
-                        WS_OPCODE_CLOSE, frame.payload, frame.payload_len, 1);
+                        WS_OPCODE_CLOSE, frame.payload, frame.payload_len, 1, 0);
                     if (close_resp) {
                         bufferevent_write_buffer(request->ws_bev, close_resp);
                         evbuffer_free(close_resp);
@@ -419,6 +771,18 @@ void ws_readcb(struct bufferevent *bev, void *ctx) {
 
             case WS_OPCODE_TEXT:
             case WS_OPCODE_BINARY:
+                if (frame.rsv1) {
+                    if (ws_pmd_inflate_frame(request, &frame) != 0) {
+                        websocket_frame_free(&frame);
+                        request->ws_state = WS_STATE_CLOSED;
+                        if (request->_ref_ != LUA_NOREF) {
+                            ws_resume_with_error(request, "permessage-deflate inflate failed");
+                        } else {
+                            ws_connection_cleanup(request);
+                        }
+                        return;
+                    }
+                }
                 if (request->_ref_ != LUA_NOREF) {
                     ws_resume_with_frame(request, &frame);
                     if (!request->ws_bev) return;
@@ -496,21 +860,45 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         return luaL_error(L, "Failed to generate WebSocket accept key");
     }
 
+    /* Negotiate permessage-deflate if client offered it. */
+    const char *ext = evhttp_find_header(req->input_headers, "Sec-WebSocket-Extensions");
+    char pmd_hdr[256];
+    pmd_hdr[0] = '\0';
+    if (ext && ws_pmd_parse_offer(ext, request)) {
+        if (ws_pmd_init_streams(request) != 0) {
+            ws_pmd_end_streams(request);
+            /* Fall back to uncompressed WebSocket. */
+        } else {
+            ws_pmd_format_response(request, pmd_hdr, sizeof(pmd_hdr));
+        }
+    }
+
     evhttp_request_own(req);
     request->owns_request = 1;
 
     struct evbuffer *response = evbuffer_new();
     if (!response) {
         free(accept_key);
+        ws_pmd_end_streams(request);
         return luaL_error(L, "Failed to create response buffer");
     }
 
-    evbuffer_add_printf(response,
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: %s\r\n"
-        "\r\n", accept_key);
+    if (pmd_hdr[0]) {
+        evbuffer_add_printf(response,
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: %s\r\n"
+            "Sec-WebSocket-Extensions: %s\r\n"
+            "\r\n", accept_key, pmd_hdr);
+    } else {
+        evbuffer_add_printf(response,
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: %s\r\n"
+            "\r\n", accept_key);
+    }
 
     struct evhttp_connection *evcon = evhttp_request_get_connection(req);
     struct bufferevent *bev = evhttp_connection_get_bufferevent(evcon);
@@ -532,6 +920,8 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
 
         lua_pushvalue(L, 1);
         request->self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    } else {
+        ws_pmd_end_streams(request);
     }
 
     evbuffer_free(response);
@@ -565,7 +955,23 @@ LUA_API int lua_evhttp_request_websocket_send(lua_State *L) {
         return luaL_error(L, "Invalid WebSocket opcode: %d", opcode);
     }
 
-    struct evbuffer *frame = websocket_create_frame((websocket_opcode_t)opcode, data, data_len, fin);
+    const char *send_data = data;
+    size_t send_len = data_len;
+    char *comp_buf = NULL;
+    int rsv1 = 0;
+
+    /* Compress complete data frames when permessage-deflate is active. */
+    if (request->ws_pmd && fin && (opcode == WS_OPCODE_TEXT || opcode == WS_OPCODE_BINARY)) {
+        if (ws_pmd_deflate_payload(request, data, data_len, &comp_buf, &send_len) == 0) {
+            send_data = comp_buf;
+            rsv1 = 1;
+        }
+        /* On deflate failure, fall back to uncompressed frame. */
+    }
+
+    struct evbuffer *frame = websocket_create_frame(
+        (websocket_opcode_t)opcode, send_data, send_len, fin, rsv1);
+    if (comp_buf) free(comp_buf);
     if (!frame) {
         return luaL_error(L, "Failed to create WebSocket frame");
     }
@@ -599,7 +1005,7 @@ LUA_API int lua_evhttp_request_websocket_ping(lua_State *L) {
         return luaL_error(L, "Ping payload too large (max 125 bytes)");
     }
 
-    struct evbuffer *frame = websocket_create_frame(WS_OPCODE_PING, payload, payload_len, 1);
+    struct evbuffer *frame = websocket_create_frame(WS_OPCODE_PING, payload, payload_len, 1, 0);
     if (!frame) {
         return luaL_error(L, "Failed to create ping frame");
     }
@@ -633,7 +1039,7 @@ LUA_API int lua_evhttp_request_websocket_pong(lua_State *L) {
         return luaL_error(L, "Pong payload too large (max 125 bytes)");
     }
 
-    struct evbuffer *frame = websocket_create_frame(WS_OPCODE_PONG, payload, payload_len, 1);
+    struct evbuffer *frame = websocket_create_frame(WS_OPCODE_PONG, payload, payload_len, 1, 0);
     if (!frame) {
         return luaL_error(L, "Failed to create pong frame");
     }
@@ -689,7 +1095,7 @@ LUA_API int lua_evhttp_request_websocket_close(lua_State *L) {
 
     struct evbuffer *frame = websocket_create_frame(WS_OPCODE_CLOSE,
                                                    close_payload_len > 0 ? close_payload : NULL,
-                                                   close_payload_len, 1);
+                                                   close_payload_len, 1, 0);
     if (frame) {
         bufferevent_write_buffer(request->ws_bev, frame);
         evbuffer_free(frame);

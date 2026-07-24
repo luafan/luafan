@@ -1,10 +1,7 @@
 /*
- * json.c — C implementation of webase/ljson.lua (rxi-compatible strict JSON).
+ * json.c — C strict JSON (rxi-compatible), exposed as require "json".
  *
- * Production: require "json" (package.preload).
- * Pure-Lua twin for regression: require "ljson" (webase/ljson.lua).
- *
- * Same public API as the pure-Lua module:
+ * Public API:
  *   encode / decode / array / object / null / enable_null
  *   is_present / is_nonempty_string / _version
  *
@@ -151,7 +148,7 @@ static int table_is_empty(lua_State *L, int idx) {
     return 1;
 }
 
-/* First useful Lua call site outside this C module (mirrors webase/ljson.lua). */
+/* First useful Lua call site outside this C module. */
 static void caller_site(lua_State *L, char *buf, size_t buflen) {
     lua_Debug ar;
     char fallback[256];
@@ -282,7 +279,7 @@ static void encode_number(lua_State *L, int idx, strbuf_t *buf) {
     if (val == 0)
         val += 0; /* (-0) + (+0) => +0; avoids dead-store elision of val=0 */
     char tmp[64];
-    /* Match webase/ljson.lua: string.format("%.14g", val) */
+    /* Match string.format("%.14g", val). */
     int n = snprintf(tmp, sizeof(tmp), "%.14g", (double)val);
     if (n < 0 || (size_t)n >= sizeof(tmp))
         encode_error(L, buf, "number format failed");
@@ -315,7 +312,7 @@ static void encode_table(lua_State *L, int idx, strbuf_t *buf, int stack_idx) {
 
     int empty = table_is_empty(L, idx);
 
-    /* Same branch condition as webase/ljson.lua encode_table */
+    /* Array branch: has [1], array metatable, or empty non-object table. */
     if (has_index_1 || is_arr_mt || (!is_obj_mt && empty)) {
         if (!is_arr_mt && !is_obj_mt && empty) {
             char site[256];

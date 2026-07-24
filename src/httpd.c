@@ -65,6 +65,7 @@ void httpd_release_conn_guard(Request *request) {
 void newtable_from_req(lua_State *L, struct evhttp_request *req) {
     lua_newtable(L);
     Request *request = (Request *)lua_newuserdata(L, sizeof(Request));
+    memset(request, 0, sizeof(Request));
     request->reply_status = REPLY_STATUS_NONE;
     request->req = req;
     request->is_websocket = 0;
@@ -79,6 +80,7 @@ void newtable_from_req(lua_State *L, struct evhttp_request *req) {
     request->frame_queue_len = 0;
     request->owns_request = 0;
     request->ws_cleaning_up = 0;
+    /* ws_pmd / zlib streams zeroed by memset */
     lua_rawseti(L, -2, 1);
 
     lua_pushvalue(L, -1);

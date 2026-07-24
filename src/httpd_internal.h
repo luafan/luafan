@@ -10,6 +10,7 @@
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
 #include <event2/http_struct.h>
+#include <zlib.h>
 
 #if FAN_HAS_OPENSSL
 #include <openssl/sha.h>
@@ -115,6 +116,16 @@ typedef struct {
     int frame_queue_len;
     int owns_request;
     volatile int ws_cleaning_up;
+    /* RFC 7692 permessage-deflate (0 = not negotiated) */
+    int ws_pmd;
+    int ws_pmd_server_no_context_takeover;
+    int ws_pmd_client_no_context_takeover;
+    int ws_pmd_server_max_window_bits; /* 8..15 */
+    int ws_pmd_client_max_window_bits; /* 8..15 */
+    int ws_inflate_ok;
+    int ws_deflate_ok;
+    z_stream ws_inflate;
+    z_stream ws_deflate;
 } Request;
 
 typedef struct {
