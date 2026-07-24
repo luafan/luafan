@@ -256,6 +256,9 @@ static void encode_number(lua_State *L, int idx, strbuf_t *buf) {
         const char *label = (val != val) ? "nan" : (val >= HUGE_VAL) ? "inf" : "-inf";
         encode_errorf(L, buf, "unexpected number value '%s'", label);
     }
+    /* Match Lua string.format("%.14g"): IEEE -0 becomes "0", not "-0". */
+    if (val == 0)
+        val += 0; /* (-0) + (+0) => +0; avoids dead-store elision of val=0 */
     char tmp[64];
     /* Match webase/ljson.lua: string.format("%.14g", val) */
     int n = snprintf(tmp, sizeof(tmp), "%.14g", (double)val);
@@ -632,6 +635,9 @@ static void parse_number(lua_State *L, parse_t *p) {
         snprintf(emsg, sizeof(emsg), "invalid number '%s'", tmp);
         decode_error_at(L, p, i, emsg);
     }
+    /* Match Lua tonumber(): normalize IEEE -0 to +0. */
+    if (n == 0.0)
+        n += 0.0; /* (-0) + (+0) => +0 */
     lua_pushnumber(L, (lua_Number)n);
     p->idx = x;
 }
