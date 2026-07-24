@@ -44,7 +44,7 @@
     } while (0)
 #endif
 
-#define JSON_VERSION "0.1.2"
+#define JSON_VERSION "0.1.3"
 
 #define JSON_ARRAY_MT_KEY "json.array_mt"
 #define JSON_OBJECT_MT_KEY "json.object_mt"
@@ -270,6 +270,21 @@ static void encode_string(lua_State *L, int idx, strbuf_t *buf) {
 }
 
 static void encode_number(lua_State *L, int idx, strbuf_t *buf) {
+    char tmp[64];
+    int n;
+#if LUA_VERSION_NUM >= 503
+    /* Emit integers without a fractional form (still valid JSON).
+     * LUA_INTEGER_FMT already includes the leading '%'. */
+    if (lua_isinteger(L, idx)) {
+        n = snprintf(tmp, sizeof(tmp), LUA_INTEGER_FMT,
+                     (LUAI_UACINT)lua_tointeger(L, idx));
+        if (n < 0 || (size_t)n >= sizeof(tmp))
+            encode_error(L, buf, "number format failed");
+        if (!strbuf_append(buf, tmp, (size_t)n))
+            encode_error(L, buf, "out of memory");
+        return;
+    }
+#endif
     lua_Number val = lua_tonumber(L, idx);
     if (val != val || val <= -HUGE_VAL || val >= HUGE_VAL) {
         const char *label = (val != val) ? "nan" : (val >= HUGE_VAL) ? "inf" : "-inf";
@@ -278,9 +293,8 @@ static void encode_number(lua_State *L, int idx, strbuf_t *buf) {
     /* Match Lua string.format("%.14g"): IEEE -0 becomes "0", not "-0". */
     if (val == 0)
         val += 0; /* (-0) + (+0) => +0; avoids dead-store elision of val=0 */
-    char tmp[64];
     /* Match string.format("%.14g", val). */
-    int n = snprintf(tmp, sizeof(tmp), "%.14g", (double)val);
+    n = snprintf(tmp, sizeof(tmp), "%.14g", (double)val);
     if (n < 0 || (size_t)n >= sizeof(tmp))
         encode_error(L, buf, "number format failed");
     if (!strbuf_append(buf, tmp, (size_t)n))
@@ -657,6 +671,21 @@ static void parse_number(lua_State *L, parse_t *p) {
     /* Match Lua tonumber(): normalize IEEE -0 to +0. */
     if (n == 0.0)
         n += 0.0; /* (-0) + (+0) => +0 */
+
+#if LUA_VERSION_NUM >= 503
+    /* Lua 5.3+: push integral values as integers. Otherwise lua_pushnumber
+     * yields a float subtype and tostring(1) becomes "1.0", which breaks
+     * string-key paths such as auth_cache "auth:"..payload.sub..":"..jti
+     * (JWT sub / Redis session JSON). */
+    if (n >= (double)LUA_MININTEGER && n <= (double)LUA_MAXINTEGER) {
+        lua_Integer iv = (lua_Integer)n;
+        if ((double)iv == n) {
+            lua_pushinteger(L, iv);
+            p->idx = x;
+            return;
+        }
+    }
+#endif
     lua_pushnumber(L, (lua_Number)n);
     p->idx = x;
 }
