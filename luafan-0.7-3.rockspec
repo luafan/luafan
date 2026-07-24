@@ -91,6 +91,10 @@ build = {
          incdirs = { "$(CURL_INCDIR)", "$(LIBEVENT_INCDIR)", "$(OPENSSL_INCDIR)", "$(MARIADB_INCDIR)" },
          libdirs = { "$(CURL_LIBDIR)", "$(LIBEVENT_LIBDIR)", "$(OPENSSL_LIBDIR)", "$(MARIADB_LIBDIR)" }
       },
+      -- Strict webase-compatible JSON (luaopen_json → require "json")
+      json = {
+         sources = { "src/json.c" },
+      },
       ["fan.connector.init"] = "modules/fan/connector/init.lua",
       ["fan.connector.tcp"] = "modules/fan/connector/tcp.lua",
       ["fan.connector.udp"] = "modules/fan/connector/udp.lua",

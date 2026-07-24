@@ -16,14 +16,36 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
-#include "utlua.h"
+/* Standalone module: only Lua C API (no fan/openssl/event). Rockspec builds
+ * json.so separately; LuanMac also compiles this file and preloads luaopen_json. */
+#include <lauxlib.h>
+#include <lua.h>
+#include <lualib.h>
 
 #include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#if LUA_VERSION_NUM < 502
+#ifndef lua_absindex
+#define lua_absindex(L, i)                                                     \
+    ((i) > 0 || (i) <= LUA_REGISTRYINDEX ? (i) : lua_gettop(L) + (i) + 1)
+#endif
+#else
+/* luaL_register removed in 5.2; match utlua.h shim used elsewhere in luafan. */
+#undef luaL_register
+#define luaL_register(L, n, f)                                                 \
+    do {                                                                       \
+        if ((n) == NULL)                                                       \
+            luaL_setfuncs(L, f, 0);                                            \
+        else                                                                   \
+            luaL_newlib(L, f);                                                 \
+    } while (0)
+#endif
 
 #define JSON_VERSION "0.1.2"
 

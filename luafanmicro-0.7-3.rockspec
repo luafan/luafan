@@ -60,6 +60,10 @@ build = {
          incdirs = { "$(LIBEVENT_INCDIR)" },
          libdirs = { "$(LIBEVENT_LIBDIR)" }
       },
+      -- Strict webase-compatible JSON (luaopen_json → require "json")
+      json = {
+         sources = { "src/json.c" },
+      },
       ["fan.connector.init"] = "modules/fan/connector/init.lua",
       ["fan.connector.tcp"] = "modules/fan/connector/tcp.lua",
       ["fan.connector.udp"] = "modules/fan/connector/udp.lua",
