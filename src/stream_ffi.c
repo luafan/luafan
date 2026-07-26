@@ -40,7 +40,10 @@ bool ffi_stream_get_u30(BYTEARRAY *ba, uint32_t *result) {
         if (!bytearray_read8(ba, &b)) {
             return false;
         }
-        value |= ((b & 127) << shift);
+        // Cast before shifting: (b & 127) is an int, so `<< shift` with shift up
+        // to 28 would overflow signed int (undefined behavior). This varint is
+        // LEB128 over 32 bits (max 5 bytes); shift > 30 stops after the 5th byte.
+        value |= ((uint32_t)(b & 127)) << shift;
         shift += 7;
 
         if ((b & 128) == 0 || shift > 30) {

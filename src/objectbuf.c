@@ -31,6 +31,11 @@
 #define FALSE_INDEX 1
 #define TRUE_INDEX 2
 
+/* Guard against unbounded C recursion in packer_table (native stack blowup on
+ * deeply nested tables). Lua-stack growth is handled separately via
+ * luaL_checkstack; this cap protects the C call stack itself. */
+#define MAX_PACK_DEPTH 1000
+
 typedef struct {
     lua_Integer table_count;
     lua_Integer number_count;
@@ -39,6 +44,7 @@ typedef struct {
     lua_Integer func_count;
 
     int index;
+    int depth;
 } CTX;
 
 void ffi_stream_add_u30(BYTEARRAY *ba, uint32_t u);
@@ -138,6 +144,17 @@ static void packer_function(lua_State *L, CTX *ctx, int obj_index) {
 }
 
 static void packer_table(lua_State *L, CTX *ctx, int obj_index) {
+    if (++ctx->depth > MAX_PACK_DEPTH) {
+        luaL_error(L, "objectbuf: table nesting too deep (> %d).", MAX_PACK_DEPTH);
+    }
+    // Reserve Lua stack for this recursion level: lua_next keeps key+value on the
+    // stack while we recurse, plus temporaries used by the packer_* helpers.
+    // Without this, deep nesting overflows the Lua stack array and corrupts the
+    // heap (release builds have no api stack checks).
+    if (!lua_checkstack(L, 6)) {
+        luaL_error(L, "objectbuf: cannot grow stack for nested table.");
+    }
+
     lua_rawgeti(L, ctx->index, CTX_INDEX_TABLE_IDXS);
     lua_pushvalue(L, obj_index);
     lua_rawget(L, -2);
@@ -156,6 +173,7 @@ static void packer_table(lua_State *L, CTX *ctx, int obj_index) {
         lua_pop(L, 2);
     } else {
         lua_pop(L, 2);
+        ctx->depth--;
         return;
     }
 
@@ -170,6 +188,8 @@ static void packer_table(lua_State *L, CTX *ctx, int obj_index) {
         packer(L, ctx, value_idx);
         lua_pop(L, 1);
     }
+
+    ctx->depth--;
 }
 
 static void packer(lua_State *L, CTX *ctx, int obj_index) {
@@ -239,7 +259,10 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
 
     if (lua_isboolean(L, 1)) {
         int value = lua_toboolean(L, 1);
-        lua_pushstring(L, value ? "\x01" : "\x00");
+        // Must be an explicit 1-byte string: lua_pushstring uses strlen, so "\x00"
+        // (false) would otherwise become an empty string and any empty input would
+        // then decode back as false.
+        lua_pushlstring(L, value ? "\x01" : "\x00", 1);
         return 1;
     }
 
@@ -261,10 +284,21 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
         lua_newtable(L);
     } else {
         lua_rawgeti(L, sym_idx, SYM_INDEX_INDEX);
+        if (!lua_isnumber(L, -1)) {
+            luaL_error(L, "objectbuf: invalid symbol table (missing index).");
+        }
         index = lua_tointeger(L, -1);
         lua_pop(L, 1);
+        // Symbol indices start above the reserved bool slots (FALSE=1, TRUE=2);
+        // a smaller base would collide with the builtin bool entries.
+        if (index < TRUE_INDEX) {
+            luaL_error(L, "objectbuf: invalid symbol table (index too small).");
+        }
 
         lua_rawgeti(L, sym_idx, SYM_INDEX_MAP);
+        if (!lua_istable(L, -1)) {
+            luaL_error(L, "objectbuf: invalid symbol table (missing map).");
+        }
     }
     int sym_map_idx = lua_gettop(L);
 
@@ -430,12 +464,20 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
                 int value_idx = lua_gettop(L);
                 int key_idx = lua_gettop(L) - 1;
 
-                // ignore previously added array part.
-                lua_Number value = lua_tonumber(L, -2);
-                // suppose index no more than max int.
-                if (value == (int)value && value <= tb_count && value > 0) {
-                    lua_pop(L, 1);
-                    continue;
+                // Skip the array part already emitted above (keys 1..tb_count).
+                // Only genuine integer keys count as array indices; a string key
+                // like "1" must NOT be treated as an array slot (lua_tonumber would
+                // coerce it and silently drop the pair).
+                if (lua_type(L, key_idx) == LUA_TNUMBER) {
+                    lua_Integer ikey;
+                    int isint = 0;
+                    lua_Number nkey = lua_tonumber(L, key_idx);
+                    ikey = (lua_Integer)nkey;
+                    isint = ((lua_Number)ikey == nkey);
+                    if (isint && ikey >= 1 && ikey <= tb_count) {
+                        lua_pop(L, 1);
+                        continue;
+                    }
                 }
 
                 // d:AddU30(sym_map[k] or index_map[k])
@@ -502,7 +544,13 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
     }
 
     uint8_t flag = 0;
-    bytearray_read8(&input, &flag);
+    if (!bytearray_read8(&input, &flag)) {
+        // Empty input: not a valid encoding. Returning here avoids silently
+        // decoding "" as boolean false (flag stays 0 on a failed read).
+        lua_pushnil(L);
+        lua_pushliteral(L, "decode failed, empty input.");
+        return 2;
+    }
 
     switch (flag) {
         case 0:
@@ -524,10 +572,20 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
         lua_newtable(L);
     } else {
         lua_rawgeti(L, sym_idx, SYM_INDEX_INDEX);
+        if (!lua_isnumber(L, -1)) {
+            lua_pushnil(L);
+            lua_pushliteral(L, "decode failed, invalid symbol table (missing index).");
+            return 2;
+        }
         index = lua_tointeger(L, -1);
         lua_pop(L, 1);
 
         lua_rawgeti(L, sym_idx, SYM_INDEX_MAP_VK);
+        if (!lua_istable(L, -1)) {
+            lua_pushnil(L);
+            lua_pushliteral(L, "decode failed, invalid symbol table (missing map).");
+            return 2;
+        }
     }
     int sym_map_vk_idx = lua_gettop(L);
 
@@ -613,6 +671,15 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
             lua_pushliteral(L, "decode failed.");
             return 2;
         }
+        // Sanity bound before pre-allocating tables: each table is serialized as
+        // a length-prefixed body of at least 1 byte, so a valid `count` cannot
+        // exceed the remaining input. This stops a tiny malformed header (a 5-byte
+        // varint up to 2^32-1) from triggering billions of lua_newtable calls.
+        if (count > bytearray_read_available(&input)) {
+            lua_pushnil(L);
+            lua_pushliteral(L, "decode failed, `table` count exceeds input.");
+            return 2;
+        }
         uint32_t i = 1;
         for (; i <= count; i++) {
             lua_newtable(L);
@@ -640,8 +707,16 @@ LUA_API int luafan_objectbuf_decode(lua_State *L) {
                 lua_pushliteral(L, "'count' decode failed.");
                 return 2;
             }
+            // Array-part length: each element is one u30 (>= 1 byte) in this body,
+            // so a valid count cannot exceed the remaining body bytes. Also keeps
+            // the loop counter within uint32 range (no signed overflow).
+            if (count > bytearray_read_available(&d)) {
+                lua_pushnil(L);
+                lua_pushliteral(L, "decode failed, `array` count exceeds table body.");
+                return 2;
+            }
 
-            int j = 1;
+            uint32_t j = 1;
             for (; j <= count; j++) {
                 uint32_t vi = 0;
                 if (!ffi_stream_get_u30(&d, &vi)) {

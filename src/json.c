@@ -216,7 +216,14 @@ static int encode_errorf(lua_State *L, strbuf_t *buf, const char *fmt, ...) {
 
 /* ---- encode ---------------------------------------------------------------- */
 
-static void encode_value(lua_State *L, int idx, strbuf_t *buf, int stack_idx);
+/* Bound recursion depth for both encode and decode. Deeply nested input would
+ * otherwise grow the C call stack and the Lua stack linearly (no api stack
+ * checks in release builds), corrupting the heap / crashing the process.
+ * decode() in particular consumes untrusted external JSON. 1000 is far deeper
+ * than any realistic document (matches lua-cjson's default). */
+#define JSON_MAX_DEPTH 1000
+
+static void encode_value(lua_State *L, int idx, strbuf_t *buf, int stack_idx, int depth);
 
 static void encode_string(lua_State *L, int idx, strbuf_t *buf) {
     size_t len;
@@ -301,8 +308,15 @@ static void encode_number(lua_State *L, int idx, strbuf_t *buf) {
         encode_error(L, buf, "out of memory");
 }
 
-static void encode_table(lua_State *L, int idx, strbuf_t *buf, int stack_idx) {
+static void encode_table(lua_State *L, int idx, strbuf_t *buf, int stack_idx, int depth) {
     idx = lua_absindex(L, idx);
+
+    if (depth > JSON_MAX_DEPTH)
+        encode_error(L, buf, "nesting too deep");
+    /* Reserve Lua stack for this recursion level (lua_next key+value plus
+     * temporaries); release builds do not check api stack growth. */
+    if (!lua_checkstack(L, 6))
+        encode_error(L, buf, "cannot grow stack");
 
     /* Circular reference? stack is a Lua table map: t -> true */
     lua_pushvalue(L, idx);
@@ -359,7 +373,7 @@ static void encode_table(lua_State *L, int idx, strbuf_t *buf, int stack_idx) {
             if (i > 1 && !strbuf_append_char(buf, ','))
                 encode_error(L, buf, "out of memory");
             lua_rawgeti(L, idx, i);
-            encode_value(L, -1, buf, stack_idx);
+            encode_value(L, -1, buf, stack_idx, depth + 1);
             lua_pop(L, 1);
         }
         if (!strbuf_append_char(buf, ']'))
@@ -382,7 +396,7 @@ static void encode_table(lua_State *L, int idx, strbuf_t *buf, int stack_idx) {
             encode_string(L, -2, buf);
             if (!strbuf_append_char(buf, ':'))
                 encode_error(L, buf, "out of memory");
-            encode_value(L, -1, buf, stack_idx);
+            encode_value(L, -1, buf, stack_idx, depth + 1);
             lua_pop(L, 1); /* value; keep key for next */
         }
         if (!strbuf_append_char(buf, '}'))
@@ -394,7 +408,7 @@ static void encode_table(lua_State *L, int idx, strbuf_t *buf, int stack_idx) {
     lua_rawset(L, stack_idx);
 }
 
-static void encode_value(lua_State *L, int idx, strbuf_t *buf, int stack_idx) {
+static void encode_value(lua_State *L, int idx, strbuf_t *buf, int stack_idx, int depth) {
     idx = lua_absindex(L, idx);
 
     /* null sentinel */
@@ -424,7 +438,7 @@ static void encode_value(lua_State *L, int idx, strbuf_t *buf, int stack_idx) {
         encode_string(L, idx, buf);
         break;
     case LUA_TTABLE:
-        encode_table(L, idx, buf, stack_idx);
+        encode_table(L, idx, buf, stack_idx, depth);
         break;
     default:
         encode_errorf(L, buf, "unexpected type '%s'", lua_typename(L, t));
@@ -445,7 +459,7 @@ static int json_encode(lua_State *L) {
     lua_newtable(L);
     int stack_idx = lua_gettop(L);
 
-    encode_value(L, 1, &buf, stack_idx);
+    encode_value(L, 1, &buf, stack_idx, 0);
 
     lua_pushlstring(L, buf.data, buf.len);
     strbuf_free(&buf);
@@ -457,7 +471,8 @@ static int json_encode(lua_State *L) {
 typedef struct {
     const char *str;
     size_t len;
-    size_t idx; /* 0-based */
+    size_t idx;   /* 0-based */
+    int depth;    /* current nesting depth, bounded by JSON_MAX_DEPTH */
 } parse_t;
 
 static void decode_error_at(lua_State *L, parse_t *p, size_t at, const char *msg) {
@@ -723,6 +738,12 @@ static void parse_literal(lua_State *L, parse_t *p) {
 }
 
 static void parse_array(lua_State *L, parse_t *p) {
+    if (++p->depth > JSON_MAX_DEPTH)
+        decode_error_at(L, p, p->idx, "nesting too deep");
+    /* Keep the array table on the Lua stack while recursing into elements. */
+    if (!lua_checkstack(L, 6))
+        decode_error_at(L, p, p->idx, "cannot grow stack");
+
     p->idx++; /* skip '[' */
     lua_newtable(L);
     push_array_mt(L);
@@ -746,9 +767,17 @@ static void parse_array(lua_State *L, parse_t *p) {
         if (chr != ',')
             decode_error_at(L, p, p->idx, "expected ']' or ','");
     }
+    p->depth--;
 }
 
 static void parse_object(lua_State *L, parse_t *p) {
+    if (++p->depth > JSON_MAX_DEPTH)
+        decode_error_at(L, p, p->idx, "nesting too deep");
+    /* Each level keeps the table (and, mid-iteration, a key) on the Lua stack
+     * while recursing; grow the stack explicitly (no api checks in release). */
+    if (!lua_checkstack(L, 6))
+        decode_error_at(L, p, p->idx, "cannot grow stack");
+
     p->idx++; /* skip '{' */
     lua_newtable(L);
     push_object_mt(L);
@@ -778,6 +807,7 @@ static void parse_object(lua_State *L, parse_t *p) {
         if (chr != ',')
             decode_error_at(L, p, p->idx, "expected '}' or ','");
     }
+    p->depth--;
 }
 
 static void parse_value(lua_State *L, parse_t *p) {
@@ -831,6 +861,7 @@ static int json_decode(lua_State *L) {
     parse_t p;
     p.str = s;
     p.len = len;
+    p.depth = 0;
     p.idx = next_char(&p, 0, is_space, 1);
     parse_value(L, &p);
     p.idx = next_char(&p, p.idx, is_space, 1);
