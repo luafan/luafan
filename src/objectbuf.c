@@ -312,7 +312,6 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
 
     // ---------------------------------------------------------------------------
     if (ctx.number_count > 0) {
-        flag |= HAS_NUMBER_MASK;
         uint32_t realcount = 0;
 
         BYTEARRAY d;
@@ -336,18 +335,23 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
         }
         lua_pop(L, 1);
 
-        ffi_stream_add_u30(&bodystream, realcount);
-        bytearray_read_ready(&d);
-        bytearray_writebuffer(&bodystream, d.buffer, d.total);
+        // Only emit the section (and set its flag bit) when it actually carries
+        // values. If every number resolved to a symbol, realcount is 0: writing
+        // an empty count=0 section here would mis-position the decoder's root
+        // pointer (last_top) onto a section with no entries.
+        if (realcount > 0) {
+            flag |= HAS_NUMBER_MASK;
+            ffi_stream_add_u30(&bodystream, realcount);
+            bytearray_read_ready(&d);
+            bytearray_writebuffer(&bodystream, d.buffer, d.total);
+            index += realcount;
+        }
 
         bytearray_dealloc(&d);
-
-        index += realcount;
     }
 
     // ---------------------------------------------------------------------------
     if (ctx.u30_count > 0) {
-        flag |= HAS_U30_MASK;
         uint32_t realcount = 0;
 
         BYTEARRAY d;
@@ -371,18 +375,20 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
         }
         lua_pop(L, 1);
 
-        ffi_stream_add_u30(&bodystream, realcount);
-        bytearray_read_ready(&d);
-        bytearray_writebuffer(&bodystream, d.buffer, d.total);
+        // Same as number: skip empty sections so last_top lands on real data.
+        if (realcount > 0) {
+            flag |= HAS_U30_MASK;
+            ffi_stream_add_u30(&bodystream, realcount);
+            bytearray_read_ready(&d);
+            bytearray_writebuffer(&bodystream, d.buffer, d.total);
+            index += realcount;
+        }
 
         bytearray_dealloc(&d);
-
-        index += realcount;
     }
 
     // ---------------------------------------------------------------------------
     if (ctx.string_count > 0) {
-        flag |= HAS_STRING_MASK;
         uint32_t realcount = 0;
 
         BYTEARRAY d;
@@ -408,13 +414,16 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
         }
         lua_pop(L, 1);
 
-        ffi_stream_add_u30(&bodystream, realcount);
-        bytearray_read_ready(&d);
-        bytearray_writebuffer(&bodystream, d.buffer, d.total);
+        // Same as number/u30: skip empty sections so last_top lands on real data.
+        if (realcount > 0) {
+            flag |= HAS_STRING_MASK;
+            ffi_stream_add_u30(&bodystream, realcount);
+            bytearray_read_ready(&d);
+            bytearray_writebuffer(&bodystream, d.buffer, d.total);
+            index += realcount;
+        }
 
         bytearray_dealloc(&d);
-
-        index += realcount;
     }
     // ---------------------------------------------------------------------------
     if (ctx.table_count) {
@@ -522,6 +531,38 @@ LUA_API int luafan_objectbuf_encode(lua_State *L) {
             bytearray_dealloc(&d);
         }
         lua_pop(L, 1);
+    }
+
+    // Pure scalar root that fully resolved into the symbol table leaves flag at 0.
+    // Decode treats flag 0/1 as boolean false/true, so force-emit the root value as
+    // a normal one-element section. (Root booleans already returned early above;
+    // root tables always emit HAS_TABLE_MASK.)
+    if (flag == 0) {
+        switch (lua_type(L, obj_index)) {
+            case LUA_TNUMBER: {
+                lua_Number value = lua_tonumber(L, obj_index);
+                if (floor(value) != value || value >= MAX_U30 || value < 0) {
+                    flag |= HAS_NUMBER_MASK;
+                    ffi_stream_add_u30(&bodystream, 1);
+                    ffi_stream_add_d64(&bodystream, value);
+                } else {
+                    flag |= HAS_U30_MASK;
+                    ffi_stream_add_u30(&bodystream, 1);
+                    ffi_stream_add_u30(&bodystream, (uint32_t)lua_tointeger(L, obj_index));
+                }
+                break;
+            }
+            case LUA_TSTRING: {
+                size_t len;
+                const char *s = lua_tolstring(L, obj_index, &len);
+                flag |= HAS_STRING_MASK;
+                ffi_stream_add_u30(&bodystream, 1);
+                ffi_stream_add_string(&bodystream, s, len);
+                break;
+            }
+            default:
+                break;
+        }
     }
 
     bytearray_read_ready(&bodystream);
