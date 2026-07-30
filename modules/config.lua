@@ -31,7 +31,7 @@ local function load_config(dir)
 end
 
 if _CONFIG_D_REGISTRY then
-    -- 从 amalgamated bundle 加载 config.d 模块
+    -- Optional in-memory config.d map; otherwise scan WORKDIR/config.d on disk.
     for name, src in pairs(_CONFIG_D_REGISTRY) do
         local chunk, err = load(src, "@config.d/" .. name, "t", env)
         if not chunk then
