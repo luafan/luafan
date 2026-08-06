@@ -39,7 +39,7 @@ RUN wget https://github.com/MariaDB/server/archive/mariadb-$MARIADB_VERSION.tar.
 RUN luarocks install compat53 && luarocks install lpeg \
     && luarocks install lua-cjson 2.1.0-1 && luarocks install luafilesystem \
     && git clone --depth 1 --branch 0.4.1.53-luafan1 https://github.com/luafan/lzlib.git /tmp/lzlib-luafan \
-    && cd /tmp/lzlib-luafan && luarocks make rockspec/lzlib-0.4.1.53-luafan1.rockspec \
+    && cd /tmp/lzlib-luafan && luarocks make rockspec/lzlib-0.4.1.53.luafan1-1.rockspec \
     && cd - && rm -rf /tmp/lzlib-luafan \
     && luarocks install openssl && luarocks install lbase64 \
     && luarocks install lua-protobuf && luarocks install lmd5 \
