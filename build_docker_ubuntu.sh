@@ -14,7 +14,7 @@ apt update \
     && wget https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz && tar xzf openssl-$OPENSSL_VERSION.tar.gz && cd openssl-$OPENSSL_VERSION && ./config && make -j$(nproc) && make install && cd .. && rm -rf openssl* \
     && git clone https://github.com/luafan/luafan.git && cd luafan && luarocks make luafan-$LUAFAN_VERSION.rockspec MARIADB_DIR=/usr/local/mysql CURL_INCDIR=/usr/include/`uname -m`-linux-gnu && cd .. && rm -rf luafan \
     && luarocks install compat53 && luarocks install lpeg && luarocks install lua-cjson 2.1.0-1 && luarocks install luafilesystem \
-    && luarocks install lzlib && luarocks install openssl && luarocks install lbase64 \
+    && git clone --depth 1 --branch 0.4.1.53-luafan1 https://github.com/luafan/lzlib.git /tmp/lzlib-luafan && cd /tmp/lzlib-luafan && luarocks make rockspec/lzlib-0.4.1.53-luafan1.rockspec && cd - && rm -rf /tmp/lzlib-luafan && luarocks install openssl && luarocks install lbase64 \
     && luarocks install lua-protobuf \
     && luarocks install lmd5 \
     && luarocks install lua-iconv \
