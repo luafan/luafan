@@ -1196,9 +1196,7 @@ static int http_getpost(lua_State *L, int method) {
             if (proxypassword) {
                 curl_easy_setopt(conn->easy, CURLOPT_PROXYPASSWORD, proxypassword);
             }
-#ifdef CURLHEADER_SEPARATE
             curl_easy_setopt(conn->easy, CURLOPT_HEADEROPT, CURLHEADER_SEPARATE);
-#endif
             curl_easy_setopt(conn->easy, CURLOPT_NOPROXY, "127.0.0.1,localhost");
         }
 
