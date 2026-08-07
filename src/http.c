@@ -1133,6 +1133,8 @@ static int http_getpost(lua_State *L, int method) {
 
         const char *proxy = NULL;
         int proxyport = 0;
+        const char *proxyuser = NULL;
+        const char *proxypassword = NULL;
 
         lua_pushliteral(L, "proxy");
         lua_gettable(L, 1);
@@ -1154,11 +1156,46 @@ static int http_getpost(lua_State *L, int method) {
         }
         lua_pop(L, 1);
 
-        if (proxy && proxyport > 0) {
-            LOGD("set proxy %s:%d", proxy, proxyport);
+        lua_pushliteral(L, "proxyuser");
+        lua_gettable(L, 1);
+        if (lua_isstring(L, -1)) {
+            proxyuser = lua_tostring(L, -1);
+        } else if (!lua_isnil(L, -1)) {
+            err = "invalid proxyuser type in table parameter";
+            goto ERROR;
+        }
+        lua_pop(L, 1);
+
+        lua_pushliteral(L, "proxypassword");
+        lua_gettable(L, 1);
+        if (lua_isstring(L, -1)) {
+            proxypassword = lua_tostring(L, -1);
+        } else if (!lua_isnil(L, -1)) {
+            err = "invalid proxypassword type in table parameter";
+            goto ERROR;
+        }
+        lua_pop(L, 1);
+
+        /* proxy alone is enough when it is a full URL, e.g. http://user:pass@host:port
+           (libcurl parses userinfo/host/port from CURLOPT_PROXY). proxyport /
+           proxyuser / proxypassword remain optional overrides for host-only form. */
+        if (proxy) {
+            if (proxyport > 0) {
+                LOGD("set proxy %s:%d", proxy, proxyport);
+            } else {
+                LOGD("set proxy %s", proxy);
+            }
             curl_easy_setopt(conn->easy, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
             curl_easy_setopt(conn->easy, CURLOPT_PROXY, proxy);
-            curl_easy_setopt(conn->easy, CURLOPT_PROXYPORT, proxyport);
+            if (proxyport > 0) {
+                curl_easy_setopt(conn->easy, CURLOPT_PROXYPORT, proxyport);
+            }
+            if (proxyuser) {
+                curl_easy_setopt(conn->easy, CURLOPT_PROXYUSERNAME, proxyuser);
+            }
+            if (proxypassword) {
+                curl_easy_setopt(conn->easy, CURLOPT_PROXYPASSWORD, proxypassword);
+            }
 #ifdef CURLHEADER_SEPARATE
             curl_easy_setopt(conn->easy, CURLOPT_HEADEROPT, CURLHEADER_SEPARATE);
 #endif

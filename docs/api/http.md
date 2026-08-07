@@ -80,9 +80,15 @@ keys in the `arg`:
 
 * `proxytunnel: integer?`, refer to `CURLOPT_HTTPPROXYTUNNEL`
 
-* `proxy: string?`, refer to `CURLOPT_PROXY`, we did support http proxy only.
+* `proxy: string?`, refer to `CURLOPT_PROXY`, HTTP proxy only.
+  One-shot form is supported: `http://user:pass@host:port` (libcurl parses
+  scheme/userinfo/host/port). Host-only also works with `proxyport` below.
 
-* `proxyport: integer?`, refer to `CURLOPT_PROXYPORT`
+* `proxyport: integer?`, refer to `CURLOPT_PROXYPORT` (optional if port is already in `proxy` URL)
+
+* `proxyuser: string?`, refer to `CURLOPT_PROXYUSERNAME` (optional if userinfo is already in `proxy` URL)
+
+* `proxypassword: string?`, refer to `CURLOPT_PROXYPASSWORD` (optional if userinfo is already in `proxy` URL)
 
 * `onsend: function?`
 
