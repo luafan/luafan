@@ -47,7 +47,6 @@ local function connect(host, port, path)
         udpd.new {
         host = host,
         port = port,
-        callback_self_first = true,
         onread = function(conn, buf, from)
             config.udp_receive_total = config.udp_receive_total + 1
             weak_apt._WAITING_COUNT = WAITING_COUNT
@@ -150,7 +149,6 @@ local function bind(host, port, path)
         udpd.new {
         interface = config.manual_interface and config.interface or nil,
         bind_port = port,
-        callback_self_first = true,
         onsendready = function(conn)
             local obj = weak_obj
             obj._pending_for_send = nil

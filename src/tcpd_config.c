@@ -39,7 +39,11 @@ int tcpd_config_set_defaults(tcpd_config_t *config) {
     config->ssl_verifypeer = 1;
 
     // Callback behavior settings
-    config->callback_self_first = 0;  // Disabled by default for backward compatibility
+    // Default enabled: callbacks receive the connection object as their first
+    // parameter (function(self, data)...), which is the natural OO style and
+    // avoids upvalue circular references. Callers that want the legacy
+    // function(data) style must pass callback_self_first=false explicitly.
+    config->callback_self_first = 1;
 
     return 0;
 }

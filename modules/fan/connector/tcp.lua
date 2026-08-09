@@ -105,7 +105,6 @@ local function connect(host, port, path, args)
     send_buffer_size = config.send_buffer_size,
     host = host,
     port = port,
-    callback_self_first = true,  -- Enable to avoid circular references
     onconnected = function(conn)
       if running then
         coroutine.resume(running)
@@ -199,7 +198,6 @@ local function bind(host, port, path, args)
     send_buffer_size = config.send_buffer_size,
     host = host,
     port = port,
-    callback_self_first = true,  -- Enable to avoid circular references
     onaccept = function(self, apt)
       local t = {
         connection_map = weak_connection_map,
