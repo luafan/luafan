@@ -134,8 +134,13 @@ int tcpd_config_from_lua_table(lua_State *L, int table_index, tcpd_config_t *con
     }
 
     // Callback behavior settings
+    // Only override the default when the field is explicitly present in the
+    // Lua table; otherwise nil silently becomes false and clobbers the
+    // set_defaults value (which is 1 = self-first).
     lua_getfield(L, table_index, "callback_self_first");
-    config->callback_self_first = lua_toboolean(L, -1);
+    if (!lua_isnil(L, -1)) {
+        config->callback_self_first = lua_toboolean(L, -1);
+    }
     lua_pop(L, 1);
 
     return 0;
