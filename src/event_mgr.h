@@ -21,8 +21,8 @@ void event_mgr_loop_cleanup(void);
 int event_mgr_is_looping(void);
 
 // Worker pool for multi-threaded event processing
-#define EVENT_MGR_MAX_WORKERS 6
-#define EVENT_MGR_DEFAULT_WORKERS 4
+#define EVENT_MGR_MAX_WORKERS 16
+#define EVENT_MGR_DEFAULT_WORKERS 8
 
 int event_mgr_workers_init(int num_workers);
 void event_mgr_workers_shutdown(void);

@@ -360,6 +360,14 @@ LUA_API int luafan_worker_count(lua_State *L) {
     return 1;
 }
 
+LUA_API int luafan_workers_init(lua_State *L) {
+    int count = (int)luaL_checkinteger(L, 1);
+    if (count < 0) count = 0;
+    int ret = event_mgr_workers_init(count);
+    lua_pushinteger(L, ret);
+    return 1;
+}
+
 #define LUA_FAN_CONST_TYPE "fan.const"
 
 static int luafan_const_tostring(lua_State *L) {
@@ -423,6 +431,7 @@ static const struct luaL_Reg fanlib[] = {
 #endif
     {"getinterfaces", luafan_getinterfaces},
     {"worker_count", luafan_worker_count},
+    {"workers_init", luafan_workers_init},
     {"const", luafan_const},
 
     {NULL, NULL},
