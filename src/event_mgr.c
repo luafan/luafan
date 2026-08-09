@@ -265,6 +265,17 @@ static void cleanup_dnsbase() {
 // drives multi_done → progress callbacks that touch Lua via clientp.
 extern void cleanup_http_curl(void);
 
+// Optional: luacurlimp.c (curlimp) when linked into the embedder (LuanMac /
+// Docker). Standalone luafan has no curlimp — weak symbol is NULL, skip.
+// Same lifetime rules as cleanup_http_curl: base + Lua still alive.
+__attribute__((weak)) void cleanup_curlimp(void);
+
+static void cleanup_curl_clients(void) {
+    cleanup_http_curl();
+    if (cleanup_curlimp)
+        cleanup_curlimp();
+}
+
 static void cleanup_eventbase() {
     if (base) {
         event_base_free(base);
@@ -281,7 +292,7 @@ static void reset_state() {
 static void full_cleanup() {
     cleanup_signals();
     cleanup_signal_events();
-    cleanup_http_curl();
+    cleanup_curl_clients();
     cleanup_openssl();
     cleanup_dnsbase();
     event_mgr_workers_shutdown();
@@ -347,13 +358,15 @@ int event_mgr_loop() {
         // never calls it, the bases leak at process exit — that is far
         // preferable to a crash.
         //
-        // cleanup_http_curl() must run here, while BOTH the base and the
+        // cleanup_curl_clients() must run here, while BOTH the base and the
         // Lua state are alive: curl_multi_cleanup drives multi_done →
         // Curl_pgrsDone → onprogress, which dereferences L via clientp.
         // Running it later (after lua_close) crashes in lua_rawgeti.
+        // Also tears down curlimp (if linked) so its static multi/timers do
+        // not outlive the base across stop/restart.
         cleanup_signals();
         cleanup_signal_events();
-        cleanup_http_curl();
+        cleanup_curl_clients();
         cleanup_openssl();
         cleanup_dnsbase();
         event_mgr_workers_stop_threads();
@@ -380,11 +393,12 @@ int event_mgr_loop_later_cleanup() {
         // must be able to remove themselves from their owning worker base.
         // The worker bases are freed in event_mgr_loop_cleanup().
         //
-        // cleanup_http_curl() must run here (not in event_mgr_loop_cleanup):
-        // curl_multi_cleanup → multi_done → onprogress dereferences L.
+        // cleanup_curl_clients() must run here (not in event_mgr_loop_cleanup):
+        // curl_multi_cleanup → multi_done → onprogress dereferences L;
+        // curlimp static multi/timers must not outlive the base.
         cleanup_signals();
         cleanup_signal_events();
-        cleanup_http_curl();
+        cleanup_curl_clients();
         cleanup_openssl();
         cleanup_dnsbase();
         event_mgr_workers_stop_threads();
