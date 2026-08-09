@@ -139,10 +139,19 @@ static CURLSH *share_handle = NULL;
 
 enum { HTTP_GET, HTTP_POST, HTTP_PUT, HTTP_HEAD, HTTP_DELETE, HTTP_UPDATE };
 
-/* Update the event timer after curl_multi library calls */
+/* Update the event timer after curl_multi library calls.
+ * timeout_ms < 0 means "delete the timer" (libcurl contract). */
 static int multi_timer_cb(CURLM *multi, long timeout_ms, void *data) {
     struct timeval timeout;
     (void)multi; /* unused */
+    (void)data;
+
+    if (!timer_event)
+        return 0;
+    if (timeout_ms < 0) {
+        evtimer_del(timer_event);
+        return 0;
+    }
 
     timeout.tv_sec = timeout_ms / 1000;
     timeout.tv_usec = (timeout_ms % 1000) * 1000;
