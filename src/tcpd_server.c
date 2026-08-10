@@ -332,10 +332,25 @@ LUA_API int tcpd_accept_bind(lua_State *L) {
 
     // Enable EV_READ now that onReadRef is set (may have been deferred for worker threads)
     pthread_mutex_lock(&accept->base.buf_mutex);
-    if (accept->base.buf) {
-        bufferevent_enable(accept->base.buf, EV_READ);
+    struct bufferevent *bev = accept->base.buf;
+    int has_pending = 0;
+    if (bev) {
+        bufferevent_enable(bev, EV_READ);
+        // Check if data arrived before bind (non-worker path enables EV_READ
+        // at accept time; readcb may have fired while onReadRef was NOREF,
+        // leaving data in the input buffer without draining it).
+        struct evbuffer *input = bufferevent_get_input(bev);
+        if (input && evbuffer_get_length(input) > 0) {
+            has_pending = 1;
+        }
     }
     pthread_mutex_unlock(&accept->base.buf_mutex);
+
+    // If there is already pending data in the input buffer, manually invoke
+    // the read callback so it gets delivered now that onReadRef is set.
+    if (has_pending && bev) {
+        tcpd_common_readcb(bev, &accept->base);
+    }
 
     lua_pushstring(L, accept->base.ip);
     lua_pushinteger(L, accept->base.port);

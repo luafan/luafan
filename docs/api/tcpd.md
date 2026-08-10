@@ -17,27 +17,27 @@ keys in the `arg`:
 
 * `onread: function?`
 
-	stream input callback, arg1 => buffer_in:string
+	stream input callback. Default signature: `function(self, buffer_in:string)`.
 
-	If `callback_self_first=true`, signature becomes: `function(self, buffer_in:string)`
+	If `callback_self_first=false` is set explicitly, signature becomes: `function(buffer_in:string)`.
 
 * `onsendready: function?`
 
-	callback on ready to send new data (stream output complete), no arg
+	callback on ready to send new data (stream output complete). Default signature: `function(self)`.
 
-	If `callback_self_first=true`, signature becomes: `function(self)`
+	If `callback_self_first=false` is set explicitly, signature becomes: `function()`.
 
 * `ondisconnected: function?`
 
-	ondisconnected callback, arg1 => reason:string
+	ondisconnected callback. Default signature: `function(self, reason:string)`.
 
-	If `callback_self_first=true`, signature becomes: `function(self, reason:string)`
+	If `callback_self_first=false` is set explicitly, signature becomes: `function(reason:string)`.
 
 * `onconnected: function?`
 
-	onconnected callback
+	onconnected callback. Default signature: `function(self)`.
 
-	If `callback_self_first=true`, signature becomes: `function(self)`
+	If `callback_self_first=false` is set explicitly, signature becomes: `function()`.
 
 * `ssl: boolean?`
 
@@ -83,26 +83,27 @@ keys in the `arg`:
 
 * `callback_self_first: boolean?`
 
-	When enabled (true), passes the connection object as the first parameter to all callbacks.
-	This helps avoid circular references when callbacks need to access the connection object.
-	Default: false (for backward compatibility).
+	Passes the connection object as the first parameter to all callbacks, which avoids
+	circular references when callbacks need to access the connection object.
+	**Default: true.** Set `false` explicitly to use the legacy signatures without `self`.
 
 	**Example:**
 	```lua
-	-- Traditional approach (may cause circular references)
+	-- Default (callback_self_first = true): connection is the first arg
 	local conn = tcpd.connect({
 		host = "example.com", port = 80,
-		onread = function(data)
-			conn:send("response")  -- Captures 'conn' in closure
+		onread = function(self, data)
+			self:send("response")  -- No closure capture needed
 		end
 	})
 
-	-- With callback_self_first=true (avoids circular references)
-	local conn = tcpd.connect({
+	-- Legacy signatures (opt out explicitly)
+	local conn
+	conn = tcpd.connect({
 		host = "example.com", port = 80,
-		callback_self_first = true,
-		onread = function(self, data)
-			self:send("response")  -- No closure capture needed
+		callback_self_first = false,
+		onread = function(data)
+			conn:send("response")  -- Captures 'conn' in closure
 		end
 	})
 	```
@@ -140,7 +141,6 @@ keys in the `arg`:
 		port = 443,
 		ssl = true,
 		evdns = dns,  -- Use custom DNS for hostname resolution
-		callback_self_first = true,
 		onconnected = function(self)
 			print("Connected using custom DNS resolver")
 		end
@@ -203,7 +203,12 @@ keys in the `arg`:
 
 * `onaccept: function`
 
-	new client connection callback, arg1 => [accept_connection](#acceptconnection)
+	new client connection callback. Default signature (with `callback_self_first=true`):
+	`function(self, accept:`[accept_connection](#acceptconnection)`)` — `self` is the
+	server object, `accept` is the new client connection.
+
+	If `callback_self_first=false` is set explicitly, signature becomes:
+	`function(accept:`[accept_connection](#acceptconnection)`)`.
 
 * `ssl: boolean?`
 
@@ -232,9 +237,10 @@ keys in the `arg`:
 
 * `callback_self_first: boolean?`
 
-	When enabled (true), passes the connection object as the first parameter to server callbacks.
-	This applies to accept connection callbacks (`onread`, `onsendready`, `ondisconnected`).
-	Default: false (for backward compatibility).
+	Passes the connection object as the first parameter to the accept connection
+	callbacks (`onread`, `onsendready`, `ondisconnected`). Inherited from the server's
+	setting when not specified on the accept connection.
+	**Default: true.** Set `false` explicitly to use the legacy signatures without `self`.
 
 AcceptConnection
 ================
@@ -267,18 +273,18 @@ keys in the `arg`:
 
 * `onread: function?`
 
-	on read message from client callback, arg1 => databuf:string
+	on read message from client callback. Default signature: `function(self, databuf:string)`.
 
-	If server's `callback_self_first=true`, signature becomes: `function(self, databuf:string)`
+	If `callback_self_first=false` is set explicitly, signature becomes: `function(databuf:string)`.
 
 * `onsendready: function?`
 
-	on send ready callback, no arg.
+	on send ready callback. Default signature: `function(self)`.
 
-	If server's `callback_self_first=true`, signature becomes: `function(self)`
+	If `callback_self_first=false` is set explicitly, signature becomes: `function()`.
 
 * `ondisconnected`
 
-	on client disconnected callback, arg1 => reason:string
+	on client disconnected callback. Default signature: `function(self, reason:string)`.
 
-	If server's `callback_self_first=true`, signature becomes: `function(self, reason:string)`
+	If `callback_self_first=false` is set explicitly, signature becomes: `function(reason:string)`.

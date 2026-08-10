@@ -53,15 +53,21 @@ int event_mgr_workers_init(int count) {
     for (int i = 0; i < num_workers; i++) {
         workers[i].id = i;
         workers[i].base = event_base_new();
-        if (!workers[i].base) return -1;
+        if (!workers[i].base) {
+            return -1;
+        }
 
         workers[i].dnsbase = evdns_base_new(workers[i].base, 0);
-        if (!workers[i].dnsbase) return -1;
+        if (!workers[i].dnsbase) {
+            return -1;
+        }
         evdns_base_set_option(workers[i].dnsbase, "randomize-case:", "0");
 
         workers[i].running = 1;
         int rc = pthread_create(&workers[i].thread, NULL, worker_thread_func, &workers[i]);
-        if (rc != 0) return -1;
+        if (rc != 0) {
+            return -1;
+        }
     }
     return 0;
 }

@@ -10,6 +10,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+// Global Lua lock suspend/resume around the blocking main-thread event loop.
+// Provided by the embedder's lua53 user lock hook (luauser.c in LuanMac / CLI).
+// Weak: standalone luafan (no user lock hook) links these as NULL and skips the
+// suspend/resume — there is no worker lock to manage in that configuration.
+__attribute__((weak)) int LuaLockSuspendForLoop(void);
+__attribute__((weak)) void LuaLockResumeAfterLoop(int depth);
+
 static struct event *mainevent;
 static int main_ref;
 static lua_State *mainState;
@@ -87,8 +94,29 @@ LUA_API int luafan_start(lua_State *L) {
         }
     }
 
-    // Start the actual event loop
+    // Start the actual event loop.
+    //
+    // The main thread reaches here from inside a resume that holds the global
+    // Lua lock (lua_lock_depth > 0), and event_mgr_loop() blocks until the
+    // service stops. If we kept the lock held, worker-thread callbacks that
+    // need to enter Lua (tcpd/udpd read/connect on a worker event_base) would
+    // deadlock forever in LockMainState waiting for a mutex the parked main
+    // thread never releases. Suspend the lock across the loop so workers can
+    // acquire it; the main thread still serializes its own callbacks through
+    // the normal lock/unlock pairs inside each resume. Restore on exit so the
+    // enclosing resume's trailing unlock stays balanced.
+    //
+    // Weak symbols: only the embedder that provides the lua53 user lock hook
+    // (LuanMac / CLI) links these; standalone luafan resolves them to NULL and
+    // runs unchanged (no worker lock to manage there).
+    int __lua_lock_depth = 0;
+    if (LuaLockSuspendForLoop) {
+        __lua_lock_depth = LuaLockSuspendForLoop();
+    }
     event_mgr_loop();
+    if (LuaLockResumeAfterLoop) {
+        LuaLockResumeAfterLoop(__lua_lock_depth);
+    }
     return 0;
 }
 
