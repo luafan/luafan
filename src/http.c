@@ -137,7 +137,7 @@ static CURLSH *share_handle = NULL;
 
 #define CURL_TIMEOUT_DEFAULT 60
 
-enum { HTTP_GET, HTTP_POST, HTTP_PUT, HTTP_HEAD, HTTP_DELETE, HTTP_UPDATE };
+enum { HTTP_GET, HTTP_POST, HTTP_PUT, HTTP_HEAD, HTTP_DELETE, HTTP_UPDATE, HTTP_PATCH };
 
 /* Update the event timer after curl_multi library calls.
  * timeout_ms < 0 means "delete the timer" (libcurl contract). */
@@ -861,7 +861,16 @@ static int http_getpost(lua_State *L, int method) {
             curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "DELETE");
             break;
         case HTTP_UPDATE:
+            /* Legacy non-standard verb kept for backward compatibility.
+             * Do NOT add new callers — use HTTP_PATCH for RFC 5789 PATCH. */
             curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "UPDATE");
+            break;
+        case HTTP_PATCH:
+            /* CURLOPT_POST=1 primes the upload state machine so the body
+             * from POSTFIELDS is actually sent; CUSTOMREQUEST rewrites the
+             * request-line verb. Same pattern libcurl docs recommend for PATCH. */
+            curl_easy_setopt(conn->easy, CURLOPT_POST, 1);
+            curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "PATCH");
             break;
         default:
             break;
@@ -1232,7 +1241,7 @@ static int http_getpost(lua_State *L, int method) {
             } else if (lua_isnil(L, -1)) {
                 // No body provided — for POST/PUT methods, set empty body to prevent
                 // curl from using fread() which blocks the event loop.
-                if (method == HTTP_POST || method == HTTP_PUT || method == HTTP_UPDATE) {
+                if (method == HTTP_POST || method == HTTP_PUT || method == HTTP_UPDATE || method == HTTP_PATCH) {
                     curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, 0);
                     curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, "");
                 }
@@ -1455,6 +1464,17 @@ LUA_API int http_update(lua_State *L) {
     }
 }
 
+LUA_API int http_patch(lua_State *L) {
+    lua_lock(L);
+    if (http_getpost(L, HTTP_PATCH) == LUA_YIELD) {
+        lua_unlock(L);
+        return lua_yield(L, 0);
+    } else {
+        lua_unlock(L);
+        return 0;
+    }
+}
+
 LUA_API int http_delete(lua_State *L) {
     lua_lock(L);
     if (http_getpost(L, HTTP_DELETE) == LUA_YIELD) {
@@ -1529,6 +1549,7 @@ static const luaL_Reg httplib[] = {{"get", http_get},
                                    {"put", http_put},
                                    {"head", http_head},
                                    {"update", http_update},
+                                   {"patch", http_patch},
                                    {"delete", http_delete},
                                    {"cookiejar", http_cookiejar},
                                    {"cainfo", http_cainfo},

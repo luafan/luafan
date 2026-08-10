@@ -307,6 +307,9 @@ return {
     update = function(args)
         return request("UPDATE", false, args)
     end,
+    patch = function(args)
+        return request("PATCH", true, args)
+    end,
     delete = function(args)
         return request("DELETE", false, args)
     end,
