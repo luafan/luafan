@@ -16,11 +16,13 @@ OPENSSL_VERSION=1.1.1w
 LUA_VERSION=5.3.6
 
 # --- packages ---
+# NOTE: no readline-dev -- we build Lua without readline (container has no REPL
+# use case). Matches the ubuntu build; avoids libreadline runtime dep.
 apk add --update \
     bsd-compat-headers tzdata linux-headers git libstdc++ wget ca-certificates \
     gcc libc-dev unzip cmake g++ make \
     libevent libevent-dev curl-dev curl \
-    ncurses-dev readline-dev bison openssl-dev openssl perl sqlite-dev
+    ncurses-dev bison openssl-dev openssl perl sqlite-dev
 update-ca-certificates
 
 # Normalize cwd so every download/extract below lives under /opt.
@@ -41,6 +43,9 @@ tar xzf lua-$LUA_VERSION.tar.gz
     cp /opt/luafan/src/fan_lua_lock.c src/fan_lua_lock.c
     cp /opt/luafan/src/fan_lua_lock.h src/fan_lua_lock.h
     sed -i 's/^CORE_O=/CORE_O= fan_lua_lock.o /' src/Makefile
+    # Strip readline from the linux target and from luaconf.h auto-defines.
+    sed -i 's/ -lreadline//' src/Makefile
+    sed -i 's|^#define LUA_USE_READLINE|/* readline disabled */|' src/luaconf.h
     make linux MYCFLAGS="-fPIC -include fan_lua_lock.h -pthread" MYLIBS="-pthread"
     make install INSTALL_TOP=/usr/local
     cp src/luaconf.h /usr/local/include/
@@ -123,7 +128,7 @@ luarocks install lsqlite3
 )
 rm -rf luarocks*
 
-apk del linux-headers git g++ bison ncurses-dev readline-dev libc-dev \
+apk del linux-headers git g++ bison ncurses-dev libc-dev \
     curl-dev wget libevent-dev cmake make gcc unzip openssl-dev \
     bsd-compat-headers perl
 

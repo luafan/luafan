@@ -15,10 +15,13 @@ OPENSSL_VERSION=1.1.1w
 LUA_VERSION=5.3.6
 
 # --- packages ---
+# NOTE: no libreadline* -- we build Lua without readline (container has no REPL
+# use case) so we avoid the autoremove trap that dropped libreadline8 and broke
+# /usr/local/bin/lua at runtime.
 apt update
 apt install -y \
     ca-certificates libsqlite3-0 libsqlite3-dev tzdata wget unzip \
-    zlib1g-dev make gcc libc-dev libreadline-dev \
+    zlib1g-dev make gcc libc-dev \
     libcurl4-openssl-dev libcurl4 \
     libevent-dev libevent-2.1-7 libevent-core-2.1-7 libevent-extra-2.1-7 libevent-openssl-2.1-7 \
     git cmake g++ bison libncurses5-dev
@@ -36,12 +39,18 @@ git clone https://github.com/luafan/luafan.git /opt/luafan
 # worker threads (they share one lua_State). We compile Lua ourselves,
 # force-including luafan/src/fan_lua_lock.h and linking fan_lua_lock.c into the
 # core objects so LockMainState/... are exported (-Wl,-E) for fan.so.
+# We also DROP readline: the container has no interactive REPL use case, and
+# libreadline-dev pulls libreadline8 which gets swept by autoremove during
+# cleanup below -- leaving /usr/local/bin/lua broken at runtime.
 wget https://www.lua.org/ftp/lua-$LUA_VERSION.tar.gz
 tar xzf lua-$LUA_VERSION.tar.gz
 (
     cd lua-$LUA_VERSION
     cp /opt/luafan/src/fan_lua_lock.c /opt/luafan/src/fan_lua_lock.h src/
     sed -i 's/^CORE_O=/CORE_O= fan_lua_lock.o /' src/Makefile
+    # Strip readline from the linux target and from luaconf.h auto-defines.
+    sed -i 's/ -lreadline//' src/Makefile
+    sed -i 's|^#define LUA_USE_READLINE|/* readline disabled */|' src/luaconf.h
     make linux MYCFLAGS="-fPIC -include fan_lua_lock.h -pthread" MYLIBS="-pthread"
     make install INSTALL_TOP=/usr/local
     cp src/luaconf.h /usr/local/include/
@@ -122,7 +131,7 @@ luarocks install lsqlite3
 )
 rm -rf luarocks*
 
-apt-get -y remove g++ bison libncurses5-dev libreadline-dev libc-dev \
+apt-get -y remove g++ bison libncurses5-dev libc-dev \
     zlib1g-dev libcurl4-openssl-dev libevent-dev unzip cmake make gcc \
     binutils libc-dev-bin git
 apt-get -y autoremove
