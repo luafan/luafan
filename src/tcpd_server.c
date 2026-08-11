@@ -55,23 +55,36 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     luaL_getmetatable(cbs.co, LUA_TCPD_ACCEPT_TYPE);
     lua_setmetatable(cbs.co, -2);
 
-    struct event_base *accept_base;
+    // The accepted socket's fd is ALREADY connected when the listener fires.
+    // Unlike tcpd.connect (which creates its bufferevent with fd=-1 and only
+    // acquires an fd later via bufferevent_socket_connect), an accepted fd is
+    // immediately readable/writable. If we hand such a live fd to a worker
+    // event_base that is already spinning in event_base_loop() on another
+    // thread, that worker thread can dispatch read/write/event callbacks for
+    // the fd the instant bufferevent_socket_new() associates it — i.e. before
+    // this function has finished bufferevent_setcb(), enabled events, and
+    // resumed the onaccept coroutine. The worker callback then races on the
+    // same (main-thread-derived) Lua coroutine that listener_cb is still
+    // building, corrupting the coroutine stack and crashing lua_resume with
+    // "attempt to call a <tcpd.accept ...> value".
+    //
+    // The accept handshake (create bev -> setcb -> enable -> onaccept) must
+    // therefore complete atomically on the listener's own (main) thread. So we
+    // always bind the accepted bufferevent to the listener's base and never
+    // add BEV_OPT_THREADSAFE / BEV_OPT_UNLOCK_CALLBACKS here. (Callers that
+    // want a per-connection worker base can migrate explicitly after onaccept.)
+    struct event_base *accept_base = evconnlistener_get_base(listener);
     int use_worker = (event_mgr_worker_count() > 0);
-    if (use_worker) {
-        int wid = event_mgr_next_worker();
-        accept_base = event_mgr_worker_base(wid);
-    } else {
-        accept_base = evconnlistener_get_base(listener);
-    }
-    int extra_bev_flags = use_worker ? BEV_OPT_THREADSAFE | BEV_OPT_UNLOCK_CALLBACKS : 0;
     struct bufferevent *bev;
 
-    // Create bufferevent (SSL or regular)
+    // Create bufferevent (SSL or regular). No BEV_OPT_THREADSAFE /
+    // BEV_OPT_UNLOCK_CALLBACKS: the accept handshake stays on the listener
+    // thread (see above), so the extra bev locking is unnecessary.
     if (server->ssl_ctx) {
-        bev = tcpd_ssl_create_server_bufferevent(accept_base, fd, server->ssl_ctx, extra_bev_flags);
+        bev = tcpd_ssl_create_server_bufferevent(accept_base, fd, server->ssl_ctx, 0);
     } else {
         bev = bufferevent_socket_new(accept_base, fd,
-            BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS | extra_bev_flags);
+            BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
     }
 
     if (!bev) {
