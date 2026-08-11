@@ -106,6 +106,10 @@ jobs:
 
   merge-ubuntu:
     needs: [build-ubuntu]
+    # Explicit gate: GHA's default success() propagates transitive 'skipped'
+    # from check-changes on workflow_dispatch; we only care whether the
+    # direct build actually succeeded.
+    if: always() && needs.build-ubuntu.result == 'success'
     runs-on: ubuntu-22.04
     steps:
     - name: Download digests
@@ -195,6 +199,10 @@ jobs:
 
   merge-alpine:
     needs: [build-alpine]
+    # Explicit gate: GHA's default success() propagates transitive 'skipped'
+    # from check-changes on workflow_dispatch; we only care whether the
+    # direct build actually succeeded.
+    if: always() && needs.build-alpine.result == 'success'
     runs-on: ubuntu-22.04
     steps:
     - name: Download digests
