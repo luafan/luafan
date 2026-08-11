@@ -140,6 +140,16 @@ jobs:
       run: |
         docker buildx imagetools inspect luafan/luafan-ubuntu:latest
 
+    - name: Trigger webase ubuntu rebuild
+      env:
+        GH_TOKEN: ${{ secrets.WEBASE_DISPATCH_TOKEN }}
+      run: |
+        curl -fsSL -X POST \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/luafan/webase/dispatches \
+          -d '{"event_type":"luafan-ubuntu-updated","client_payload":{"luafan_sha":"${{ github.sha }}"}}'
+
   # ---------------- Alpine ----------------
   build-alpine:
     needs: [check-changes]
@@ -232,3 +242,13 @@ jobs:
     - name: Inspect image
       run: |
         docker buildx imagetools inspect luafan/luafan-alpine:latest
+
+    - name: Trigger webase alpine rebuild
+      env:
+        GH_TOKEN: ${{ secrets.WEBASE_DISPATCH_TOKEN }}
+      run: |
+        curl -fsSL -X POST \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/luafan/webase/dispatches \
+          -d '{"event_type":"luafan-alpine-updated","client_payload":{"luafan_sha":"${{ github.sha }}"}}'
