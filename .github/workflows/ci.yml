@@ -22,7 +22,7 @@ jobs:
     - name: Build LuaFan (Alpine)
       run: |
         cd $GITHUB_WORKSPACE
-        sh build_docker_alpine.sh || exit -1
+        sh build_docker_alpine.sh
 
     - name: Build completion
       run: echo "Build Alpine finished!"
@@ -42,7 +42,7 @@ jobs:
     - name: Build LuaFan (Ubuntu)
       run: |
         cd $GITHUB_WORKSPACE
-        bash build_docker_ubuntu.sh || exit -1
+        bash build_docker_ubuntu.sh
 
     - name: Build completion
       run: echo "Build Ubuntu finished!"

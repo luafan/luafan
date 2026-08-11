@@ -31,7 +31,7 @@ apt update \
     `# accessors match the interpreter; symbols resolve at dlopen. The header` \
     `# self-defines LUA_USER_H (so utlua.c uses the real depth funcs). -I so the` \
     `# #include LUA_USER_H inside luafan sources finds it.` \
-    && cd /opt/luafan && luarocks make luafan-$LUAFAN_VERSION.rockspec MARIADB_DIR=/usr/local/mysql CURL_INCDIR=/usr/include/`uname -m`-linux-gnu CFLAGS="-O2 -fPIC -include /opt/luafan/src/fan_lua_lock.h -I/opt/luafan/src -pthread" && cd / && rm -rf /opt/luafan \
+    && cd /opt/luafan && luarocks make luafan-$LUAFAN_VERSION.rockspec MARIADB_DIR=/usr/local/mysql CURL_INCDIR=/usr/include/`uname -m`-linux-gnu CFLAGS="-O2 -fPIC -include /opt/luafan/src/fan_lua_lock.h -I/opt/luafan/src -pthread" && cd - && rm -rf /opt/luafan \
     && luarocks install compat53 && luarocks install lpeg && luarocks install lua-cjson 2.1.0-1 && luarocks install luafilesystem \
     && git clone --depth 1 --branch 0.4.1.53-luafan1 https://github.com/luafan/lzlib.git /tmp/lzlib-luafan && cd /tmp/lzlib-luafan && luarocks make rockspec/lzlib-0.4.1.53.luafan1-1.rockspec && cd - && rm -rf /tmp/lzlib-luafan && luarocks install openssl && luarocks install lbase64 \
     && luarocks install lua-protobuf \
