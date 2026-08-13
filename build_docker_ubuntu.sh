@@ -14,6 +14,7 @@ MARIADB_VERSION=5.5.68
 OPENSSL_VERSION=1.1.1w
 LUA_VERSION=5.3.6
 LIBEVENT_VERSION=2.1.12-stable
+CURL_VERSION=8.9.1
 
 # --- packages ---
 # NOTE: no libreadline* -- we build Lua without readline (container has no REPL
@@ -25,11 +26,17 @@ LIBEVENT_VERSION=2.1.12-stable
 # crash in libcrypto.so.3 (EVP_CIPHER_CTX_reset) because a 1.1.1w-created SSL*
 # is read with the 3.x struct layout. We compile libevent from source against
 # 1.1.1w further down so both fan.so and libevent_openssl share one OpenSSL.
+# NOTE: no libcurl4-openssl-dev/libcurl4 from apt either. The distro libcurl
+# links OpenSSL 3.x, so fan.http would drag a SECOND OpenSSL (3.x) into the
+# same process next to tcpd's 1.1.1w. That coexistence happens to be safe today
+# (libcurl uses its OpenSSL internally and never hands SSL* objects to luafan),
+# but to guarantee a single OpenSSL across the whole fan.so we build libcurl
+# from source against 1.1.1w too (below). fan.http only needs HTTP/HTTPS +
+# proxy + cookies (no HTTP/2, ssh, ldap, rtmp), so the custom curl is minimal.
 apt update
 apt install -y \
     ca-certificates libsqlite3-0 libsqlite3-dev tzdata wget unzip \
     zlib1g-dev make gcc libc-dev \
-    libcurl4-openssl-dev libcurl4 \
     git cmake g++ bison libncurses5-dev
 update-ca-certificates
 
@@ -134,6 +141,58 @@ if ldd /usr/local/lib/libevent_openssl-2.1.so.7 | grep -q 'libssl.so.3'; then
     exit 1
 fi
 
+# --- libcurl (built against OpenSSL 1.1.1w to match fan.so) ---
+# The distro libcurl links OpenSSL 3.x; building our own against 1.1.1w means
+# the whole fan.so process uses a SINGLE OpenSSL. fan.http only exercises
+# HTTP/HTTPS + proxy + cookies + client certs (see CURLOPT_* usage in
+# src/http.c), so we disable every other protocol and optional dependency to
+# keep the build small and free of extra system libs (libssh/libldap/librtmp/
+# libpsl/nghttp2/brotli/zstd/idn). zlib is kept for transfer-encoding: gzip.
+wget https://curl.se/download/curl-$CURL_VERSION.tar.gz
+tar xzf curl-$CURL_VERSION.tar.gz
+(
+    cd curl-$CURL_VERSION
+    ./configure \
+        --prefix=/usr/local \
+        --with-openssl=/usr/local \
+        --with-zlib \
+        --without-libpsl \
+        --without-libssh2 \
+        --without-librtmp \
+        --without-nghttp2 \
+        --without-nghttp3 \
+        --without-brotli \
+        --without-zstd \
+        --without-libidn2 \
+        --disable-ldap \
+        --disable-ldaps \
+        --disable-rtsp \
+        --disable-dict \
+        --disable-telnet \
+        --disable-tftp \
+        --disable-pop3 \
+        --disable-imap \
+        --disable-smtp \
+        --disable-gopher \
+        --disable-smb \
+        --disable-mqtt \
+        --disable-manual \
+        --enable-proxy \
+        --enable-cookies
+    make -j$(nproc)
+    make install
+)
+rm -rf curl-$CURL_VERSION*
+ldconfig
+
+# Sanity check: the newly built libcurl must link the self-built OpenSSL 1.1.1w
+# and NOT the system 3.x.
+if ldd /usr/local/lib/libcurl.so.4 | grep -q 'libssl.so.3'; then
+    echo "FATAL: libcurl linked against system OpenSSL 3.x, aborting" >&2
+    ldd /usr/local/lib/libcurl.so.4 >&2
+    exit 1
+fi
+
 # --- luafan itself ---
 # Force-include the SAME hook header so fan.so's lua_lock and depth accessors
 # match the interpreter; symbols resolve at dlopen. The header self-defines
@@ -145,7 +204,9 @@ fi
         MARIADB_DIR=/usr/local/mysql \
         LIBEVENT_DIR=/usr/local \
         OPENSSL_DIR=/usr/local \
-        CURL_INCDIR=/usr/include/`uname -m`-linux-gnu \
+        CURL_DIR=/usr/local \
+        CURL_INCDIR=/usr/local/include \
+        CURL_LIBDIR=/usr/local/lib \
         CFLAGS="-O2 -fPIC -include /opt/luafan/src/fan_lua_lock.h -I/opt/luafan/src -pthread"
 )
 rm -rf /opt/luafan
@@ -179,7 +240,7 @@ luarocks install lsqlite3
 rm -rf luarocks*
 
 apt-get -y remove g++ bison libncurses5-dev libc-dev \
-    zlib1g-dev libcurl4-openssl-dev unzip cmake make gcc \
+    zlib1g-dev unzip cmake make gcc \
     binutils libc-dev-bin git
 apt-get -y autoremove
 
