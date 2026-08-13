@@ -14,14 +14,23 @@ LUAROCKS_VERSION=3.13.0
 MARIADB_VERSION=5.5.68
 OPENSSL_VERSION=1.1.1w
 LUA_VERSION=5.3.6
+LIBEVENT_VERSION=2.1.12-stable
 
 # --- packages ---
 # NOTE: no readline-dev -- we build Lua without readline (container has no REPL
 # use case). Matches the ubuntu build; avoids libreadline runtime dep.
+# NOTE: no libevent/libevent-dev from apk. To stay byte-for-byte consistent
+# with the ubuntu image (and not depend on Alpine's system OpenSSL happening to
+# match), we compile libevent from source against the self-built OpenSSL 1.1.1w
+# below, so fan.so and libevent_openssl always share one OpenSSL. (On Ubuntu
+# 22.04 the apt libevent_openssl links OpenSSL 3.x and mixing it with luafan's
+# 1.1.1w crashes tcpd's SSL path; Alpine 3.16 happens to ship 1.1.1w so it did
+# not crash, but we build our own here regardless for a single, predictable
+# OpenSSL across both images.)
 apk add --update \
     bsd-compat-headers tzdata linux-headers git libstdc++ wget ca-certificates \
     gcc libc-dev unzip cmake g++ make \
-    libevent libevent-dev curl-dev curl \
+    curl-dev curl \
     ncurses-dev bison openssl-dev openssl perl sqlite-dev
 update-ca-certificates
 
@@ -87,6 +96,41 @@ tar xzf openssl-$OPENSSL_VERSION.tar.gz
 )
 rm -rf openssl*
 
+# Point pkg-config at the freshly-installed OpenSSL 1.1.1w BEFORE building
+# libevent, so libevent's OpenSSL bufferevent support links against it. musl
+# has no ldconfig; its default library search path already includes
+# /usr/local/lib ahead of /usr/lib, so the self-built libs win at runtime.
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
+# --- libevent (built against OpenSSL 1.1.1w to match fan.so) ---
+# Mirrors the ubuntu build: we do NOT use the distro libevent, we compile it
+# here (after OpenSSL 1.1.1w is installed) so libevent_openssl shares the same
+# OpenSSL as fan.so. Installs into /usr/local/lib.
+wget https://github.com/libevent/libevent/releases/download/release-$LIBEVENT_VERSION/libevent-$LIBEVENT_VERSION.tar.gz
+tar xzf libevent-$LIBEVENT_VERSION.tar.gz
+(
+    cd libevent-$LIBEVENT_VERSION
+    ./configure \
+        --prefix=/usr/local \
+        --disable-libevent-regress \
+        --disable-samples \
+        --disable-dependency-tracking \
+        CPPFLAGS="-I/usr/local/include" \
+        LDFLAGS="-L/usr/local/lib" \
+        OPENSSL_LIBADD="-lssl -lcrypto"
+    make -j$(nproc)
+    make install
+)
+rm -rf libevent-$LIBEVENT_VERSION*
+
+# Sanity check: the newly built libevent_openssl must link the self-built
+# OpenSSL 1.1.1w and NOT drag in a mismatched system OpenSSL 3.x.
+if ldd /usr/local/lib/libevent_openssl-2.1.so.7 | grep -q 'libssl.so.3'; then
+    echo "FATAL: libevent_openssl linked against system OpenSSL 3.x, aborting" >&2
+    ldd /usr/local/lib/libevent_openssl-2.1.so.7 >&2
+    exit 1
+fi
+
 # --- luafan itself ---
 # Force-include the SAME hook header so fan.so's lua_lock and depth accessors
 # match the interpreter; symbols resolve at dlopen. The header self-defines
@@ -96,6 +140,8 @@ rm -rf openssl*
     cd /opt/luafan
     luarocks make luafan-$LUAFAN_VERSION.rockspec \
         MARIADB_DIR=/usr/local/mysql \
+        LIBEVENT_DIR=/usr/local \
+        OPENSSL_DIR=/usr/local \
         CFLAGS="-O2 -fPIC -include /opt/luafan/src/fan_lua_lock.h -I/opt/luafan/src -pthread"
 )
 rm -rf /opt/luafan
@@ -129,7 +175,7 @@ luarocks install lsqlite3
 rm -rf luarocks*
 
 apk del linux-headers git g++ bison ncurses-dev libc-dev \
-    curl-dev wget libevent-dev cmake make gcc unzip openssl-dev \
+    curl-dev wget cmake make gcc unzip openssl-dev \
     bsd-compat-headers perl
 
 # Keep /usr/local/bin/lua (source-built with the lock hook); only drop
