@@ -3,6 +3,15 @@
 // Global variable definition
 int LONG_DATA = 0; // &LONG_DATA used as mariadb const.
 
+static void wait_for_status_locked_cb(int fd, short event, void *_userdata)
+{
+  DB_STATUS *bag = (DB_STATUS *)_userdata;
+  lua_State *L = bag->L;
+  lua_lock(L);
+  bag->callback(fd, event, _userdata);
+  lua_unlock(L);
+}
+
 void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
                      int status, event_callback_fn callback, int extra)
 {
@@ -22,6 +31,8 @@ void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
   bag->data = data;
   bag->L = L;
   bag->status = status;
+  bag->event = NULL;
+  bag->callback = callback;
   bag->ctx = ctx;
   bag->extra = extra;
 
@@ -50,7 +61,7 @@ void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
   else
     ptv = NULL;
 
-  bag->event = event_new(event_mgr_base(), fd, wait_event, callback, bag);
+  bag->event = event_new(event_mgr_base(), fd, wait_event, wait_for_status_locked_cb, bag);
   event_add(bag->event, ptv);
 }
 

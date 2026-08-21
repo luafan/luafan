@@ -44,8 +44,7 @@ static void httpd_conn_close_cb(struct evhttp_connection *evcon, void *arg) {
     request->req = NULL;
     request->reply_status = REPLY_STATUS_REPLYED;
     if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
-        luaL_unref(request->mainthread, LUA_REGISTRYINDEX, request->prevent_gc_ref);
-        request->prevent_gc_ref = LUA_NOREF;
+        CLEAR_REF(request->mainthread, request->prevent_gc_ref);
     }
 }
 
@@ -57,8 +56,7 @@ void httpd_release_conn_guard(Request *request) {
         }
     }
     if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
-        luaL_unref(request->mainthread, LUA_REGISTRYINDEX, request->prevent_gc_ref);
-        request->prevent_gc_ref = LUA_NOREF;
+        CLEAR_REF(request->mainthread, request->prevent_gc_ref);
     }
 }
 
@@ -83,8 +81,10 @@ void newtable_from_req(lua_State *L, struct evhttp_request *req) {
     /* ws_pmd / zlib streams zeroed by memset */
     lua_rawseti(L, -2, 1);
 
+    lua_lock(L);
     lua_pushvalue(L, -1);
     request->prevent_gc_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_unlock(L);
 
     struct evhttp_connection *evcon = evhttp_request_get_connection(req);
     if (evcon) {

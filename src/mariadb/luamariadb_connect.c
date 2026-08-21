@@ -21,20 +21,26 @@ static void real_connect_cont(int fd, short event, void *_userdata)
     char value = 1;
     mysql_options(conn, MYSQL_OPT_RECONNECT, &value);
 
+    lua_lock(L);
     lua_rawgeti(L, LUA_REGISTRYINDEX, bag->extra);
     UNREF_CO(bag->ctx);
+    lua_unlock(L);
     FAN_RESUME(L, NULL, 1);
   }
   else
   {
+    lua_lock(L);
     int nresults = luamariadb_push_errno(L, bag->ctx);
     UNREF_CO(bag->ctx);
+    lua_unlock(L);
     FAN_RESUME(L, NULL, nresults);
   }
 
   if (!skip_unref)
   {
+    lua_lock(L);
     luaL_unref(L, LUA_REGISTRYINDEX, bag->extra);
+    lua_unlock(L);
   }
   event_free(bag->event);
   free(bag);
@@ -72,7 +78,9 @@ LUA_API int real_connect_start(lua_State *L)
                                         password, sourcename, port, NULL, 0);
   if (status)
   {
+    lua_lock(L);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_unlock(L);
     REF_CO(ctx);
     wait_for_status(L, ctx, &ctx->my_conn, status, real_connect_cont, ref);
     return lua_yield(L, 0);

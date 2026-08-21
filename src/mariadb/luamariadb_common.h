@@ -111,6 +111,7 @@
 
 // Reference counting macros
 #define REF_CO(x) do {                             \
+  lua_lock(L);                                     \
   if ((x)->coref == LUA_NOREF)                     \
   {                                                \
     lua_pushthread(L);                             \
@@ -121,9 +122,11 @@
   {                                                \
     (x)->coref_count++;                            \
   }                                                \
+  lua_unlock(L);                                   \
 } while(0)
 
 #define UNREF_CO(x) do {                              \
+  lua_lock(L);                                        \
   if ((x)->coref != LUA_NOREF)                        \
   {                                                   \
     (x)->coref_count--;                               \
@@ -133,6 +136,7 @@
       (x)->coref = LUA_NOREF;                         \
     }                                                 \
   }                                                   \
+  lua_unlock(L);                                      \
 } while(0)
 
 // Structure definitions
@@ -150,6 +154,7 @@ typedef struct
   void *data;
   int status;
   struct event *event;
+  event_callback_fn callback;
   DB_CTX *ctx;
   int extra;
 } DB_STATUS;

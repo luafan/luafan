@@ -14,7 +14,7 @@ static void stmt_close_cont(int fd, short event, void *_userdata)
   }
   else if (ret == 0)
   {
-    luaL_unref(L, LUA_REGISTRYINDEX, st->table);
+    CLEAR_REF(L, st->table);
 
     lua_pushboolean(L, 1);
     UNREF_CO(st);
@@ -22,7 +22,7 @@ static void stmt_close_cont(int fd, short event, void *_userdata)
   }
   else
   {
-    luaL_unref(L, LUA_REGISTRYINDEX, st->table);
+    CLEAR_REF(L, st->table);
     int nresults = luamariadb_push_errno(L, bag->ctx);
     UNREF_CO(st);
     FAN_RESUME(L, NULL, nresults);
@@ -47,7 +47,7 @@ LUA_API int stmt_close_start(lua_State *L, STMT_CTX *st)
   }
   else if (ret == 0)
   {
-    luaL_unref(L, LUA_REGISTRYINDEX, st->table);
+    CLEAR_REF(L, st->table);
     lua_pushboolean(L, 1);
     return 1;
   }

@@ -6,6 +6,7 @@ static void stmt_prepare_result(lua_State *L, STMT_CTX *st)
 
   size_t mysql_bind_size = param_count * sizeof(MYSQL_BIND);
 
+  lua_lock(L);
   lua_rawgeti(L, LUA_REGISTRYINDEX, st->table);
 
   MYSQL_BIND *bind = lua_newuserdata(L, mysql_bind_size);
@@ -17,6 +18,7 @@ static void stmt_prepare_result(lua_State *L, STMT_CTX *st)
   st->bind = luaL_ref(L, -2);
 
   lua_pop(L, 1);
+  lua_unlock(L);
 
   st->rbind = LUA_NOREF;
   st->buffers = LUA_NOREF;
@@ -67,7 +69,9 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata)
 
   if (!skip_unref)
   {
+    lua_lock(L);
     luaL_unref(L, LUA_REGISTRYINDEX, bag->extra);
+    lua_unlock(L);
   }
 
   event_free(bag->event);
@@ -89,10 +93,12 @@ LUA_API int stmt_prepare_start(lua_State *L)
   luasql_setmeta(L, MARIADB_STATEMENT_METATABLE);
   st->my_stmt = stmt;
 
+  lua_lock(L);
   lua_newtable(L);
   st->ctx = ctx;
 
   st->table = luaL_ref(L, LUA_REGISTRYINDEX);
+  lua_unlock(L);
 
   unsigned long type = (unsigned long)CURSOR_TYPE_READ_ONLY;
   unsigned long prefetch_rows = 5;
@@ -113,7 +119,9 @@ LUA_API int stmt_prepare_start(lua_State *L)
   int status = mysql_stmt_prepare_start(&ret, stmt, statement, st_len);
   if (status)
   {
+    lua_lock(L);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_unlock(L);
     REF_CO(st);
     wait_for_status(L, ctx, st, status, stmt_prepare_cont, ref);
     return lua_yield(L, 0);

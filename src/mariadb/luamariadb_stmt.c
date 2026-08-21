@@ -12,6 +12,7 @@ void *get_or_create_ud(lua_State *L, int tableidx, int *ref,
                        size_t size)
 {
   void *ud = NULL;
+  lua_lock(L);
   if (*ref == LUA_NOREF || *ref == 0)
   {
     ud = lua_newuserdata(L, size);
@@ -24,6 +25,7 @@ void *get_or_create_ud(lua_State *L, int tableidx, int *ref,
     ud = lua_touserdata(L, -1);
     lua_pop(L, 1);
   }
+  lua_unlock(L);
 
   return ud;
 }

@@ -291,6 +291,8 @@ void udpd_base_conn_cleanup(udpd_base_conn_t *conn) {
 int udpd_base_conn_set_callbacks(udpd_base_conn_t *conn, lua_State *L, int table_index) {
     if (!conn || !L) return -1;
 
+    lua_lock(L);
+
     // Set onread callback
     lua_getfield(L, table_index, "onread");
     if (lua_type(L, -1) == LUA_TFUNCTION) {
@@ -309,6 +311,7 @@ int udpd_base_conn_set_callbacks(udpd_base_conn_t *conn, lua_State *L, int table
         conn->onSendReadyRef = LUA_NOREF;
     }
 
+    lua_unlock(L);
     return 0;
 }
 

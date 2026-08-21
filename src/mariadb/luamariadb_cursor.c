@@ -88,6 +88,7 @@ static void create_colinfo(lua_State *L, CURSOR_CTX *cur)
   char typename[50];
   int i;
   fields = mysql_fetch_fields(cur->my_res);
+  lua_lock(L);
   lua_newtable(L); /* names */
   lua_newtable(L); /* types */
   for (i = 1; i <= cur->numcols; i++)
@@ -102,6 +103,7 @@ static void create_colinfo(lua_State *L, CURSOR_CTX *cur)
   /* Stores the references in the cursor structure */
   cur->coltypes = luaL_ref(L, LUA_REGISTRYINDEX);
   cur->colnames = luaL_ref(L, LUA_REGISTRYINDEX);
+  lua_unlock(L);
 }
 
 static void free_result_cont(int fd, short event, void *_userdata)
@@ -131,11 +133,8 @@ static int free_result_start(lua_State *L, CURSOR_CTX *cur)
 {
   cur->closed = 1;
 
-  luaL_unref(L, LUA_REGISTRYINDEX, cur->colnames);
-  cur->colnames = LUA_NOREF;
-
-  luaL_unref(L, LUA_REGISTRYINDEX, cur->coltypes);
-  cur->coltypes = LUA_NOREF;
+  CLEAR_REF(L, cur->colnames);
+  CLEAR_REF(L, cur->coltypes);
 
   DB_CTX *ctx = cur->ctx;
   cur->ctx = NULL;

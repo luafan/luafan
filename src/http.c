@@ -314,7 +314,9 @@ static void http_getpost_complete(ConnInfo *conn) {
         lua_State *mainthread = utlua_mainthread(L);
         // Cannot safely resume, but we need to clean up coref
         if (conn->coref != LUA_NOREF) {
+            lua_lock(mainthread);
             luaL_unref(mainthread, LUA_REGISTRYINDEX, conn->coref);
+            lua_unlock(mainthread);
         }
         decrRef(mainthread);
         return;
@@ -407,7 +409,9 @@ static void resume_cb(int fd, short kind, void *userp) {
 
     FAN_RESUME(L, NULL, 1);
 
+    lua_lock(mainthread);
     luaL_unref(mainthread, LUA_REGISTRYINDEX, coref);
+    lua_unlock(mainthread);
     decrRef(mainthread);
 }
 

@@ -582,8 +582,7 @@ static void ws_deferred_free_cb(evutil_socket_t fd, short what, void *ctx) {
         CLEAR_REF(request->mainthread, request->self_ref);
     }
     if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
-        luaL_unref(request->mainthread, LUA_REGISTRYINDEX, request->prevent_gc_ref);
-        request->prevent_gc_ref = LUA_NOREF;
+        CLEAR_REF(request->mainthread, request->prevent_gc_ref);
     }
 }
 
@@ -646,8 +645,7 @@ void ws_connection_cleanup(Request *request) {
             CLEAR_REF(request->mainthread, request->self_ref);
         }
         if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
-            luaL_unref(request->mainthread, LUA_REGISTRYINDEX, request->prevent_gc_ref);
-            request->prevent_gc_ref = LUA_NOREF;
+            CLEAR_REF(request->mainthread, request->prevent_gc_ref);
         }
     }
 }
@@ -662,8 +660,10 @@ static void ws_resume_with_error(Request *request, const char *errmsg) {
     if (!L) return;
     REF_STATE_CLEAR(request);
 
+    lua_lock(L);
     lua_pushnil(L);
     lua_pushstring(L, errmsg);
+    lua_unlock(L);
 
     int status = FAN_RESUME(L, NULL, 2);
     if (status == LUA_OK || status > LUA_YIELD) {
@@ -680,12 +680,14 @@ static void ws_resume_with_frame(Request *request, websocket_frame_t *frame) {
     }
     REF_STATE_CLEAR(request);
 
+    lua_lock(L);
     if (frame->payload && frame->payload_len > 0) {
         lua_pushlstring(L, frame->payload, frame->payload_len);
     } else {
         lua_pushliteral(L, "");
     }
     lua_pushinteger(L, frame->opcode);
+    lua_unlock(L);
     websocket_frame_free(frame);
 
     int status = FAN_RESUME(L, NULL, 2);
@@ -918,8 +920,10 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         bufferevent_setcb(bev, ws_readcb, NULL, ws_eventcb, request);
         bufferevent_enable(bev, EV_READ | EV_WRITE);
 
+        lua_lock(L);
         lua_pushvalue(L, 1);
         request->self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        lua_unlock(L);
     } else {
         ws_pmd_end_streams(request);
     }

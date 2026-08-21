@@ -36,8 +36,10 @@ static void main_handler(const int fd, const short which, void *arg) {
     lua_unlock(mainState);
     FAN_RESUME(cbs.co, mainState, 0);
 
-    luaL_unref(cbs.co, LUA_REGISTRYINDEX, main_ref);
+    lua_lock(mainState);
+    luaL_unref(mainState, LUA_REGISTRYINDEX, main_ref);
     main_ref = LUA_NOREF;
+    lua_unlock(mainState);
 
     FAN_CB_CLEANUP(mainState, cbs);
 }
@@ -68,7 +70,9 @@ LUA_API int luafan_start(lua_State *L) {
         if (lua_isfunction(L, 1)) {
             lua_settop(L, 1);
 
+            lua_lock(L);
             main_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+            lua_unlock(L);
             mainState = utlua_mainthread(L);
 
             // Defensive: drop any stale mainevent left over from a prior
