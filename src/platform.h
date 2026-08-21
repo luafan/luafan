@@ -28,12 +28,10 @@
 #if !defined(be64toh) && !defined(htobe64)
 #  if defined(FAN_PLATFORM_LINUX)
 #    include <endian.h>
-#  elif defined(FAN_PLATFORM_IOS)
+#  elif defined(FAN_PLATFORM_IOS) || defined(FAN_PLATFORM_MACOS)
 #    include <libkern/OSByteOrder.h>
 #    define be64toh(x) OSSwapBigToHostInt64(x)
 #    define htobe64(x) OSSwapHostToBigInt64(x)
-#  elif defined(FAN_PLATFORM_MACOS)
-#    include <sys/endian.h>
 #  elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #    include <sys/endian.h>
 #  else
