@@ -37,6 +37,18 @@ static _Atomic unsigned int next_worker_idx = 0;
 // this as NULL, so we skip it — there is no user lock to enable in that build.
 __attribute__((weak)) void LuaLockEnable(void);
 
+static pthread_once_t event_threads_once = PTHREAD_ONCE_INIT;
+
+static void event_mgr_init_thread_support(void) {
+    if (evthread_use_pthreads() != 0) {
+        fprintf(stderr, "event_mgr: evthread_use_pthreads failed; cross-thread event_base operations are unsafe\n");
+    }
+}
+
+static void event_mgr_enable_thread_support(void) {
+    pthread_once(&event_threads_once, event_mgr_init_thread_support);
+}
+
 static void *worker_thread_func(void *arg) {
     struct event_worker *w = (struct event_worker *)arg;
     // Block SIGPIPE on worker threads
@@ -68,6 +80,8 @@ int event_mgr_workers_init(int count) {
     if (LuaLockEnable) {
         LuaLockEnable();
     }
+
+    event_mgr_enable_thread_support();
 
     num_workers = count;
 
@@ -183,6 +197,7 @@ int event_mgr_worker_count(void) {
 
 struct event_base *event_mgr_base() {
     if (!base) {
+        event_mgr_enable_thread_support();
         base = event_base_new();
     }
 
