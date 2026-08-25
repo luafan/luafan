@@ -87,8 +87,8 @@ jobs:
         platforms: ${{ matrix.platform }}
         # push-by-digest: no tag; merge job below assembles the manifest
         outputs: type=image,name=luafan/luafan-ubuntu,push-by-digest=true,name-canonical=true,push=true
-        cache-from: type=gha,scope=ubuntu-${{ matrix.arch }}
-        cache-to: type=gha,mode=max,scope=ubuntu-${{ matrix.arch }}
+        no-cache: true
+        pull: true
 
     - name: Export digest
       run: |
@@ -190,8 +190,8 @@ jobs:
         file: Dockerfile.alpine
         platforms: ${{ matrix.platform }}
         outputs: type=image,name=luafan/luafan-alpine,push-by-digest=true,name-canonical=true,push=true
-        cache-from: type=gha,scope=alpine-${{ matrix.arch }}
-        cache-to: type=gha,mode=max,scope=alpine-${{ matrix.arch }}
+        no-cache: true
+        pull: true
 
     - name: Export digest
       run: |
