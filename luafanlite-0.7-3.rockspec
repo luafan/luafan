@@ -65,7 +65,7 @@ build = {
             "src/popen.c",
          },
          defines = { "FAN_HAS_OPENSSL=1", "FAN_HAS_LUAJIT=1", "_GNU_SOURCE=1" },
-         libraries = { "event", "event_openssl", "ssl", "crypto", "curl", "resolv", "z" },
+         libraries = { "event_pthreads", "event_openssl", "event", "ssl", "crypto", "curl", "resolv", "z" },
          incdirs = { "$(CURL_INCDIR)", "$(LIBEVENT_INCDIR)", "$(OPENSSL_INCDIR)" },
          libdirs = { "$(CURL_LIBDIR)", "$(LIBEVENT_LIBDIR)", "$(OPENSSL_LIBDIR)" }
       },

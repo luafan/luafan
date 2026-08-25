@@ -64,8 +64,9 @@ target_link_directories(${MODULE_NAME} PRIVATE
     "/opt/homebrew/opt/libevent/lib"
 )
 
-target_link_libraries(${MODULE_NAME} event)
+target_link_libraries(${MODULE_NAME} event_pthreads)
 target_link_libraries(${MODULE_NAME} event_openssl)
+target_link_libraries(${MODULE_NAME} event)
 target_link_libraries(${MODULE_NAME} ssl)
 target_link_libraries(${MODULE_NAME} crypto)
 target_link_libraries(${MODULE_NAME} z)
@@ -124,9 +125,9 @@ target_link_directories(run_c_tests PRIVATE
     "/opt/homebrew/opt/libevent/lib"
 )
 if(MYSQL_INCLUDE_DIR)
-    target_link_libraries(run_c_tests event event_openssl ssl crypto z curl resolv mysqlclient lua5.3 m)
+    target_link_libraries(run_c_tests event_pthreads event_openssl event ssl crypto z curl resolv mysqlclient lua5.3 m)
 else()
-    target_link_libraries(run_c_tests event event_openssl ssl crypto z curl resolv lua5.3 m)
+    target_link_libraries(run_c_tests event_pthreads event_openssl event ssl crypto z curl resolv lua5.3 m)
 endif()
 set_target_properties(run_c_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

@@ -13,7 +13,7 @@ luafan:
     ../../src/luafan_posix.c \
     ../../src/objectbuf.c \
     \
-    -levent
+    -levent_pthreads -levent
 
 clean:
 	rm *.o ../../fan.so
