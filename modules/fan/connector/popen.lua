@@ -105,6 +105,7 @@ local function spawn(opts)
     local popen_opts = {
         command = opts.command,
         capture_stderr = opts.capture_stderr,
+        process_group = opts.process_group,
         onread = function(data)
             obj:_onread(data)
         end,

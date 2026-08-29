@@ -111,6 +111,30 @@ suite:test("kill_child", TestFramework.async_test(function()
     TestFramework.assert_false(proc:is_alive())
 end))
 
+-- Test: process_group close terminates shell descendants
+suite:test("close_process_group", TestFramework.async_test(function()
+    local child_pid = nil
+    local proc = popen.spawn({
+        command = {"/bin/sh", "-c", "sleep 100 & echo $!; wait"},
+        process_group = true,
+        onread = function(data)
+            child_pid = child_pid or tonumber(data:match("(%d+)"))
+        end,
+        ondisconnected = function() end,
+    })
+    TestFramework.assert_not_nil(proc)
+    local waited = 0
+    while not child_pid and waited < 2 do
+        fan.sleep(0.05)
+        waited = waited + 0.05
+    end
+    TestFramework.assert_not_nil(child_pid, "child pid was not reported")
+    proc:close()
+    fan.sleep(0.05)
+    local alive = fan.kill(child_pid, 0)
+    TestFramework.assert_false(alive == true, "process-group child is still alive")
+end))
+
 -- Test: large output
 suite:test("large_output", TestFramework.async_test(function()
     local total_received = 0

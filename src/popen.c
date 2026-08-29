@@ -21,6 +21,7 @@ typedef struct {
     int stdout_fd;
     int stderr_fd;
     pid_t child_pid;
+    int process_group;
 
     int onReadRef;
     int onStderrRef;
@@ -165,6 +166,7 @@ static void popen_stderr_cb(evutil_socket_t fd, short event, void *arg) {
 //   onstderr = function(data) end,     -- stderr callback (optional)
 //   ondisconnected = function(msg, exit_code) end,  -- exit callback (optional)
 //   capture_stderr = true,             -- default true
+//   process_group = false,             -- close() also terminates descendants
 // })
 LUA_API int luafan_popen_spawn(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -218,6 +220,14 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     lua_getfield(L, 1, "capture_stderr");
     if (!lua_isnil(L, -1)) {
         capture_stderr = lua_toboolean(L, -1);
+    }
+    lua_pop(L, 1);
+
+    // Optional dedicated process group lets close() terminate shell descendants.
+    int process_group = 0;
+    lua_getfield(L, 1, "process_group");
+    if (!lua_isnil(L, -1)) {
+        process_group = lua_toboolean(L, -1);
     }
     lua_pop(L, 1);
 
@@ -354,9 +364,17 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     // Set up spawn attributes
     posix_spawnattr_t spawn_attr;
     posix_spawnattr_init(&spawn_attr);
+    short spawn_flags = 0;
 #ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
-    posix_spawnattr_setflags(&spawn_attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+    spawn_flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
 #endif
+    if (process_group) {
+        spawn_flags |= POSIX_SPAWN_SETPGROUP;
+        posix_spawnattr_setpgroup(&spawn_attr, 0);
+    }
+    if (spawn_flags != 0) {
+        posix_spawnattr_setflags(&spawn_attr, spawn_flags);
+    }
 
     pid_t pid;
     int spawn_err = posix_spawnp(&pid, cmd_argv[0], &file_actions, &spawn_attr, cmd_argv, envp);
@@ -412,6 +430,7 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     p->stdout_fd = pipe_stdout[0];
     p->stderr_fd = capture_stderr ? pipe_stderr[0] : -1;
     p->child_pid = pid;
+    p->process_group = process_group;
     p->closed = 0;
     p->mainthread = utlua_mainthread(L);
 
@@ -499,16 +518,23 @@ LUA_API int luafan_popen_close(lua_State *L) {
     if (p->stderr_fd >= 0) { close(p->stderr_fd); p->stderr_fd = -1; }
 
     if (p->child_pid > 0) {
-        kill(p->child_pid, SIGTERM);
+        pid_t signal_pid = p->process_group ? -p->child_pid : p->child_pid;
+        kill(signal_pid, SIGTERM);
         int status = 0;
         pid_t ret = waitpid(p->child_pid, &status, WNOHANG);
         if (ret == 0) {
             usleep(10000);
             ret = waitpid(p->child_pid, &status, WNOHANG);
-            if (ret == 0) {
-                kill(p->child_pid, SIGKILL);
-                waitpid(p->child_pid, &status, 0);
-            }
+        }
+        // A shell may exit on SIGTERM while one of its descendants ignores it.
+        // Kill the whole dedicated group once more before releasing the handle.
+        if (p->process_group) {
+            kill(signal_pid, SIGKILL);
+        } else if (ret == 0) {
+            kill(signal_pid, SIGKILL);
+        }
+        if (ret == 0) {
+            waitpid(p->child_pid, &status, 0);
         }
         p->child_pid = -1;
     }
