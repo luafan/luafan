@@ -1,6 +1,7 @@
 // httpd.c — Core HTTP server: Lua bindings, dispatch, server lifecycle
 
 #include "httpd_internal.h"
+#include <errno.h>
 
 const MethodMap methodMap[] = {
     {"GET", EVHTTP_REQ_GET},       {"POST", EVHTTP_REQ_POST},
@@ -60,12 +61,13 @@ void httpd_release_conn_guard(Request *request) {
     }
 }
 
-void newtable_from_req(lua_State *L, struct evhttp_request *req) {
+void newtable_from_req(lua_State *L, struct evhttp_request *req, LuaServer *server) {
     lua_newtable(L);
     Request *request = (Request *)lua_newuserdata(L, sizeof(Request));
     memset(request, 0, sizeof(Request));
-    request->reply_status = REPLY_STATUS_NONE;
     request->req = req;
+    request->server = server;
+    request->reply_status = REPLY_STATUS_NONE;
     request->is_websocket = 0;
     request->ws_state = WS_STATE_CONNECTING;
     request->ws_bev = NULL;
@@ -134,10 +136,85 @@ void set_connection_header(struct evhttp_request *req, LuaServer *server) {
 }
 
 // ============================================================
+// Request body preflight
+// ============================================================
+
+/*
+ * evhttp normally invokes the generic callback after the request body has
+ * been collected.  Do not pass a request to Lua when its wire metadata says
+ * that a body exists but the input buffer is unavailable/empty.  Previously
+ * request_push_body() converted these transport failures into Lua nil, which
+ * the API layer reported as the misleading {"error":"empty body"}.
+ *
+ * This check deliberately does not reject requests without Content-Length:
+ * those may be GETs or valid bodyless requests, and libevent may represent
+ * chunked requests without a Content-Length header.
+ */
+static int httpd_request_body_preflight(struct evhttp_request *req,
+                                        LuaServer *server) {
+    const char *content_length =
+        evhttp_find_header(req->input_headers, "Content-Length");
+    int has_content_length = content_length && *content_length != '\0';
+    unsigned long long declared = 0;
+
+    if (has_content_length) {
+        const char *digit = content_length;
+        while (*digit >= '0' && *digit <= '9') {
+            digit++;
+        }
+        errno = 0;
+        char *end = NULL;
+        declared = strtoull(content_length, &end, 10);
+        if (*digit != '\0' || errno == ERANGE || end == content_length || *end != '\0') {
+            LOG_ERROR_FMT("HTTP request rejected: invalid Content-Length '%s' uri=%s",
+                          content_length,
+                          evhttp_request_get_uri(req));
+            evhttp_send_error(req, 400, "Invalid Content-Length");
+            return 0;
+        }
+    }
+
+    size_t limit = server && server->max_body_size
+        ? server->max_body_size : HTTP_POST_BODY_LIMIT;
+    if (has_content_length && declared > (unsigned long long)limit) {
+        LOG_ERROR_FMT("HTTP request rejected: body too large declared=%llu limit=%zu uri=%s",
+                      declared, limit, evhttp_request_get_uri(req));
+        evhttp_send_error(req, 413, "Request Entity Too Large");
+        return 0;
+    }
+
+    struct evbuffer *bodybuf = evhttp_request_get_input_buffer(req);
+    size_t buffered = bodybuf ? evbuffer_get_length(bodybuf) : 0;
+    if (!has_content_length && buffered > limit) {
+        LOG_ERROR_FMT("HTTP request rejected: body too large buffered=%zu limit=%zu uri=%s",
+                      buffered, limit, evhttp_request_get_uri(req));
+        evhttp_send_error(req, 413, "Request Entity Too Large");
+        return 0;
+    }
+    if (has_content_length && declared > 0 && (!bodybuf || buffered == 0)) {
+        LOG_ERROR_FMT("HTTP request rejected: body unavailable declared=%llu buffered=%zu uri=%s",
+                      declared, buffered, evhttp_request_get_uri(req));
+        evhttp_send_error(req, 400, "Request Body Unavailable");
+        return 0;
+    }
+    if (has_content_length && buffered < (size_t)declared) {
+        LOG_ERROR_FMT("HTTP request rejected: incomplete body declared=%llu buffered=%zu uri=%s",
+                      declared, buffered, evhttp_request_get_uri(req));
+        evhttp_send_error(req, 400, "Incomplete Request Body");
+        return 0;
+    }
+
+    return 1;
+}
+
+// ============================================================
 // Main request dispatch
 // ============================================================
 
 static void httpd_handler_cgi_bin(struct evhttp_request *req, LuaServer *server) {
+    if (!httpd_request_body_preflight(req, server)) {
+        return;
+    }
     metrics_update_connection();
 
     const char* method = NULL;
@@ -171,7 +248,7 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req, LuaServer *server)
         return;
     }
 
-    newtable_from_req(cbs.co, req);
+    newtable_from_req(cbs.co, req, server);
 
     luaL_getmetatable(cbs.co, LUA_EVHTTP_REQUEST_TYPE);
     lua_setmetatable(cbs.co, -2);

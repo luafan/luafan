@@ -30,17 +30,13 @@ int request_push_body(lua_State *L, int idx) {
         if (bodybuf) {
             size_t len = evbuffer_get_length(bodybuf);
 
+            Request *request = request_from_table(L, idx);
             size_t body_limit = HTTP_POST_BODY_LIMIT;
-            lua_getfield(L, LUA_REGISTRYINDEX, "httpd_server");
-            if (!lua_isnil(L, -1)) {
-                LuaServer *server = (LuaServer *)lua_touserdata(L, -1);
-                if (server) {
-                    body_limit = server->max_body_size;
-                }
+            if (request && request->server && request->server->max_body_size) {
+                body_limit = request->server->max_body_size;
             }
-            lua_pop(L, 1);
 
-            if (len > 0 && len < body_limit) {
+            if (len > 0 && len <= body_limit) {
                 char *data = calloc(1, len + 1);
                 if (!data) {
                     LOG_ERROR_FMT("Memory allocation failed for request body: %zu bytes", len + 1);
@@ -55,6 +51,13 @@ int request_push_body(lua_State *L, int idx) {
                     if (read <= 0) break;
                     ptrdata += read;
                     total_read += read;
+                }
+
+                if (total_read != len) {
+                    LOG_ERROR_FMT("Request body read failed: expected=%zu read=%zu", len, total_read);
+                    free(data);
+                    lua_pushnil(L);
+                    return 1;
                 }
 
                 lua_pushlstring(L, data, total_read);
@@ -101,6 +104,10 @@ LUA_API int lua_evhttp_request_read(lua_State *L) {
         return 1;
     }
     struct evbuffer *bodybuf = evhttp_request_get_input_buffer(req);
+    if (!bodybuf) {
+        lua_pushnil(L);
+        return 1;
+    }
     size_t evbuffer_length = evbuffer_get_length(bodybuf);
 
     if (evbuffer_length) {

@@ -103,6 +103,7 @@ typedef struct {
 
 typedef struct {
     struct evhttp_request *req;
+    LuaServer *server;
     int reply_status;
     int is_websocket;
     websocket_state_t ws_state;
@@ -166,7 +167,7 @@ void httpd_log(log_level_t level, const char* format, ...);
 // ============================================================
 
 void httpd_release_conn_guard(Request *request);
-void newtable_from_req(lua_State *L, struct evhttp_request *req);
+void newtable_from_req(lua_State *L, struct evhttp_request *req, LuaServer *server);
 void set_connection_header(struct evhttp_request *req, LuaServer *server);
 
 // ============================================================
