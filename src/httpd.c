@@ -2,6 +2,7 @@
 
 #include "httpd_internal.h"
 #include <errno.h>
+#include <string.h>
 
 const MethodMap methodMap[] = {
     {"GET", EVHTTP_REQ_GET},       {"POST", EVHTTP_REQ_POST},
@@ -40,6 +41,8 @@ static void httpd_conn_close_cb(struct evhttp_connection *evcon, void *arg) {
     (void)evcon;
     Request *request = (Request *)arg;
     if (request->req && request->reply_status == REPLY_STATUS_REPLY_START) {
+        LOG_WARN_FMT("HTTP connection closed before response completed uri=%s",
+                     evhttp_request_get_uri(request->req));
         evhttp_send_reply_end(request->req);
     }
     request->req = NULL;
@@ -233,6 +236,8 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req, LuaServer *server)
     lua_lock(mainthread);
     fan_cb_setup_t cbs = fan_cb_setup(mainthread, server->onServiceRef);
     if (!cbs.co) {
+        LOG_ERROR_FMT("HTTP callback setup failed method=%s uri=%s",
+                      method ? method : "UNKNOWN", evhttp_request_get_uri(req));
         lua_unlock(mainthread);
         evhttp_send_error(req, 500, "Internal Server Error");
         return;
@@ -261,6 +266,15 @@ static void httpd_handler_cgi_bin(struct evhttp_request *req, LuaServer *server)
 
     lua_unlock(mainthread);
     int status = FAN_RESUME(cbs.co, mainthread, 2);
+    if (status != LUA_YIELD && status != LUA_OK) {
+        LOG_ERROR_FMT("HTTP Lua callback failed method=%s uri=%s status=%d",
+                      method ? method : "UNKNOWN", evhttp_request_get_uri(req), status);
+        if (request->req && request->reply_status == REPLY_STATUS_NONE) {
+            evhttp_send_error(request->req, 500, "Internal Server Error");
+            request->reply_status = REPLY_STATUS_REPLYED;
+            httpd_release_conn_guard(request);
+        }
+    }
     if (status != LUA_YIELD && request->reply_status != REPLY_STATUS_REPLYED) {
         httpd_release_conn_guard(request);
     }
@@ -475,12 +489,28 @@ static int validate_httpd_config(LuaServer *server) {
 // ============================================================
 
 void httpd_server_rebind(lua_State *L, LuaServer *server) {
-    struct evhttp_bound_socket *boundsocket = evhttp_bind_socket_with_handle(server->httpd, server->host, server->port);
+    int requested_port = server->port;
+    struct evhttp_bound_socket *boundsocket =
+        evhttp_bind_socket_with_handle(server->httpd, server->host, requested_port);
 
     server->boundsocket = boundsocket;
-    if (boundsocket) {
-        server->port = regress_get_socket_port(evhttp_bound_socket_get_fd(boundsocket));
-    } else {
+    if (!boundsocket) {
+        int bind_errno = errno;
+        server->port = 0;
+        LOG_ERROR_FMT("HTTP server bind failed host=%s port=%d errno=%d (%s)",
+                      server->host ? server->host : "(null)",
+                      requested_port,
+                      bind_errno,
+                      strerror(bind_errno));
+        return;
+    }
+
+    server->port = regress_get_socket_port(evhttp_bound_socket_get_fd(boundsocket));
+    if (server->port < 0) {
+        LOG_ERROR_FMT("HTTP server bound but failed to determine port host=%s requested_port=%d",
+                      server->host ? server->host : "(null)", requested_port);
+        evhttp_del_accept_socket(server->httpd, boundsocket);
+        server->boundsocket = NULL;
         server->port = 0;
     }
 }
@@ -529,10 +559,21 @@ LUA_API int utd_bind(lua_State *L) {
     lua_pop(L, 1);
 
     if (!validate_httpd_config(server)) {
+        LOG_ERROR_FMT("Invalid HTTP server configuration host=%s port=%d keep_alive_timeout=%d max_keep_alive_requests=%d max_body_size=%zu",
+                      server->host ? server->host : "(null)",
+                      server->port,
+                      server->keep_alive_timeout,
+                      server->max_keep_alive_requests,
+                      server->max_body_size);
         return luaL_error(L, "Invalid server configuration parameters");
     }
 
     struct evhttp *httpd = evhttp_new(event_mgr_base());
+    if (!httpd) {
+        LOG_ERROR_FMT("Failed to create HTTP server host=%s port=%d",
+                      server->host ? server->host : "(null)", server->port);
+        return luaL_error(L, "Failed to create HTTP server");
+    }
 
 #if FAN_HAS_OPENSSL
     server->ctx = NULL;
