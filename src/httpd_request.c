@@ -17,11 +17,12 @@ int request_push_body(lua_State *L, int idx) {
     if (idx < 0) {
         idx = lua_gettop(L) + idx + 1;
     }
+    Request *request = request_from_table(L, idx);
     lua_rawgetp(L, idx, "body");
     if (lua_isnil(L, -1)) {
         lua_pop(L, 1);
 
-        struct evhttp_request *req = request_from_table(L, idx)->req;
+        struct evhttp_request *req = request->req;
         if (!req) {
             lua_pushnil(L);
             return 1;
@@ -30,9 +31,8 @@ int request_push_body(lua_State *L, int idx) {
         if (bodybuf) {
             size_t len = evbuffer_get_length(bodybuf);
 
-            Request *request = request_from_table(L, idx);
             size_t body_limit = HTTP_POST_BODY_LIMIT;
-            if (request && request->server && request->server->max_body_size) {
+            if (request->server && request->server->max_body_size) {
                 body_limit = request->server->max_body_size;
             }
 
@@ -40,8 +40,7 @@ int request_push_body(lua_State *L, int idx) {
                 char *data = calloc(1, len + 1);
                 if (!data) {
                     LOG_ERROR_FMT("Memory allocation failed for request body: %zu bytes", len + 1);
-                    lua_pushnil(L);
-                    return 1;
+                    return luaL_error(L, "Failed to allocate request body");
                 }
 
                 size_t total_read = 0;
@@ -167,13 +166,7 @@ LUA_API int lua_evhttp_request_reply(lua_State *L) {
     size_t responseBuffLen = 0;
     const char *responseBuff = lua_tolstring(L, 4, &responseBuffLen);
 
-    LuaServer *server = NULL;
-    lua_getfield(L, LUA_REGISTRYINDEX, "httpd_server");
-    if (!lua_isnil(L, -1)) {
-        server = (LuaServer *)lua_touserdata(L, -1);
-    }
-    lua_pop(L, 1);
-
+    LuaServer *server = request->server;
     if (server) {
         set_connection_header(request->req, server);
     } else {
@@ -197,10 +190,11 @@ LUA_API int lua_evhttp_request_reply(lua_State *L) {
     evhttp_send_reply(request->req, responseCode, responseMessage, buf);
     evbuffer_free(buf);
 
+    request->response_code = responseCode;
     request->reply_status = REPLY_STATUS_REPLYED;
     httpd_release_conn_guard(request);
 
-    metrics_update_request_end(responseCode, responseBuffLen);
+    httpd_finish_metrics(request, responseCode, responseBuffLen);
 
     return 0;
 }
@@ -245,6 +239,7 @@ LUA_API int lua_evhttp_request_reply_start(lua_State *L) {
     int responseCode = (int)lua_tointeger(L, 2);
     const char *responseMessage = lua_tostring(L, 3);
     evhttp_send_reply_start(request->req, responseCode, responseMessage);
+    request->response_code = responseCode;
     request->reply_status = REPLY_STATUS_REPLY_START;
 
     lua_settop(L, 1);
@@ -333,6 +328,7 @@ LUA_API int lua_evhttp_request_reply_end(lua_State *L) {
     }
     request->reply_status = REPLY_STATUS_REPLYED;
     httpd_release_conn_guard(request);
+    httpd_finish_metrics(request, request->response_code, 0);
 
     lua_settop(L, 1);
     return 1;

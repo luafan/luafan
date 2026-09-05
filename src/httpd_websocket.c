@@ -408,7 +408,7 @@ static int websocket_parse_frame(struct evbuffer *input, websocket_frame_t *fram
     }
 
     unsigned char peek_buf[14];
-    size_t peek_len = (available < 14) ? available : 14;
+    size_t peek_len = (available < sizeof(peek_buf)) ? available : sizeof(peek_buf);
     evbuffer_copyout(input, peek_buf, peek_len);
 
     frame->fin = (peek_buf[0] & 0x80) != 0;
@@ -437,17 +437,22 @@ static int websocket_parse_frame(struct evbuffer *input, websocket_frame_t *fram
         frame->payload_len = payload_len;
     }
 
-    if (frame->masked) {
-        header_size += 4;
+    if (!frame->masked) {
+        return -1;
     }
+    header_size += 4;
 
-    if (available < header_size + frame->payload_len) {
+    if (frame->payload_len > SIZE_MAX - header_size ||
+        available < header_size + (size_t)frame->payload_len) {
         return 0;
     }
 
-    if (frame->masked) {
-        memcpy(&frame->mask_key, peek_buf + header_size - 4, 4);
+    if (frame->opcode >= WS_OPCODE_CLOSE && frame->opcode <= WS_OPCODE_PONG &&
+        (!frame->fin || frame->payload_len > 125)) {
+        return -1;
     }
+
+    memcpy(&frame->mask_key, peek_buf + header_size - 4, 4);
 
     evbuffer_drain(input, header_size);
 
@@ -952,12 +957,14 @@ LUA_API int lua_evhttp_request_websocket_send(lua_State *L) {
 
     size_t data_len = 0;
     const char *data = luaL_checklstring(L, 2, &data_len);
-    int opcode = luaL_optinteger(L, 3, WS_OPCODE_TEXT);
-    int fin = luaL_optinteger(L, 4, 1);
+    lua_Integer opcode_value = luaL_optinteger(L, 3, WS_OPCODE_TEXT);
+    lua_Integer fin_value = luaL_optinteger(L, 4, 1);
 
-    if (opcode < 0 || opcode > 0xF) {
-        return luaL_error(L, "Invalid WebSocket opcode: %d", opcode);
+    if (opcode_value < 0 || opcode_value > 0xF) {
+        return luaL_error(L, "Invalid WebSocket opcode: %lld", (long long)opcode_value);
     }
+    int opcode = (int)opcode_value;
+    int fin = fin_value != 0;
 
     const char *send_data = data;
     size_t send_len = data_len;
@@ -1077,9 +1084,15 @@ LUA_API int lua_evhttp_request_websocket_close(lua_State *L) {
         return 1;
     }
 
-    int close_code = luaL_optinteger(L, 2, 1000);
+    lua_Integer close_code_value = luaL_optinteger(L, 2, 1000);
     size_t reason_len = 0;
     const char *reason = lua_tolstring(L, 3, &reason_len);
+    if (close_code_value < 1000 || close_code_value > 4999 ||
+        close_code_value == 1004 || close_code_value == 1005 ||
+        close_code_value == 1006 || close_code_value == 1015) {
+        return luaL_error(L, "Invalid WebSocket close code: %lld", (long long)close_code_value);
+    }
+    int close_code = (int)close_code_value;
 
     char close_payload[127];
     size_t close_payload_len = 0;

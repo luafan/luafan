@@ -36,6 +36,7 @@
 #define WS_MAX_QUEUED_FRAMES 64
 
 #define LUA_EVHTTP_REQUEST_TYPE "EVHTTP_REQUEST_TYPE"
+#define LUA_EVHTTP_REQUEST_DATA_TYPE "EVHTTP_REQUEST_DATA_TYPE"
 #define LUA_EVHTTP_SERVER_TYPE "EVHTTP_SERVER_TYPE"
 
 // ============================================================
@@ -105,6 +106,8 @@ typedef struct {
     struct evhttp_request *req;
     LuaServer *server;
     int reply_status;
+    int response_code;
+    int metrics_finished;
     int is_websocket;
     websocket_state_t ws_state;
     struct bufferevent *ws_bev;
@@ -145,8 +148,9 @@ extern const MethodMap methodMap[];
 // ============================================================
 
 static inline Request *request_from_table(lua_State *L, int idx) {
+    luaL_checktype(L, idx, LUA_TTABLE);
     lua_rawgeti(L, idx, 1);
-    Request *request = (Request *)lua_touserdata(L, -1);
+    Request *request = (Request *)luaL_checkudata(L, -1, LUA_EVHTTP_REQUEST_DATA_TYPE);
     lua_pop(L, 1);
     return request;
 }
@@ -167,6 +171,7 @@ void httpd_log(log_level_t level, const char* format, ...);
 // ============================================================
 
 void httpd_release_conn_guard(Request *request);
+void httpd_finish_metrics(Request *request, int status_code, size_t bytes_sent);
 void newtable_from_req(lua_State *L, struct evhttp_request *req, LuaServer *server);
 void set_connection_header(struct evhttp_request *req, LuaServer *server);
 
