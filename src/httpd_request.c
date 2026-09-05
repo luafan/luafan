@@ -154,6 +154,7 @@ LUA_API int lua_evhttp_request_reply(lua_State *L) {
             evhttp_send_reply_end(request->req);
             request->reply_status = REPLY_STATUS_REPLYED;
             httpd_release_conn_guard(request);
+            httpd_finish_metrics(request, request->response_code, 0);
             lua_settop(L, 1);
             return 1;
         default:
@@ -238,6 +239,12 @@ LUA_API int lua_evhttp_request_reply_start(lua_State *L) {
 
     int responseCode = (int)lua_tointeger(L, 2);
     const char *responseMessage = lua_tostring(L, 3);
+    LuaServer *server = request->server;
+    if (server) {
+        set_connection_header(request->req, server);
+    } else {
+        evhttp_add_header(request->req->output_headers, "Connection", "close");
+    }
     evhttp_send_reply_start(request->req, responseCode, responseMessage);
     request->response_code = responseCode;
     request->reply_status = REPLY_STATUS_REPLY_START;

@@ -42,9 +42,14 @@ void httpd_finish_metrics(Request *request, int status_code, size_t bytes_sent);
 static void httpd_conn_close_cb(struct evhttp_connection *evcon, void *arg) {
     (void)evcon;
     Request *request = (Request *)arg;
+    if (!request || request->close_cb_running) {
+        return;
+    }
+    request->close_cb_running = 1;
     if (request->req && request->reply_status == REPLY_STATUS_REPLY_START) {
         LOG_WARN_FMT("HTTP connection closed before response completed uri=%s",
                      evhttp_request_get_uri(request->req));
+        request->reply_status = REPLY_STATUS_REPLYED;
         evhttp_send_reply_end(request->req);
     }
     httpd_finish_metrics(request, 499, 0);
@@ -455,15 +460,27 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L) {
             request_push_body(L, 1);
             if (lua_type(L, -1) == LUA_TSTRING) {
                 const char *data = lua_tostring(L, -1);
-                struct evkeyvalq params;
-                evhttp_parse_query_str(data, &params);
+                struct evkeyvalq form_params;
+                evhttp_parse_query_str(data, &form_params);
                 lua_pop(L, 1);
 
-                TAILQ_FOREACH(item, &params, next) {
-                    lua_pushstring(L, item->value);
-                    lua_setfield(L, -2, item->key);
+                TAILQ_FOREACH(item, &form_params, next) {
+                    lua_getfield(L, -1, item->key);
+                    if (lua_isnil(L, -1)) {
+                        lua_pop(L, 1);
+                        lua_pushstring(L, item->value);
+                        lua_setfield(L, -2, item->key);
+                    } else if (lua_isstring(L, -1)) {
+                        lua_pushfstring(L, "%s, %s", lua_tostring(L, -1), item->value);
+                        lua_remove(L, -2);
+                        lua_setfield(L, -2, item->key);
+                    } else {
+                        lua_pop(L, 1);
+                    }
                 }
-                evhttp_clear_headers(&params);
+                evhttp_clear_headers(&form_params);
+            } else {
+                lua_pop(L, 1);
             }
         }
         return 1;
@@ -541,10 +558,9 @@ static int validate_httpd_config(LuaServer *server) {
 // Server bind and rebind
 // ============================================================
 
-void httpd_server_rebind(lua_State *L, LuaServer *server) {
-    (void)L;
+int httpd_server_rebind(LuaServer *server) {
     if (!server || !server->httpd) {
-        return;
+        return 0;
     }
     if (server->boundsocket) {
         evhttp_del_accept_socket(server->httpd, server->boundsocket);
@@ -557,16 +573,17 @@ void httpd_server_rebind(lua_State *L, LuaServer *server) {
 
     server->boundsocket = boundsocket;
     if (!boundsocket) {
-        int bind_errno = errno;
+        server->bind_errno = errno;
         server->port = 0;
         LOG_ERROR_FMT("HTTP server bind failed host=%s port=%d errno=%d (%s)",
                       server->host ? server->host : "(null)",
                       requested_port,
-                      bind_errno,
-                      strerror(bind_errno));
-        return;
+                      server->bind_errno,
+                      strerror(server->bind_errno));
+        return 0;
     }
 
+    server->bind_errno = 0;
     server->port = regress_get_socket_port(evhttp_bound_socket_get_fd(boundsocket));
     if (server->port < 0) {
         LOG_ERROR_FMT("HTTP server bound but failed to determine port host=%s requested_port=%d",
@@ -574,7 +591,10 @@ void httpd_server_rebind(lua_State *L, LuaServer *server) {
         evhttp_del_accept_socket(server->httpd, boundsocket);
         server->boundsocket = NULL;
         server->port = 0;
+        server->bind_errno = EIO;
+        return 0;
     }
+    return 1;
 }
 
 LUA_API int utd_bind(lua_State *L) {
@@ -688,7 +708,13 @@ LUA_API int utd_bind(lua_State *L) {
         EC_KEY_free(ecdh);
 #endif
 
-        server_setup_certs(L, ctx, cert, key);
+        if (!server_setup_certs(ctx, cert, key)) {
+            SSL_CTX_free(ctx);
+            server->ctx = NULL;
+            lua_pop(L, 2);
+            evhttp_free(httpd);
+            return luaL_error(L, "Failed to load TLS certificate or private key");
+        }
 
         evhttp_set_bevcb(httpd, bevcb, ctx);
     }
@@ -704,9 +730,7 @@ LUA_API int utd_bind(lua_State *L) {
 
     server->httpd = httpd;
 
-    httpd_server_rebind(L, server);
-
-    if (!server->boundsocket) {
+    if (!httpd_server_rebind(server)) {
 #if FAN_HAS_OPENSSL
         if (server->ctx) {
             SSL_CTX_free(server->ctx);
@@ -715,12 +739,19 @@ LUA_API int utd_bind(lua_State *L) {
 #endif
         evhttp_free(httpd);
         server->httpd = NULL;
-        return 0;
+        return luaL_error(L, "HTTP server bind failed for %s:%d: %s",
+                          server->host ? server->host : "(null)",
+                          server->port,
+                          strerror(server->bind_errno ? server->bind_errno : EADDRINUSE));
     }
 
     SET_FUNC_REF_FROM_TABLE(L, server->onServiceRef, 1, "onService")
 
     evhttp_set_timeout(httpd, server->keep_alive_timeout + 30);
+    evhttp_set_allowed_methods(httpd,
+        EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_HEAD |
+        EVHTTP_REQ_PUT | EVHTTP_REQ_DELETE | EVHTTP_REQ_OPTIONS |
+        EVHTTP_REQ_TRACE | EVHTTP_REQ_CONNECT | EVHTTP_REQ_PATCH);
     evhttp_set_cb(httpd, "/smoketest", smoke_request_cb, NULL);
     evhttp_set_cb(httpd, "/metrics", metrics_request_cb, NULL);
     evhttp_set_gencb(httpd, (void (*)(struct evhttp_request *, void *))httpd_handler_cgi_bin, server);
@@ -746,7 +777,12 @@ LUA_API int utd_bind(lua_State *L) {
 
 LUA_API int lua_evhttp_server_rebind(lua_State *L) {
     LuaServer *server = (LuaServer *)luaL_checkudata(L, 1, LUA_EVHTTP_SERVER_TYPE);
-    httpd_server_rebind(L, server);
+    if (!httpd_server_rebind(server)) {
+        return luaL_error(L, "HTTP server rebind failed for %s:%d: %s",
+                          server->host ? server->host : "(null)",
+                          server->port,
+                          strerror(server->bind_errno ? server->bind_errno : EADDRINUSE));
+    }
     return 0;
 }
 

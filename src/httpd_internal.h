@@ -100,6 +100,7 @@ typedef struct {
     int keep_alive_timeout;
     int max_keep_alive_requests;
     size_t max_body_size;
+    int bind_errno;
 } LuaServer;
 
 typedef struct {
@@ -120,6 +121,7 @@ typedef struct {
     int frame_queue_len;
     int owns_request;
     volatile int ws_cleaning_up;
+    int close_cb_running;
     /* RFC 7692 permessage-deflate (0 = not negotiated) */
     int ws_pmd;
     int ws_pmd_server_no_context_takeover;
@@ -174,6 +176,7 @@ void httpd_release_conn_guard(Request *request);
 void httpd_finish_metrics(Request *request, int status_code, size_t bytes_sent);
 void newtable_from_req(lua_State *L, struct evhttp_request *req, LuaServer *server);
 void set_connection_header(struct evhttp_request *req, LuaServer *server);
+int httpd_server_rebind(LuaServer *server);
 
 // ============================================================
 // httpd_metrics.c exports

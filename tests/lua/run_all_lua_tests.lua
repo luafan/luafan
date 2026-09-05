@@ -174,6 +174,7 @@ local test_files = {
     "test_orm_base.lua",                    -- ORM base adapter pattern with mock backend
     "test_reliable_udp.lua",                -- Reliable UDP transport data structures
     "test_httpd_comprehensive.lua",        -- Comprehensive httpd tests (request/response/keepalive/WebSocket)
+    "test_httpd_lifecycle_regressions.lua", -- HTTPD lifecycle, metrics, methods, and params regressions
     "test_http_client.lua",                -- HTTP client tests with local httpd (creates server, ASan leak)
     -- Add more test files here as they are completed
 }

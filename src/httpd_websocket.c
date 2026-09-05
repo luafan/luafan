@@ -624,6 +624,7 @@ void ws_connection_cleanup(Request *request) {
         return;
     }
 
+    httpd_finish_metrics(request, 101, 0);
     ws_frame_queue_clear(request);
     ws_pmd_end_streams(request);
 
@@ -916,6 +917,7 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         request->is_websocket = 1;
         request->ws_state = WS_STATE_OPEN;
         request->ws_bev = bev;
+        request->response_code = 101;
         request->reply_status = REPLY_STATUS_REPLYED;
         request->mainthread = utlua_mainthread(L);
 

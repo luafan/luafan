@@ -119,7 +119,7 @@ void die_most_horribly_from_openssl_error(lua_State *L, const char *func) {
     luaL_error(L, "%s failed: %s", func, buf);
 }
 
-void server_setup_certs(lua_State *L, SSL_CTX *ctx, const char *certificate_chain, const char *private_key) {
+int server_setup_certs(SSL_CTX *ctx, const char *certificate_chain, const char *private_key) {
 #if DEBUG
     printf("Loading certificate chain from '%s'\n"
            "and private key from '%s'\n",
@@ -127,14 +127,21 @@ void server_setup_certs(lua_State *L, SSL_CTX *ctx, const char *certificate_chai
 #endif
 
     if (1 != SSL_CTX_use_certificate_chain_file(ctx, certificate_chain)) {
-        die_most_horribly_from_openssl_error(L, "SSL_CTX_use_certificate_chain_file");
+        ERR_clear_error();
+        return 0;
     }
 
-    if (1 != SSL_CTX_use_PrivateKey_file(ctx, private_key, SSL_FILETYPE_PEM))
-        die_most_horribly_from_openssl_error(L, "SSL_CTX_use_PrivateKey_file");
+    if (1 != SSL_CTX_use_PrivateKey_file(ctx, private_key, SSL_FILETYPE_PEM)) {
+        ERR_clear_error();
+        return 0;
+    }
 
-    if (1 != SSL_CTX_check_private_key(ctx))
-        die_most_horribly_from_openssl_error(L, "SSL_CTX_check_private_key");
+    if (1 != SSL_CTX_check_private_key(ctx)) {
+        ERR_clear_error();
+        return 0;
+    }
+
+    return 1;
 }
 #endif
 
