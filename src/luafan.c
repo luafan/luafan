@@ -11,9 +11,7 @@
 #include <unistd.h>
 
 // Global Lua lock suspend/resume around the blocking main-thread event loop.
-// Provided by the embedder's lua53 user lock hook (luauser.c in LuanMac / CLI).
-// Weak: standalone luafan (no user lock hook) links these as NULL and skips the
-// suspend/resume — there is no worker lock to manage in that configuration.
+// Weak symbols keep luafan usable by embedders without the optional lock hook.
 __attribute__((weak)) int LuaLockSuspendForLoop(void);
 __attribute__((weak)) void LuaLockResumeAfterLoop(int depth);
 
@@ -110,9 +108,7 @@ LUA_API int luafan_start(lua_State *L) {
     // the normal lock/unlock pairs inside each resume. Restore on exit so the
     // enclosing resume's trailing unlock stays balanced.
     //
-    // Weak symbols: only the embedder that provides the lua53 user lock hook
-    // (LuanMac / CLI) links these; standalone luafan resolves them to NULL and
-    // runs unchanged (no worker lock to manage there).
+    // Weak symbols: embedders without the lock hook resolve them to NULL.
     int __lua_lock_depth = 0;
     if (LuaLockSuspendForLoop) {
         __lua_lock_depth = LuaLockSuspendForLoop();

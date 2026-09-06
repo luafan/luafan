@@ -33,7 +33,8 @@ static _Atomic unsigned int next_worker_idx = 0;
 
 static _Thread_local int g_current_worker_id = -1;
 
-// Provided by the embedder's lua53 user lock hook (luauser.c in LuanMac / CLI).
+// Provided by the embedder's lua53 user lock hook (luauser.c).
+// Weak linkage keeps standalone luafan builds valid without the hook.
 __attribute__((weak)) void LuaLockEnable(void);
 
 static pthread_once_t event_threads_once = PTHREAD_ONCE_INIT;
@@ -73,10 +74,6 @@ int event_mgr_workers_init(int count) {
         count = EVENT_MGR_MAX_WORKERS;
     }
 
-    // Enable the embedder's global Lua lock BEFORE any worker thread exists, so
-    // every thread that could ever touch the shared lua_State observes locking
-    // as enabled. Without workers the lock stays off (see luauser.c). No-op in
-    // standalone luafan builds where LuaLockEnable is not linked.
     if (LuaLockEnable) {
         LuaLockEnable();
     }
@@ -312,14 +309,19 @@ static void cleanup_dnsbase() {
 extern void cleanup_http_curl(void);
 
 // Optional: luacurlimp.c (curlimp) when linked into the embedder (LuanMac /
-// Docker). Standalone luafan has no curlimp — weak symbol is NULL, skip.
+// Docker). PanPipe does not integrate curlimp, so its cleanup hook is disabled
+// with LUA_NO_CURLIMP and the weak symbol is omitted from this build.
 // Same lifetime rules as cleanup_http_curl: base + Lua still alive.
+#ifndef LUA_NO_CURLIMP
 __attribute__((weak)) void cleanup_curlimp(void);
+#endif
 
 static void cleanup_curl_clients(void) {
     cleanup_http_curl();
+#ifndef LUA_NO_CURLIMP
     if (cleanup_curlimp)
         cleanup_curlimp();
+#endif
 }
 
 static void cleanup_eventbase() {
