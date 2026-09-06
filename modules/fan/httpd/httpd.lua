@@ -134,7 +134,16 @@ local function readheader(ctx, input)
             break
         elseif not breakflag then
             return false, #line + 2
+        elseif breakflag ~= "\r\n" then
+            return false, -1
         else
+            ctx.header_bytes = (ctx.header_bytes or 0) + #line + 2
+            if ctx.header_bytes > 32768 then
+                ctx.header_complete = true
+                ctx._http_error = {code = 431, message = "Request Header Fields Too Large"}
+                ctx._close_after_error = true
+                return true
+            end
             if #(line) == 0 then
                 ctx.header_complete = true
 
@@ -142,18 +151,27 @@ local function readheader(ctx, input)
                 if ctx.version == "1.1" and not ctx.headers["host"] then
                     ctx._http_error = {code = 400, message = "Bad Request", details = "Missing Host header"}
                 end
+                if ctx.headers["transfer-encoding"] then
+                    ctx._http_error = {code = 501, message = "Not Implemented", details = "Transfer-Encoding is not supported"}
+                    ctx._close_after_error = true
+                elseif type(ctx.headers["content-length"]) == "table" then
+                    ctx._http_error = {code = 400, message = "Bad Request", details = "Duplicate Content-Length"}
+                    ctx._close_after_error = true
+                elseif ctx.headers["content-length"] and
+                    not ctx.headers["content-length"]:match("^(0|[1-9][0-9]*)$") then
+                    ctx._http_error = {code = 400, message = "Bad Request", details = "Invalid Content-Length"}
+                    ctx._close_after_error = true
+                elseif ctx.headers["content-length"] and
+                    tonumber(ctx.headers["content-length"]) > (config.max_content_length or 10485760) then
+                    ctx._http_error = {code = 413, message = "Content Too Large"}
+                    ctx._close_after_error = true
+                end
             else
                 if ctx.first_line then
                     -- RFC 7230: header-field = field-name ":" OWS field-value OWS
                     local k, v = string.match(line, "^([!#$%%&'*+%-%.0-9A-Z^_`a-z|~]+):[ \t]*(.*)")
-                    if not k or not v then
-                        -- Record invalid headers but continue processing
-                        ctx.invalid_headers = (ctx.invalid_headers or 0) + 1
-                        if ctx.invalid_headers > 100 then -- RFC 7230: reasonable limit
-                            ctx._http_error = {code = 400, message = "Bad Request", details = "Too many invalid headers"}
-                            return true
-                        end
-                        -- Skip this line but continue processing
+                    if not k or not v or v:find("[\001-\010\014\016-\037\127]") then
+                        return false, -1
                     else
                         -- RFC 7230: Remove trailing whitespace from field value
                         v = v:gsub("[ \t]+$", "")
@@ -163,7 +181,9 @@ local function readheader(ctx, input)
 
                         -- Check for oversized header value
                         if #v > 8192 then -- Reasonable limit
-                            ctx._http_error = {code = 400, message = "Bad Request", details = "Header value too large"}
+                            ctx.header_complete = true
+                            ctx._http_error = {code = 431, message = "Request Header Fields Too Large"}
+                            ctx._close_after_error = true
                             return true
                         end
 
@@ -180,10 +200,10 @@ local function readheader(ctx, input)
                     end
                 else
                     -- RFC 7230: Request-Line = Method SP Request-URI SP HTTP-Version CRLF
-                    ctx.method, ctx.path, ctx.version = string.match(line, "^([A-Z]+) ([^ ]+) HTTP/([0-9]+%.[0-9]+)$")
+                    ctx.method, ctx.path, ctx.version = string.match(line, "^([!#$%%&'*+%-%.0-9A-Z^_`a-z|~]+) ([^ \\t]+) HTTP/([0-9]+%.[0-9]+)$")
                     if not ctx.method or not ctx.path or not ctx.version then
-                        -- RFC 7230: Invalid request line should result in 400 Bad Request
-                        return false, "400 Bad Request"
+                        -- RFC 7230: Invalid request line should result in 400 Bad Request.
+                        return false, -1
                     end
 
                     -- Validate HTTP version (only 1.0 and 1.1 supported)
@@ -212,6 +232,30 @@ local function readheader(ctx, input)
 end
 
 local context_mt = {}
+
+local function response_body_forbidden(ctx, code)
+    return ctx.method == "HEAD" or code >= 100 and code < 200 or code == 204 or code == 304
+end
+
+local function connection_has_token(value, token)
+    if type(value) == "table" then
+        for _, item in ipairs(value) do
+            if connection_has_token(item, token) then
+                return true
+            end
+        end
+        return false
+    end
+    if type(value) ~= "string" then
+        return false
+    end
+    for item in value:gmatch("[^,]+") do
+        if item:gsub("^[ \\t]+", ""):gsub("[ \\t]+$", ""):lower() == token then
+            return true
+        end
+    end
+    return false
+end
 
 function context_reply_fillheader(t, ctx, code, message)
     table.insert(t, string.format("HTTP/%s %d %s\r\n", ctx.version or "1.1", code, message))
@@ -266,6 +310,9 @@ function context_mt:reply_start(code, message)
     local t = {}
     context_reply_fillheader(t, self, code, message)
 
+    if tonumber(self.version) < 1.1 or self.method == "HEAD" then
+        error("chunked responses require an HTTP/1.1 non-HEAD request")
+    end
     table.insert(t, "Transfer-Encoding: chunked\r\n")
     table.insert(t, "\r\n")
 
@@ -329,13 +376,18 @@ function context_mt:available()
 end
 
 function context_mt:read()
-    if self:available() <= 0 then
+    local remaining = self:available()
+    if remaining <= 0 then
         return nil
     end
 
     local input = self.apt:receive()
     if input then
-        local buff = input:GetBytes()
+        local take = math.min(remaining, input:available())
+        if take <= 0 then
+            return nil
+        end
+        local buff = input:GetBytes(take)
         self.read_offset = self.read_offset + #(buff)
         return buff
     end
@@ -352,11 +404,14 @@ function context_mt:reply(code, message, body)
     local t = {}
     local compressed = false
 
-    if body and #body > 0 then
+    local body_length = body and #body or 0
+    local send_body = not response_body_forbidden(self, code)
+    if body and body_length > 0 and send_body then
         body, compressed = self:compress_body(body)
         if compressed then
             self:addheader("Content-Encoding", "gzip")
             self._content_encoding_set = true
+            body_length = #body
         end
     else
         self._no_gzip = true
@@ -364,13 +419,13 @@ function context_mt:reply(code, message, body)
 
     context_reply_fillheader(t, self, code, message)
 
-    if not self._content_length_set then
-        table.insert(t, string.format("Content-Length: %d\r\n", body and #body or 0))
+    if not self._content_length_set and code >= 200 and code ~= 204 and code ~= 304 then
+        table.insert(t, string.format("Content-Length: %d\r\n", body_length))
     end
 
     table.insert(t, "\r\n")
 
-    if body then
+    if send_body and body then
         table.insert(t, body)
     end
 
@@ -378,6 +433,9 @@ function context_mt:reply(code, message, body)
 end
 
 function context_mt:addheader(k, v)
+    if type(k) ~= "string" or type(v) ~= "string" or k:find("[\\r\\n]") or v:find("[\\r\\n]") then
+        error("invalid response header")
+    end
     local lk = k:lower()
     if lk == "content-type" then
         self._content_type_set = true
@@ -391,15 +449,14 @@ end
 
 -- Keep-Alive Support
 function context_mt:should_keep_alive()
-    -- HTTP/1.1 defaults to keep-alive
+    -- HTTP/1.1 defaults to keep-alive, unless the Connection token says close.
     if tonumber(self.version) >= 1.1 then
-        local connection = self.headers["connection"]
-        return not connection or connection:lower() ~= "close"
+        return not connection_has_token(self.headers["connection"], "close")
     end
 
-    -- HTTP/1.0 requires explicit Connection: keep-alive
-    local connection = self.headers["connection"]
-    return connection and connection:lower() == "keep-alive"
+    -- HTTP/1.0 requires an explicit keep-alive token.
+    return connection_has_token(self.headers["connection"], "keep-alive") and
+        not connection_has_token(self.headers["connection"], "close")
 end
 
 function context_mt:set_keep_alive_headers()
@@ -538,9 +595,12 @@ end
 
 -- Security validation middleware
 local function security_middleware(ctx, next)
-    -- Rate limiting check
+    -- Rate limiting check. The middleware must complete the response itself;
+    -- merely setting _http_error would leave the request pending.
     if not ctx:check_rate_limit() then
-        return -- Error already set in context
+        local err = ctx._http_error
+        ctx:reply(err.code, err.message, err.details or "")
+        return
     end
 
     -- Request size validation (already handled in content_length parsing)
@@ -793,9 +853,10 @@ local function onaccept(apt, onservice)
         if not context.header_complete then
             local status, expect = readheader(context, input)
             if not status then
-                if expect then
+                if expect and expect > 0 then
                     input = apt:receive(expect)
                 else
+                    apt:send("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
                     apt:close()
                     return
                 end
@@ -808,8 +869,9 @@ local function onaccept(apt, onservice)
                 local err = context._http_error
                 print(string.format("HTTP Protocol Error: %d %s", err.code, err.message))
                 context:reply(err.code, err.message, err.details or "")
-                if tonumber(context.version) < 1.1 then
+                if context._close_after_error or not context:should_keep_alive() then
                     apt:close()
+                    return
                 end
                 context._http_error = nil -- Clear error
                 goto continue
