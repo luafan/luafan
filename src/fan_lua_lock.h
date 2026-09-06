@@ -81,8 +81,8 @@ void LuaLockEnable(void);
 int  LuaLockSuspendForLoop(void);
 void LuaLockResumeAfterLoop(int depth);
 
-/* Depth accessors used by luafan's fan_cb_setup() to save/restore the
- * thread-local nesting depth around a protected pcall. */
+/* Depth accessors used by luafan's fan_cb_setup() to reconcile both the
+ * thread-local depth and the recursive mutex ownership count. */
 int  LuaLockDepthGet(void);
 void LuaLockDepthSet(int depth);
 

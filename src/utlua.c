@@ -40,8 +40,6 @@ lua_State *utlua_mainthread(lua_State *L) {
 }
 
 int _utlua_resume(lua_State *co, lua_State *from, int count) {
-    lua_lock(co);
-
 #if (LUA_VERSION_NUM >= 504)
     int nresults;
     int status = lua_resume(co, from, count, &nresults);
@@ -65,7 +63,6 @@ int _utlua_resume(lua_State *co, lua_State *from, int count) {
         fprintf(stderr, "Error: %s\n", lua_tostring(co, -1));
     }
 
-    lua_unlock(co);
 
     return status;
 }

@@ -151,6 +151,55 @@ TEST_CASE(test_utlua_coroutine_resume) {
     lua_close(L);
 }
 
+/* Test repeated coroutine yields through the real resume wrapper. */
+TEST_CASE(test_utlua_resume_repeated_yield) {
+    lua_State *L = luaL_newstate();
+    TEST_ASSERT_NOT_NULL(L);
+    luaL_openlibs(L);
+
+    lua_State *co = lua_newthread(L);
+    TEST_ASSERT_NOT_NULL(co);
+    int load_result = luaL_loadstring(co,
+        "for i = 1, 3 do coroutine.yield(i) end return 9");
+    TEST_ASSERT_EQUAL(LUA_OK, load_result);
+
+    for (int expected = 1; expected <= 3; expected++) {
+        int status = _utlua_resume(co, L, 0);
+        TEST_ASSERT_EQUAL(LUA_YIELD, status);
+        TEST_ASSERT_EQUAL(1, lua_gettop(co));
+        TEST_ASSERT_EQUAL(expected, (int)lua_tointeger(co, -1));
+        lua_pop(co, 1);
+    }
+
+    int status = _utlua_resume(co, L, 0);
+    TEST_ASSERT_EQUAL(LUA_OK, status);
+    TEST_ASSERT_EQUAL(1, lua_gettop(co));
+    TEST_ASSERT_EQUAL(9, (int)lua_tointeger(co, -1));
+    lua_pop(co, 1);
+    lua_pop(L, 1);
+    lua_close(L);
+}
+
+/* Test that an error returned by resume does not require an outer lock pair. */
+TEST_CASE(test_utlua_resume_error) {
+    lua_State *L = luaL_newstate();
+    TEST_ASSERT_NOT_NULL(L);
+    luaL_openlibs(L);
+
+    lua_State *co = lua_newthread(L);
+    TEST_ASSERT_NOT_NULL(co);
+    int load_result = luaL_loadstring(co, "error('resume regression')");
+    TEST_ASSERT_EQUAL(LUA_OK, load_result);
+
+    int status = _utlua_resume(co, L, 0);
+    TEST_ASSERT_EQUAL(LUA_ERRRUN, status);
+    TEST_ASSERT_TRUE(lua_gettop(co) >= 1);
+    TEST_ASSERT_NOT_NULL(lua_tostring(co, -1));
+
+    lua_pop(L, 1);
+    lua_close(L);
+}
+
 /* Test resume function pointer setting */
 TEST_CASE(test_utlua_resume_function_pointer) {
     // Test that we can get the current resume function
@@ -327,6 +376,8 @@ TEST_SUITE_BEGIN(utlua)
     TEST_SUITE_ADD(test_utlua_socket_utilities_error_cases)
     TEST_SUITE_ADD(test_utlua_lua_state_management)
     TEST_SUITE_ADD(test_utlua_coroutine_resume)
+    TEST_SUITE_ADD(test_utlua_resume_repeated_yield)
+    TEST_SUITE_ADD(test_utlua_resume_error)
     TEST_SUITE_ADD(test_utlua_resume_function_pointer)
 #if FAN_HAS_OPENSSL
     TEST_SUITE_ADD(test_utlua_openssl_integration)
@@ -343,6 +394,8 @@ TEST_SUITE_ADD_NAME(test_utlua_socket_utilities)
 TEST_SUITE_ADD_NAME(test_utlua_socket_utilities_error_cases)
 TEST_SUITE_ADD_NAME(test_utlua_lua_state_management)
 TEST_SUITE_ADD_NAME(test_utlua_coroutine_resume)
+TEST_SUITE_ADD_NAME(test_utlua_resume_repeated_yield)
+TEST_SUITE_ADD_NAME(test_utlua_resume_error)
 TEST_SUITE_ADD_NAME(test_utlua_resume_function_pointer)
 #if FAN_HAS_OPENSSL
 TEST_SUITE_ADD_NAME(test_utlua_openssl_integration)

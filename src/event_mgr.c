@@ -31,10 +31,9 @@ static struct event_worker workers[EVENT_MGR_MAX_WORKERS];
 static int num_workers = 0;
 static _Atomic unsigned int next_worker_idx = 0;
 
+static _Thread_local int g_current_worker_id = -1;
+
 // Provided by the embedder's lua53 user lock hook (luauser.c in LuanMac / CLI).
-// Turns the global Lua lock ON before any worker thread is spawned. Weak:
-// standalone luafan built against a stock Lua (lua_lock is a no-op there) links
-// this as NULL, so we skip it — there is no user lock to enable in that build.
 __attribute__((weak)) void LuaLockEnable(void);
 
 static pthread_once_t event_threads_once = PTHREAD_ONCE_INIT;
@@ -51,6 +50,7 @@ static void event_mgr_enable_thread_support(void) {
 
 static void *worker_thread_func(void *arg) {
     struct event_worker *w = (struct event_worker *)arg;
+    g_current_worker_id = w->id;
     // Block SIGPIPE on worker threads
     sigset_t set;
     sigemptyset(&set);
@@ -193,6 +193,10 @@ int event_mgr_next_worker(void) {
 
 int event_mgr_worker_count(void) {
     return num_workers;
+}
+
+int event_mgr_current_worker_id(void) {
+    return g_current_worker_id;
 }
 
 struct event_base *event_mgr_base() {

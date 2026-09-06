@@ -32,5 +32,6 @@ struct event_base *event_mgr_worker_base(int worker_id);
 struct evdns_base *event_mgr_worker_dnsbase(int worker_id);
 int event_mgr_next_worker(void);
 int event_mgr_worker_count(void);
+int event_mgr_current_worker_id(void);
 
 #endif
