@@ -28,6 +28,7 @@ typedef struct {
     int onDisconnectedRef;
 
     lua_State *mainthread;
+    int worker_id;
 
     struct event *stdout_ev;
     struct event *stderr_ev;
@@ -222,6 +223,26 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
         capture_stderr = lua_toboolean(L, -1);
     }
     lua_pop(L, 1);
+
+    int worker_id = -1;
+    lua_getfield(L, 1, "worker");
+    int worker_specified = !lua_isnil(L, -1);
+    if (worker_specified) {
+        if (!lua_isinteger(L, -1)) {
+            lua_pop(L, 1);
+            return luaL_error(L, "popen worker must be an integer");
+        }
+        int w = (int)lua_tointeger(L, -1);
+        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
+            lua_pop(L, 1);
+            return luaL_error(L, "popen worker is unavailable");
+        }
+        worker_id = w;
+    }
+    lua_pop(L, 1);
+    if (!worker_specified && event_mgr_worker_count() > 0) {
+        worker_id = event_mgr_next_worker();
+    }
 
     // Optional dedicated process group lets close() terminate shell descendants.
     int process_group = 0;
@@ -433,6 +454,7 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     p->process_group = process_group;
     p->closed = 0;
     p->mainthread = utlua_mainthread(L);
+    p->worker_id = worker_id;
 
     luaL_getmetatable(L, LUA_POPEN_TYPE);
     lua_setmetatable(L, -2);
@@ -441,14 +463,19 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     SET_FUNC_REF_FROM_TABLE(L, p->onStderrRef, 1, "onstderr")
     SET_FUNC_REF_FROM_TABLE(L, p->onDisconnectedRef, 1, "ondisconnected")
 
+    struct event_base *popen_base =
+        (p->worker_id >= 0 && event_mgr_worker_count() > 0)
+            ? event_mgr_worker_base(p->worker_id)
+            : event_mgr_base();
+
     // Register read events with separate callbacks
     if (p->onReadRef != LUA_NOREF) {
-        p->stdout_ev = event_new(event_mgr_base(), p->stdout_fd, EV_PERSIST | EV_READ, popen_stdout_cb, p);
+        p->stdout_ev = event_new(popen_base, p->stdout_fd, EV_PERSIST | EV_READ, popen_stdout_cb, p);
         event_add(p->stdout_ev, NULL);
     }
 
     if (capture_stderr && p->onStderrRef != LUA_NOREF) {
-        p->stderr_ev = event_new(event_mgr_base(), p->stderr_fd, EV_PERSIST | EV_READ, popen_stderr_cb, p);
+        p->stderr_ev = event_new(popen_base, p->stderr_fd, EV_PERSIST | EV_READ, popen_stderr_cb, p);
         event_add(p->stderr_ev, NULL);
     }
 

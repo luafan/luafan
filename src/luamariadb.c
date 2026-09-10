@@ -1,4 +1,5 @@
 #include "mariadb/luamariadb_common.h"
+#include "mariadb/luamariadb_close.h"
 
 // Global variable definition
 int LONG_DATA = 0; // &LONG_DATA used as mariadb const.
@@ -12,21 +13,25 @@ static void wait_for_status_locked_cb(int fd, short event, void *_userdata)
   lua_unlock(L);
 }
 
-void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
-                     int status, event_callback_fn callback, int extra)
+int mariadb_push_wait_error(lua_State *L)
 {
-  // Refuse to schedule new wait events on a connection that has been
-  // marked closed (or is in the middle of closing). Without this gate
-  // a *_cont callback could re-arm itself just after conn_close_start
-  // flipped ctx->closed, leaving an event holding a dangling DB_CTX*
-  // after the embedder runs lua_close.
-  if (ctx == NULL || ctx->closed) {
-    return;
+  lua_pushnil(L);
+  lua_pushliteral(L, "failed to register async wait event");
+  return 2;
+}
+
+int wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
+                    int status, event_callback_fn callback, int extra)
+{
+  // Refuse to schedule new wait events on a closed context, except for the
+  // connection close state machine, which marks ctx closed before yielding.
+  if (ctx == NULL || (ctx->closed && callback != conn_close_cont)) {
+    return -1;
   }
 
   DB_STATUS *bag = malloc(sizeof(DB_STATUS));
   if (!bag) {
-    return;
+    return -1;
   }
   bag->data = data;
   bag->L = L;
@@ -61,8 +66,21 @@ void wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
   else
     ptv = NULL;
 
-  bag->event = event_new(event_mgr_base(), fd, wait_event, wait_for_status_locked_cb, bag);
-  event_add(bag->event, ptv);
+  struct event_base *base = event_mgr_base();
+  if (ctx->worker_id >= 0 && event_mgr_worker_count() > 0) {
+    base = event_mgr_worker_base(ctx->worker_id);
+  }
+  bag->event = event_new(base, fd, wait_event, wait_for_status_locked_cb, bag);
+  if (!bag->event) {
+    free(bag);
+    return -1;
+  }
+  if (event_add(bag->event, ptv) != 0) {
+    event_free(bag->event);
+    free(bag);
+    return -1;
+  }
+  return 0;
 }
 
 DB_CTX *getconnection(lua_State *L)

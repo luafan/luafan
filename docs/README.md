@@ -10,6 +10,8 @@ It's easy to write several api invocations one by one without any callback.
 * [Quick Guide](guide.md)
 * [Setup](setup.md)
 * [Sample](sample.md)
+* [Threading & Worker Model](threading-model.md) — event-worker pool, HTTP connection distribution, WebSocket cross-thread semantics
+* [Threading Fix Plan](threading-fix-plan.md) — planned remediation for threading-model issues (R1–R8)
 
 ## Non-blocking Modules
 * [fan](api/fan.md) common module.

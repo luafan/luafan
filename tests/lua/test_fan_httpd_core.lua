@@ -53,6 +53,50 @@ suite:test("basic_server_creation", function()
     TestFramework.assert_type(server_info.serv.rebind, "function")
 end)
 
+-- Test server with explicit main-base affinity
+suite:test("worker_affinity_main_base", function()
+    local server_info = httpd.bind({
+        host = "127.0.0.1",
+        port = 0,
+        worker = -1,
+        onService = function(req, resp)
+            resp:reply(200, "OK", "Main base affinity")
+        end
+    })
+
+    TestFramework.assert_not_nil(server_info)
+    TestFramework.assert_true(server_info.port > 0)
+end)
+
+-- Test worker zero semantics without assuming the process configuration.
+suite:test("worker_zero_semantics", function()
+    local worker_count = fan.worker_count()
+    local default_ok, default_server = pcall(httpd.bind, {
+        host = "127.0.0.1",
+        port = 0,
+        onService = function(req, resp)
+            resp:reply(200, "OK", "Worker zero default")
+        end
+    })
+    TestFramework.assert_true(default_ok)
+    TestFramework.assert_not_nil(default_server)
+
+    local explicit_ok, explicit_server = pcall(httpd.bind, {
+        host = "127.0.0.1",
+        port = 0,
+        worker = 0,
+        onService = function(req, resp)
+            resp:reply(200, "OK", "Worker zero explicit")
+        end
+    })
+    if worker_count == 0 then
+        TestFramework.assert_true(not explicit_ok)
+    else
+        TestFramework.assert_true(explicit_ok)
+        TestFramework.assert_not_nil(explicit_server)
+    end
+end)
+
 -- Test server with default parameters
 suite:test("server_default_params", function()
     local server_info = httpd.bind({

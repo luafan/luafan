@@ -93,6 +93,45 @@ suite:test("http_get_request", function()
     end
 end)
 
+-- Test Lua HTTP client worker affinity passthrough on the main event base.
+suite:test("http_get_worker_main_base", function()
+    local server = httpd.bind({
+        host = "127.0.0.1",
+        port = 0,
+        worker = -1,
+        onService = function(req, resp)
+            resp:reply(200, "OK", "Worker-aware Lua HTTP")
+        end
+    })
+
+    TestFramework.assert_not_nil(server)
+    TestFramework.assert_true(server.port > 0)
+
+    local result = nil
+    local done = false
+    coroutine.wrap(function()
+        fan.sleep(5)
+        if not done then
+            done = true
+            fan.loopbreak()
+        end
+    end)()
+    coroutine.wrap(function()
+        local ok, res = pcall(http.get, {
+            url = string.format("http://127.0.0.1:%d/", server.port),
+            worker = -1,
+        })
+        result = res
+        done = true
+        fan.loopbreak()
+    end)()
+    fan.loop()
+
+    TestFramework.assert_not_nil(result)
+    TestFramework.assert_equal(200, result.responseCode)
+    TestFramework.assert_equal("Worker-aware Lua HTTP", result.body)
+end)
+
 -- Test HTTP POST request
 suite:test("http_post_request", function()
     local server = httpd.bind({

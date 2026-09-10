@@ -3,6 +3,25 @@
 #include "httpd_internal.h"
 #include <errno.h>
 #include <string.h>
+#include <stdlib.h>
+
+/* Owner-thread teardown job (see docs/threading-fix-plan.md Phase 1).
+ * One job per evhttp instance; slot points at the server field that owns
+ * the instance (server->httpd or server->workers[i].httpd). */
+typedef struct {
+    LuaServer *server;
+    struct evhttp **slot;
+    int owner_id; /* -1 = main base, >= 0 = worker id */
+} httpd_teardown_job_t;
+
+static void httpd_teardown_job_cb(evutil_socket_t fd, short what, void *arg);
+static void httpd_drain_check_cb(evutil_socket_t fd, short what, void *arg);
+static void httpd_server_teardown_instance(LuaServer *server,
+                                           struct evhttp **slot, int owner_id);
+static void httpd_server_teardown_done(LuaServer *server);
+static void httpd_server_finalize(LuaServer *server);
+static void httpd_accept_check_resume(LuaServer *server);
+static void httpd_resume_accept_cb(evutil_socket_t fd, short what, void *arg);
 
 const MethodMap methodMap[] = {
     {"GET", EVHTTP_REQ_GET},       {"POST", EVHTTP_REQ_POST},
@@ -88,10 +107,16 @@ void newtable_from_req(lua_State *L, struct evhttp_request *req, LuaServer *serv
     memset(request, 0, sizeof(Request));
     request->req = req;
     request->server = server;
+    request->worker_id = event_mgr_current_worker_id();
+    pthread_mutex_init(&request->ws_mutex, NULL);
+    request->ws_mutex_initialized = 1;
+    request->ws_pending_sends = 0;
     request->reply_status = REPLY_STATUS_NONE;
     request->is_websocket = 0;
     request->ws_state = WS_STATE_CONNECTING;
     request->ws_bev = NULL;
+    request->ws_deferred_bev = NULL;
+    request->ws_cleanup_requested = 0;
     request->mainthread = utlua_mainthread(L);
     request->_ref_ = LUA_NOREF;
     request->self_ref = LUA_NOREF;
@@ -337,22 +362,122 @@ static const struct luaL_Reg evhttp_request_lib[] = {
 // Server GC
 // ============================================================
 
-LUA_API int lua_evhttp_server_gc(lua_State *L) {
-    LuaServer *server = (LuaServer *)luaL_checkudata(L, 1, LUA_EVHTTP_SERVER_TYPE);
-    CLEAR_REF(L, server->onServiceRef)
+/* ============================================================
+ * Server lifecycle: asynchronous, drain-aware teardown
+ * (see docs/threading-fix-plan.md Phase 1)
+ * ============================================================ */
 
-    if (server->httpd) {
-        if (server->boundsocket) {
-            evhttp_del_accept_socket(server->httpd, server->boundsocket);
-            server->boundsocket = NULL;
+/* Attach a live WebSocket request to its server's tracking structures.
+ * Returns 0 on success, -1 when the server is no longer live (caller
+ * must abort the upgrade / close the connection). Owner thread. */
+int httpd_server_ws_attach(Request *request) {
+    if (!request || !request->server) return -1;
+    LuaServer *server = request->server;
+    int rc = -1;
+    pthread_mutex_lock(&server->accept_mutex);
+    if (!request->ws_linked &&
+        (httpd_life_state_t)atomic_load(&server->life_state) == HTTPD_LIVE) {
+        request->ws_next = server->ws_list;
+        request->ws_prev = NULL;
+        if (server->ws_list) {
+            server->ws_list->ws_prev = request;
         }
+        server->ws_list = request;
+        request->ws_linked = 1;
+        int idx = request->worker_id + 1;
+        if (server->instance_ws && idx >= 0 && idx < server->instance_ws_len) {
+            server->instance_ws[idx]++;
+        }
+        rc = 0;
+    }
+    pthread_mutex_unlock(&server->accept_mutex);
+    return rc;
+}
 
-        if (server->httpd) {
-            evhttp_free(server->httpd);
-            server->httpd = NULL;
+/* Detach a WebSocket request whose deferred cleanup finished. Idempotent;
+ * safe to call when the request was never attached. Owner thread. */
+void httpd_server_ws_detach(Request *request) {
+    if (!request || !request->server) return;
+    LuaServer *server = request->server;
+    pthread_mutex_lock(&server->accept_mutex);
+    if (request->ws_linked) {
+        if (request->ws_prev) {
+            request->ws_prev->ws_next = request->ws_next;
+        } else {
+            server->ws_list = request->ws_next;
+        }
+        if (request->ws_next) {
+            request->ws_next->ws_prev = request->ws_prev;
+        }
+        request->ws_next = NULL;
+        request->ws_prev = NULL;
+        request->ws_linked = 0;
+        int idx = request->worker_id + 1;
+        if (server->instance_ws && idx >= 0 && idx < server->instance_ws_len &&
+            server->instance_ws[idx] > 0) {
+            server->instance_ws[idx]--;
         }
     }
+    pthread_mutex_unlock(&server->accept_mutex);
+}
 
+static void httpd_finalize_job_cb(evutil_socket_t fd, short what, void *arg) {
+    (void)fd;
+    (void)what;
+    httpd_server_finalize((LuaServer *)arg);
+}
+
+static void httpd_server_teardown_done(LuaServer *server) {
+    int last = 0;
+    pthread_mutex_lock(&server->accept_mutex);
+    if (server->teardown_remaining > 0) {
+        server->teardown_remaining--;
+    }
+    last = (server->teardown_remaining == 0);
+    pthread_mutex_unlock(&server->accept_mutex);
+    if (!last) {
+        return;
+    }
+    /* Finalize on the main base rather than on whichever thread finished the
+     * last teardown job. The main-base FIFO then guarantees that every
+     * accept/resume job queued before this point has already run, so no bare
+     * LuaServer* is left behind when the userdata becomes collectable. */
+    if (event_mgr_worker_once_internal(-1, httpd_finalize_job_cb, server) != 0) {
+        LOG_ERROR_FMT("httpd finalize dispatch failed; resources retained until exit");
+    }
+}
+
+/* Runs on the thread of the last completed teardown job. Releases all
+ * native allocations and drops the Lua-side self pin so the userdata can
+ * be collected. The accept mutex itself is intentionally NOT destroyed
+ * (process-lifetime object; destroying it here would race late Lua calls
+ * such as rebind/close on other threads). */
+static void httpd_server_finalize(LuaServer *server) {
+    if (!server) return;
+    pthread_mutex_lock(&server->accept_mutex);
+    if (server->ws_list) {
+        LOG_WARN_FMT("httpd finalize with live WebSocket entries (leak path)");
+    }
+    if (server->pending_accepts != 0) {
+        LOG_WARN_FMT("httpd finalize with pending accepts=%u (leak path)",
+                     server->pending_accepts);
+    }
+    pthread_mutex_unlock(&server->accept_mutex);
+
+    if (server->workers) {
+        free(server->workers);
+        server->workers = NULL;
+    }
+    server->worker_count = 0;
+    if (server->instance_ws) {
+        free(server->instance_ws);
+        server->instance_ws = NULL;
+    }
+    if (server->instance_accepts) {
+        free(server->instance_accepts);
+        server->instance_accepts = NULL;
+    }
+    server->instance_ws_len = 0;
 #if FAN_HAS_OPENSSL
     if (server->ctx) {
         SSL_CTX_free(server->ctx);
@@ -361,8 +486,307 @@ LUA_API int lua_evhttp_server_gc(lua_State *L) {
 #endif
     free(server->host);
     server->host = NULL;
-    lua_pop(L, 1);
+    atomic_store(&server->life_state, HTTPD_GONE);
 
+    if (server->self_ref != LUA_NOREF && server->mainthread) {
+        lua_lock(server->mainthread);
+        if (server->self_ref != LUA_NOREF) {
+            luaL_unref(server->mainthread, LUA_REGISTRYINDEX, server->self_ref);
+            server->self_ref = LUA_NOREF;
+        }
+        lua_unlock(server->mainthread);
+    }
+}
+
+/* Owner-thread drain check. Re-arms itself while the instance still has
+ * attached WebSocket connections (their deferred cleanups run on this same
+ * loop and will drain the counter); once clear, frees the evhttp instance. */
+static void httpd_drain_check_cb(evutil_socket_t fd, short what, void *arg) {
+    httpd_teardown_job_t *job = (httpd_teardown_job_t *)arg;
+    (void)fd;
+    (void)what;
+    LuaServer *server = job->server;
+    struct evhttp **slot = job->slot;
+    int owner_id = job->owner_id;
+
+    if ((httpd_life_state_t)atomic_load(&server->life_state) != HTTPD_DRAINING) {
+        free(job);
+        return;
+    }
+
+    int idx = owner_id + 1;
+    pthread_mutex_lock(&server->accept_mutex);
+    unsigned int ws = (server->instance_ws && idx >= 0 && idx < server->instance_ws_len)
+                          ? server->instance_ws[idx] : 0;
+    unsigned int accepts =
+        (server->instance_accepts && idx >= 0 && idx < server->instance_ws_len)
+            ? server->instance_accepts[idx] : 0;
+    pthread_mutex_unlock(&server->accept_mutex);
+
+    if (ws > 0 || accepts > 0) {
+        /* Wait for deferred WebSocket cleanups and in-flight accept jobs that
+         * still hold a raw pointer to this evhttp instance. Re-arm with a small
+         * delay so a slow/wedged connection cannot busy-spin the owner loop. */
+        if (event_mgr_worker_once_internal_delay(owner_id, httpd_drain_check_cb, job, 5) == 0) {
+            return;
+        }
+        LOG_ERROR_FMT("httpd drain-check could not be rescheduled (owner=%d); "
+                      "resources retained until exit", owner_id);
+        free(job);
+        return;
+    }
+
+    struct evhttp *httpd = slot ? *slot : NULL;
+    if (slot) {
+        *slot = NULL;
+    }
+    if (httpd) {
+        /* Plain-HTTP connections still attached are force-closed here on the
+         * owner thread — no Lua can be running concurrently. WebSockets have
+         * all finished their deferred cleanup (counter == 0). */
+        evhttp_free(httpd);
+    }
+    free(job);
+    httpd_server_teardown_done(server);
+}
+
+/* Runs on the instance owner thread: stop accepting (listener instance),
+ * drain this owner's WebSockets, then arm the drain-check. */
+static void httpd_server_teardown_instance(LuaServer *server,
+                                           struct evhttp **slot, int owner_id) {
+    struct evhttp *httpd = slot ? *slot : NULL;
+    if (!httpd) {
+        httpd_server_teardown_done(server);
+        return;
+    }
+
+    pthread_mutex_lock(&server->accept_mutex);
+    if (server->boundsocket && slot == &server->httpd) {
+        /* If the main listener was paused above high-water (Phase 2), re-enable
+         * it before deleting so the delete path never operates on a disabled
+         * listener (a paused listener must not block the drain-check). */
+        if (server->listener_paused) {
+            struct evconnlistener *lev =
+                evhttp_bound_socket_get_listener(server->boundsocket);
+            if (lev) {
+                evconnlistener_enable(lev);
+            }
+            server->listener_paused = 0;
+        }
+        evhttp_del_accept_socket(httpd, server->boundsocket);
+        server->boundsocket = NULL;
+    }
+    pthread_mutex_unlock(&server->accept_mutex);
+
+    /* Drain this instance's WebSocket connections. ws_connection_cleanup is
+     * idempotent (CAS) and never touches Lua; the connections then progress
+     * through their deferred-cleanup path on this same loop. */
+    for (;;) {
+        Request *req = NULL;
+        pthread_mutex_lock(&server->accept_mutex);
+        for (Request *candidate = server->ws_list; candidate; candidate = candidate->ws_next) {
+            if (candidate->ws_linked && candidate->worker_id == owner_id &&
+                !candidate->ws_cleanup_requested) {
+                candidate->ws_cleanup_requested = 1;
+                req = candidate;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&server->accept_mutex);
+        if (!req) break;
+        ws_connection_cleanup(req);
+    }
+
+    httpd_teardown_job_t *job = calloc(1, sizeof(*job));
+    if (!job) {
+        LOG_ERROR_FMT("httpd teardown drain-check alloc failed (owner=%d)", owner_id);
+        return;
+    }
+    job->server = server;
+    job->slot = slot;
+    job->owner_id = owner_id;
+    /* Internal hand-off (see event_mgr.h): this arm runs on the owner thread
+     * and may happen while a shutdown already closed the user-level dispatch
+     * gate; the shutdown drain of that owner base still runs it. */
+    if (event_mgr_worker_once_internal(owner_id, httpd_drain_check_cb, job) != 0) {
+        free(job);
+        LOG_ERROR_FMT("httpd teardown drain-check dispatch failed (owner=%d); "
+                      "resources retained until exit", owner_id);
+    }
+}
+
+static void httpd_teardown_job_cb(evutil_socket_t fd, short what, void *arg) {
+    httpd_teardown_job_t *job = (httpd_teardown_job_t *)arg;
+    (void)fd;
+    (void)what;
+    httpd_server_teardown_instance(job->server, job->slot, job->owner_id);
+    free(job);
+}
+
+/* Queue an owner-thread teardown job for one evhttp instance. Never blocks:
+ * when the owner loop is unreachable the instance is left in place and the
+ * whole server stays pinned until process exit (fix-plan R7 leak path). */
+static void httpd_server_queue_teardown(LuaServer *server,
+                                        struct evhttp **slot, int owner_id) {
+    if (!slot || !*slot) {
+        httpd_server_teardown_done(server);
+        return;
+    }
+    if (event_mgr_is_current_owner(owner_id)) {
+        httpd_server_teardown_instance(server, slot, owner_id);
+        return;
+    }
+    if (!event_mgr_is_loop_running()) {
+        LOG_WARN_FMT("httpd teardown skipped: owner loop stopped (owner=%d); "
+                     "resources retained until exit", owner_id);
+        return;
+    }
+    httpd_teardown_job_t *job = calloc(1, sizeof(*job));
+    if (!job) {
+        LOG_ERROR_FMT("httpd teardown job alloc failed (owner=%d)", owner_id);
+        return;
+    }
+    job->server = server;
+    job->slot = slot;
+    job->owner_id = owner_id;
+    /* Internal hand-off: the drain check arms itself from the owner callback,
+     * so this dispatch must survive a shutdown that already closed the
+     * user-level gate (see event_mgr.h). */
+    if (event_mgr_worker_once_internal(owner_id, httpd_teardown_job_cb, job) != 0) {
+        free(job);
+        LOG_ERROR_FMT("httpd teardown dispatch failed (owner=%d); "
+                      "resources retained until exit", owner_id);
+    }
+}
+
+/* Request asynchronous teardown of the whole server. Non-blocking and safe
+ * from any thread; must NOT be called while holding the Lua lock with the
+ * intent to wait — it never waits. */
+void httpd_server_begin_destroy(LuaServer *server) {
+    if (!server) return;
+    pthread_mutex_lock(&server->accept_mutex);
+    if ((httpd_life_state_t)atomic_load(&server->life_state) != HTTPD_LIVE) {
+        pthread_mutex_unlock(&server->accept_mutex);
+        return;
+    }
+    atomic_store(&server->life_state, HTTPD_DRAINING);
+    server->accepting = 0;
+    server->teardown_remaining =
+        server->distribute_connections ? (unsigned int)(server->worker_count + 1) : 1u;
+    pthread_mutex_unlock(&server->accept_mutex);
+
+    if (server->distribute_connections) {
+        /* Main listener instance (owner = main base) + one per worker. */
+        httpd_server_queue_teardown(server, &server->httpd, -1);
+        for (int i = 0; i < server->worker_count; i++) {
+            httpd_server_queue_teardown(server, &server->workers[i].httpd, i);
+        }
+    } else {
+        /* Single instance: listener + connections on the selected base. */
+        int owner = (server->worker_specified && server->worker_id >= 0)
+                        ? server->worker_id : -1;
+        httpd_server_queue_teardown(server, &server->httpd, owner);
+    }
+}
+
+/* Bind-error path: the server was never exposed (no connections, listener
+ * absent or already detached), so synchronous release on the bind thread is
+ * safe. Marks GONE so a later __gc is a no-op. */
+static void httpd_server_free_after_bind_error(LuaServer *server) {
+    if (!server) return;
+    if (server->httpd) {
+        evhttp_free(server->httpd);
+        server->httpd = NULL;
+    }
+    server->boundsocket = NULL;
+    if (server->workers) {
+        for (int i = 0; i < server->worker_count; i++) {
+            if (server->workers[i].httpd) {
+                evhttp_free(server->workers[i].httpd);
+                server->workers[i].httpd = NULL;
+            }
+        }
+        free(server->workers);
+        server->workers = NULL;
+    }
+    server->worker_count = 0;
+    if (server->instance_ws) {
+        free(server->instance_ws);
+        server->instance_ws = NULL;
+    }
+    if (server->instance_accepts) {
+        free(server->instance_accepts);
+        server->instance_accepts = NULL;
+    }
+    server->instance_ws_len = 0;
+#if FAN_HAS_OPENSSL
+    if (server->ctx) {
+        SSL_CTX_free(server->ctx);
+        server->ctx = NULL;
+    }
+#endif
+    free(server->host);
+    server->host = NULL;
+    atomic_store(&server->life_state, HTTPD_GONE);
+}
+
+LUA_API int lua_evhttp_server_gc(lua_State *L) {
+    LuaServer *server = (LuaServer *)luaL_checkudata(L, 1, LUA_EVHTTP_SERVER_TYPE);
+    /* Idempotent re-entry after finalize released everything. */
+    if ((httpd_life_state_t)atomic_load(&server->life_state) == HTTPD_GONE) {
+        lua_pop(L, 1);
+        return 0;
+    }
+    /* Pin the userdata for the (possibly async, cross-thread) teardown.
+     * finalize drops the pin; until then the native block stays valid. */
+    lua_lock(L);
+    lua_pushvalue(L, 1);
+    server->self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_unlock(L);
+    CLEAR_REF(L, server->onServiceRef)
+    if ((httpd_life_state_t)atomic_load(&server->life_state) == HTTPD_LIVE) {
+        httpd_server_begin_destroy(server);
+    }
+    lua_pop(L, 1);
+    return 0;
+}
+
+/* Explicit, idempotent shutdown. Non-blocking: native teardown completes on
+ * the owner loops asynchronously (see fix-plan Phase 1). */
+LUA_API int lua_evhttp_server_close(lua_State *L) {
+    LuaServer *server = (LuaServer *)luaL_checkudata(L, 1, LUA_EVHTTP_SERVER_TYPE);
+    if ((httpd_life_state_t)atomic_load(&server->life_state) == HTTPD_LIVE) {
+        /* Keep the userdata alive until owner-thread teardown finishes. The
+         * pin is idempotent so repeated close calls do not leak registry refs. */
+        lua_lock(L);
+        if (server->self_ref == LUA_NOREF) {
+            lua_pushvalue(L, 1);
+            server->self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        }
+        lua_unlock(L);
+        CLEAR_REF(L, server->onServiceRef)
+        httpd_server_begin_destroy(server);
+    }
+    return 0;
+}
+
+/* Request data userdata finalizer (fix-plan Phase 3): destroy ws_mutex once
+ * the WebSocket connection is fully detached. The deferred-cleanup path
+ * guarantees ws_bev == NULL and the self/pin refs dropped before GC can run;
+ * a request collected with a live ws_bev would be a leak (log + retain). */
+static int lua_evhttp_request_data_gc(lua_State *L) {
+    Request *request = (Request *)luaL_checkudata(L, 1, LUA_EVHTTP_REQUEST_DATA_TYPE);
+    if (request->ws_mutex_initialized) {
+        pthread_mutex_lock(&request->ws_mutex);
+        struct bufferevent *bev = request->ws_bev;
+        pthread_mutex_unlock(&request->ws_mutex);
+        if (bev) {
+            LOG_WARN_FMT("WebSocket request collected with a live ws_bev (leak)");
+        } else {
+            pthread_mutex_destroy(&request->ws_mutex);
+            request->ws_mutex_initialized = 0;
+        }
+    }
     return 0;
 }
 
@@ -487,6 +911,9 @@ LUA_API int lua_evhttp_request_lookup(lua_State *L) {
     } else if (strcmp(p, "body") == 0) {
         request_push_body(L, 1);
         return 1;
+    } else if (strcmp(p, "worker_id") == 0) {
+        lua_pushinteger(L, request->worker_id);
+        return 1;
     } else if (strcmp(p, "remoteip") == 0) {
         char *address = NULL;
         ev_uint16_t port = 0;
@@ -527,6 +954,168 @@ static struct bufferevent *bevcb(struct event_base *base, void *arg) {
 #endif
 
 #endif
+
+static void httpd_configure_instance(LuaServer *server, struct evhttp *httpd,
+                                      void *tls_ctx) {
+    evhttp_set_timeout(httpd, server->keep_alive_timeout + 30);
+    evhttp_set_allowed_methods(httpd,
+        EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_HEAD |
+        EVHTTP_REQ_PUT | EVHTTP_REQ_DELETE | EVHTTP_REQ_OPTIONS |
+        EVHTTP_REQ_TRACE | EVHTTP_REQ_CONNECT | EVHTTP_REQ_PATCH);
+    evhttp_set_cb(httpd, "/smoketest", smoke_request_cb, NULL);
+    evhttp_set_cb(httpd, "/metrics", metrics_request_cb, NULL);
+    evhttp_set_gencb(httpd, (void (*)(struct evhttp_request *, void *))httpd_handler_cgi_bin, server);
+#if FAN_HAS_OPENSSL
+    if (tls_ctx) {
+        evhttp_set_bevcb(httpd, bevcb, tls_ctx);
+    }
+#else
+    (void)tls_ctx;
+#endif
+}
+
+typedef struct {
+    LuaServer *server;
+    struct evhttp *target;
+    int owner_id;
+    evutil_socket_t fd;
+    struct sockaddr_storage peer;
+    int peer_len;
+} httpd_accept_job_t;
+
+static void httpd_accept_job_done(LuaServer *server, int owner_id) {
+    int idx = owner_id + 1;
+    pthread_mutex_lock(&server->accept_mutex);
+    if (server->pending_accepts > 0) {
+        server->pending_accepts--;
+    }
+    if (server->instance_accepts && idx >= 0 && idx < server->instance_ws_len &&
+        server->instance_accepts[idx] > 0) {
+        server->instance_accepts[idx]--;
+    }
+    pthread_mutex_unlock(&server->accept_mutex);
+    /* Runs on the worker that consumed the dispatch; gives the paused main
+     * listener a chance to resume once the backlog drains (Phase 2). */
+    httpd_accept_check_resume(server);
+}
+
+static void httpd_accept_on_worker(evutil_socket_t fd, short what, void *arg) {
+    httpd_accept_job_t *job = (httpd_accept_job_t *)arg;
+    (void)fd;
+    (void)what;
+    if (evhttp_accept_socket_on_base(job->target, job->fd,
+                                     (struct sockaddr *)&job->peer,
+                                     job->peer_len) != 0) {
+        evutil_closesocket(job->fd);
+    }
+    httpd_accept_job_done(job->server, job->owner_id);
+    free(job);
+}
+
+/* Called on a worker after a dispatched accept completes. If the main
+ * listener is paused (backlog reached high-water) and the in-flight count
+ * has dropped to half the high-water mark, dispatch an enable job to the
+ * main base to start accepting again. Runs on the worker thread. */
+static void httpd_accept_check_resume(LuaServer *server) {
+    int should_enable = 0;
+    pthread_mutex_lock(&server->accept_mutex);
+    if (server->listener_paused && !server->pending_resume &&
+        server->accept_high_water > 0 &&
+        server->pending_accepts < (unsigned int)(server->accept_high_water / 2)) {
+        server->pending_resume = 1;
+        should_enable = 1;
+    }
+    pthread_mutex_unlock(&server->accept_mutex);
+    if (should_enable) {
+        if (event_mgr_worker_once(-1, httpd_resume_accept_cb, server) != 0) {
+            /* Loop stopped; keep the listener marked paused and allow a later
+             * completion to retry dispatching the resume job. */
+            pthread_mutex_lock(&server->accept_mutex);
+            server->pending_resume = 0;
+            pthread_mutex_unlock(&server->accept_mutex);
+        }
+    }
+}
+
+/* Runs on the main base: re-enable the listener. */
+static void httpd_resume_accept_cb(evutil_socket_t fd, short what, void *arg) {
+    (void)fd;
+    (void)what;
+    LuaServer *server = (LuaServer *)arg;
+    pthread_mutex_lock(&server->accept_mutex);
+    server->pending_resume = 0;
+    if (server->listener_paused && server->boundsocket &&
+        (httpd_life_state_t)atomic_load(&server->life_state) == HTTPD_LIVE) {
+        struct evconnlistener *lev =
+            evhttp_bound_socket_get_listener(server->boundsocket);
+        if (lev && evconnlistener_enable(lev) == 0) {
+            server->listener_paused = 0;
+        }
+    }
+    pthread_mutex_unlock(&server->accept_mutex);
+}
+
+static void httpd_accept_dispatch(struct evhttp *http, evutil_socket_t fd,
+                                  struct sockaddr *peer, int peer_len, void *arg) {
+    LuaServer *server = (LuaServer *)arg;
+    if (!server || server->worker_count <= 0 || !server->workers) {
+        evutil_closesocket(fd);
+        return;
+    }
+    pthread_mutex_lock(&server->accept_mutex);
+    if (!server->accepting ||
+        (httpd_life_state_t)atomic_load(&server->life_state) != HTTPD_LIVE) {
+        pthread_mutex_unlock(&server->accept_mutex);
+        evutil_closesocket(fd);
+        return;
+    }
+    if (!server->instance_accepts) {
+        pthread_mutex_unlock(&server->accept_mutex);
+        evutil_closesocket(fd);
+        return;
+    }
+    server->pending_accepts++;
+    unsigned int index = atomic_fetch_add(&server->next_worker, 1) %
+                         (unsigned int)server->worker_count;
+    int owner_id = (int)index;
+    int idx = owner_id + 1;
+    if (idx >= 0 && idx < server->instance_ws_len) {
+        /* Counted under accept_mutex before the instance pointer is read: a
+         * concurrent teardown drain-check waits for this to reach zero before
+         * it frees server->workers[index].httpd. */
+        server->instance_accepts[idx]++;
+    }
+    int high = server->accept_high_water > 0 ? server->accept_high_water : 0;
+    if (high > 0 && server->pending_accepts >= (unsigned int)high &&
+        !server->listener_paused && server->boundsocket) {
+        struct evconnlistener *lev =
+            evhttp_bound_socket_get_listener(server->boundsocket);
+        if (lev) {
+            evconnlistener_disable(lev);
+            server->listener_paused = 1;
+        }
+    }
+    pthread_mutex_unlock(&server->accept_mutex);
+
+    httpd_accept_job_t *job = calloc(1, sizeof(*job));
+    if (!job || peer_len <= 0 || peer_len > (int)sizeof(job->peer)) {
+        free(job);
+        evutil_closesocket(fd);
+        httpd_accept_job_done(server, owner_id);
+        return;
+    }
+    job->server = server;
+    job->owner_id = owner_id;
+    job->target = server->workers[index].httpd;
+    job->fd = fd;
+    memcpy(&job->peer, peer, (size_t)peer_len);
+    job->peer_len = peer_len;
+    if (event_mgr_worker_once(owner_id, httpd_accept_on_worker, job) != 0) {
+        free(job);
+        evutil_closesocket(fd);
+        httpd_accept_job_done(server, owner_id);
+    }
+}
 
 // ============================================================
 // Configuration validation
@@ -610,6 +1199,37 @@ LUA_API int utd_bind(lua_State *L) {
     server->onServiceRef = LUA_NOREF;
     server->boundsocket = NULL;
     server->httpd = NULL;
+    server->worker_id = -1;
+    server->worker_specified = 0;
+    server->distribute_connections = 0;
+    server->workers = NULL;
+    server->worker_count = 0;
+    atomic_init(&server->next_worker, 0);
+    pthread_mutex_init(&server->accept_mutex, NULL);
+    server->pending_accepts = 0;
+    server->accepting = 0;
+    atomic_init(&server->life_state, HTTPD_LIVE);
+    server->teardown_remaining = 0;
+    server->ws_list = NULL;
+    server->instance_ws = NULL;
+    server->instance_accepts = NULL;
+    server->instance_ws_len = 0;
+    server->self_ref = LUA_NOREF;
+
+    lua_getfield(L, 1, "worker");
+    if (!lua_isnil(L, -1)) {
+        server->worker_specified = 1;
+        if (!lua_isinteger(L, -1)) {
+            lua_pop(L, 1);
+            return luaL_error(L, "HTTP server worker must be an integer");
+        }
+        server->worker_id = (int)lua_tointeger(L, -1);
+    }
+    lua_pop(L, 1);
+    if (server->worker_id < -1 ||
+        (server->worker_id >= 0 && server->worker_id >= event_mgr_worker_count())) {
+        return luaL_error(L, "HTTP server worker is unavailable");
+    }
 
     server->enable_keep_alive = 1;
     server->keep_alive_timeout = 30;
@@ -650,7 +1270,10 @@ LUA_API int utd_bind(lua_State *L) {
         return luaL_error(L, "Invalid server configuration parameters");
     }
 
-    struct evhttp *httpd = evhttp_new(event_mgr_base());
+    struct event_base *http_base =
+        server->worker_id >= 0 ? event_mgr_worker_base(server->worker_id)
+                               : event_mgr_base();
+    struct evhttp *httpd = evhttp_new(http_base);
     if (!httpd) {
         LOG_ERROR_FMT("Failed to create HTTP server host=%s port=%d",
                       server->host ? server->host : "(null)", server->port);
@@ -729,32 +1352,66 @@ LUA_API int utd_bind(lua_State *L) {
     SET_INT_FROM_TABLE(L, server->port, 1, "port")
 
     server->httpd = httpd;
+    SET_FUNC_REF_FROM_TABLE(L, server->onServiceRef, 1, "onService")
+    httpd_configure_instance(server, httpd, server->ctx);
+
+    if (!server->worker_specified && event_mgr_worker_count() > 0) {
+        server->worker_count = event_mgr_worker_count();
+        server->workers = calloc((size_t)server->worker_count, sizeof(*server->workers));
+        if (!server->workers) {
+            CLEAR_REF(L, server->onServiceRef)
+            httpd_server_free_after_bind_error(server);
+            return luaL_error(L, "Failed to allocate HTTP worker instances");
+        }
+        server->distribute_connections = 1;
+        for (int i = 0; i < server->worker_count; i++) {
+            server->workers[i].httpd = evhttp_new(event_mgr_worker_base(i));
+            if (!server->workers[i].httpd) {
+                CLEAR_REF(L, server->onServiceRef)
+                httpd_server_free_after_bind_error(server);
+                return luaL_error(L, "Failed to create HTTP worker instance");
+            }
+            httpd_configure_instance(server, server->workers[i].httpd, server->ctx);
+        }
+        evhttp_set_accept_callback(httpd, httpd_accept_dispatch, server);
+    }
+
+    /* Per-owner WebSocket counters, index = worker_id + 1 (accept_mutex).
+     * Sized for the largest owner id this server can serve:
+     *  - distribute: workers 0..N-1 (+ main base slot 0, unused);
+     *  - single instance on worker N: idx N+1;
+     *  - single instance on the main base: idx 0. */
+    size_t ws_count = 1;
+    if (server->distribute_connections) {
+        ws_count = (size_t)server->worker_count + 1;
+    } else if (server->worker_specified && server->worker_id >= 0) {
+        ws_count = (size_t)server->worker_id + 2;
+    }
+    server->instance_ws = calloc(ws_count, sizeof(unsigned int));
+    server->instance_accepts = calloc(ws_count, sizeof(unsigned int));
+    if (!server->instance_ws || !server->instance_accepts) {
+        CLEAR_REF(L, server->onServiceRef)
+        httpd_server_free_after_bind_error(server);
+        return luaL_error(L, "Failed to allocate HTTP server state");
+    }
+    server->instance_ws_len = (int)ws_count;
 
     if (!httpd_server_rebind(server)) {
-#if FAN_HAS_OPENSSL
-        if (server->ctx) {
-            SSL_CTX_free(server->ctx);
-            server->ctx = NULL;
-        }
-#endif
-        evhttp_free(httpd);
-        server->httpd = NULL;
+        CLEAR_REF(L, server->onServiceRef)
+        httpd_server_free_after_bind_error(server);
         return luaL_error(L, "HTTP server bind failed for %s:%d: %s",
                           server->host ? server->host : "(null)",
                           server->port,
                           strerror(server->bind_errno ? server->bind_errno : EADDRINUSE));
     }
-
-    SET_FUNC_REF_FROM_TABLE(L, server->onServiceRef, 1, "onService")
-
-    evhttp_set_timeout(httpd, server->keep_alive_timeout + 30);
-    evhttp_set_allowed_methods(httpd,
-        EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_HEAD |
-        EVHTTP_REQ_PUT | EVHTTP_REQ_DELETE | EVHTTP_REQ_OPTIONS |
-        EVHTTP_REQ_TRACE | EVHTTP_REQ_CONNECT | EVHTTP_REQ_PATCH);
-    evhttp_set_cb(httpd, "/smoketest", smoke_request_cb, NULL);
-    evhttp_set_cb(httpd, "/metrics", metrics_request_cb, NULL);
-    evhttp_set_gencb(httpd, (void (*)(struct evhttp_request *, void *))httpd_handler_cgi_bin, server);
+    pthread_mutex_lock(&server->accept_mutex);
+    server->accepting = server->distribute_connections;
+    server->accept_high_water = server->distribute_connections
+        ? (server->worker_count * 16 > 64 ? server->worker_count * 16 : 64)
+        : 0;
+    server->listener_paused = 0;
+    server->pending_resume = 0;
+    pthread_mutex_unlock(&server->accept_mutex);
 
     metrics_init();
 
@@ -777,6 +1434,10 @@ LUA_API int utd_bind(lua_State *L) {
 
 LUA_API int lua_evhttp_server_rebind(lua_State *L) {
     LuaServer *server = (LuaServer *)luaL_checkudata(L, 1, LUA_EVHTTP_SERVER_TYPE);
+    /* Rebind is only meaningful while the server is live (fix-plan §2.6). */
+    if ((httpd_life_state_t)atomic_load(&server->life_state) != HTTPD_LIVE) {
+        return luaL_error(L, "HTTP server is not live (draining or closed)");
+    }
     if (!httpd_server_rebind(server)) {
         return luaL_error(L, "HTTP server rebind failed for %s:%d: %s",
                           server->host ? server->host : "(null)",
@@ -794,6 +1455,11 @@ static const luaL_Reg utdlib[] = {{"bind", utd_bind}, {NULL, NULL}};
 
 LUA_API int luaopen_fan_httpd_core(lua_State *L) {
     luaL_newmetatable(L, LUA_EVHTTP_REQUEST_DATA_TYPE);
+
+    lua_pushstring(L, "__gc");
+    lua_pushcfunction(L, &lua_evhttp_request_data_gc);
+    lua_rawset(L, -3);
+
     lua_pop(L, 1);
 
     luaL_newmetatable(L, LUA_EVHTTP_REQUEST_TYPE);
@@ -811,6 +1477,9 @@ LUA_API int luaopen_fan_httpd_core(lua_State *L) {
 
     lua_pushcfunction(L, &lua_evhttp_server_rebind);
     lua_setfield(L, -2, "rebind");
+
+    lua_pushcfunction(L, &lua_evhttp_server_close);
+    lua_setfield(L, -2, "close");
 
     lua_pushstring(L, "__index");
     lua_pushvalue(L, -2);

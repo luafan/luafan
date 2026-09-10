@@ -26,8 +26,13 @@ static void conn_ping_event(int fd, short event, void *_userdata)
 
     if (status)
     {
-      wait_for_status(L, bag->ctx, conn, status, conn_ping_event,
-                      bag->extra);
+      if (wait_for_status(L, bag->ctx, conn, status, conn_ping_event,
+                          bag->extra) != 0)
+      {
+        int nresults = mariadb_push_wait_error(L);
+        UNREF_CO(bag->ctx);
+        FAN_RESUME(L, NULL, nresults);
+      }
     }
     else if (ret == 0)
     {
@@ -55,7 +60,11 @@ LUA_API int conn_ping_start(lua_State *L)
   if (status)
   {
     REF_CO(ctx);
-    wait_for_status(L, ctx, &ctx->my_conn, status, conn_ping_event, 0);
+    if (wait_for_status(L, ctx, &ctx->my_conn, status, conn_ping_event, 0) != 0)
+    {
+      UNREF_CO(ctx);
+      return mariadb_push_wait_error(L);
+    }
     return lua_yield(L, 0);
   }
   else if (ret == 0)

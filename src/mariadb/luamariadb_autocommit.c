@@ -19,8 +19,13 @@ static void conn_autocommit_event(int fd, short event, void *_userdata)
     int status = mysql_autocommit_cont(&ret, conn, bag->status);
     if (status)
     {
-      wait_for_status(L, bag->ctx, conn, status, conn_autocommit_event,
-                      bag->extra);
+      if (wait_for_status(L, bag->ctx, conn, status, conn_autocommit_event,
+                          bag->extra) != 0)
+      {
+        int nresults = mariadb_push_wait_error(L);
+        UNREF_CO(bag->ctx);
+        FAN_RESUME(L, NULL, nresults);
+      }
     }
     else if (ret == 0)
     {
@@ -49,7 +54,11 @@ LUA_API int conn_autocommit_start(lua_State *L)
   if (status)
   {
     REF_CO(ctx);
-    wait_for_status(L, ctx, &ctx->my_conn, status, conn_autocommit_event, 0);
+    if (wait_for_status(L, ctx, &ctx->my_conn, status, conn_autocommit_event, 0) != 0)
+    {
+      UNREF_CO(ctx);
+      return mariadb_push_wait_error(L);
+    }
     return lua_yield(L, 0);
   }
   else if (ret == 0)

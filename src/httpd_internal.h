@@ -3,8 +3,11 @@
 
 #include "utlua.h"
 #include "platform.h"
+#include "event_mgr.h"
 #include <stdarg.h>
 #include <time.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <arpa/inet.h>
 #include <event2/http.h>
 #include <event2/buffer.h>
@@ -81,10 +84,29 @@ typedef struct {
     char *payload;
 } websocket_frame_t;
 
+/* Server lifecycle state machine (see docs/threading-fix-plan.md Phase 1).
+ * LIVE      — accepting + serving
+ * DRAINING  — destroy requested; owner-thread teardown jobs in progress
+ * GONE      — native resources released; __gc is idempotent
+ */
+typedef enum {
+    HTTPD_LIVE = 0,
+    HTTPD_DRAINING = 1,
+    HTTPD_GONE = 2
+} httpd_life_state_t;
+
 typedef struct ws_frame_node {
     websocket_frame_t frame;
     struct ws_frame_node *next;
 } ws_frame_node_t;
+
+typedef struct httpd_worker_instance {
+    struct evhttp *httpd;
+} httpd_worker_instance_t;
+
+/* Forward declaration: LuaServer embeds an intrusive list of live
+ * WebSocket Requests (Request is defined below). */
+typedef struct Request Request;
 
 typedef struct {
     lua_State *mainthread;
@@ -92,6 +114,25 @@ typedef struct {
     struct evhttp_bound_socket *boundsocket;
     char *host;
     int port;
+    int worker_id;
+    int worker_specified;
+    int distribute_connections;
+    httpd_worker_instance_t *workers;
+    int worker_count;
+    _Atomic unsigned int next_worker;
+    pthread_mutex_t accept_mutex;
+    unsigned int pending_accepts;
+    int accepting;
+    int accept_high_water;           /* backpressure threshold (accept_mutex); see fix-plan Phase 2 */
+    int listener_paused;             /* main listener disabled above high-water (accept_mutex) */
+    int pending_resume;              /* worker requested a resume; cleared on main base (accept_mutex) */
+    _Atomic int life_state;          /* httpd_life_state_t (see fix-plan Phase 1) */
+    unsigned int teardown_remaining; /* evhttp instances not yet freed (accept_mutex) */
+    Request *ws_list;                /* live WebSocket requests, intrusive (accept_mutex) */
+    unsigned int *instance_ws;       /* ws count per owner, idx = worker_id+1 (accept_mutex) */
+    unsigned int *instance_accepts;  /* in-flight accept jobs per owner, idx = worker_id+1 (accept_mutex) */
+    int instance_ws_len;
+    int self_ref;
 #if FAN_HAS_OPENSSL
     SSL_CTX *ctx;
 #endif
@@ -103,15 +144,20 @@ typedef struct {
     int bind_errno;
 } LuaServer;
 
-typedef struct {
+struct Request {
     struct evhttp_request *req;
     LuaServer *server;
+    int worker_id;
     int reply_status;
     int response_code;
     int metrics_finished;
     int is_websocket;
     websocket_state_t ws_state;
     struct bufferevent *ws_bev;
+    struct bufferevent *ws_deferred_bev;
+    pthread_mutex_t ws_mutex;
+    int ws_mutex_initialized;
+    unsigned int ws_pending_sends;
     lua_State *mainthread;
     int _ref_;
     int self_ref;
@@ -122,6 +168,12 @@ typedef struct {
     int owns_request;
     volatile int ws_cleaning_up;
     int close_cb_running;
+    int ws_cleanup_requested;
+    /* Intrusive live-WebSocket list (LuaServer.ws_list), guarded by
+     * server->accept_mutex; see fix-plan Phase 1. */
+    struct Request *ws_next;
+    struct Request *ws_prev;
+    int ws_linked;
     /* RFC 7692 permessage-deflate (0 = not negotiated) */
     int ws_pmd;
     int ws_pmd_server_no_context_takeover;
@@ -132,7 +184,7 @@ typedef struct {
     int ws_deflate_ok;
     z_stream ws_inflate;
     z_stream ws_deflate;
-} Request;
+};
 
 typedef struct {
     char *name;
@@ -177,6 +229,9 @@ void httpd_finish_metrics(Request *request, int status_code, size_t bytes_sent);
 void newtable_from_req(lua_State *L, struct evhttp_request *req, LuaServer *server);
 void set_connection_header(struct evhttp_request *req, LuaServer *server);
 int httpd_server_rebind(LuaServer *server);
+void httpd_server_begin_destroy(LuaServer *server);
+int httpd_server_ws_attach(Request *request);
+void httpd_server_ws_detach(Request *request);
 
 // ============================================================
 // httpd_metrics.c exports

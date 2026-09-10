@@ -30,6 +30,17 @@ void event_mgr_workers_stop_threads(void);
 void event_mgr_workers_free_bases(void);
 struct event_base *event_mgr_worker_base(int worker_id);
 struct evdns_base *event_mgr_worker_dnsbase(int worker_id);
+int event_mgr_worker_once(int worker_id, event_callback_fn callback, void *arg);
+int event_mgr_worker_once_delay(int worker_id, event_callback_fn callback, void *arg, long delay_ms);
+/* Framework hand-off dispatch: same contract, but it stays usable while the
+ * pool is shutting down (the user-level dispatchers above are gated by
+ * workers_accepting_dispatch). Use it only for internal continuations that own
+ * the target base and are drained by event_mgr_drain_internal_jobs() during
+ * loop shutdown — see the implementation notes in event_mgr.c. */
+int event_mgr_worker_once_internal(int worker_id, event_callback_fn callback, void *arg);
+int event_mgr_worker_once_internal_delay(int worker_id, event_callback_fn callback, void *arg, long delay_ms);
+int event_mgr_is_current_owner(int worker_id);
+int event_mgr_is_loop_running(void);
 int event_mgr_next_worker(void);
 int event_mgr_worker_count(void);
 int event_mgr_current_worker_id(void);

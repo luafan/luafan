@@ -12,9 +12,18 @@ static void real_connect_cont(int fd, short event, void *_userdata)
   int status = mysql_real_connect_cont(&ret, conn, bag->status);
   if (status)
   {
-    wait_for_status(L, bag->ctx, conn, status, real_connect_cont,
-                    bag->extra);
-    skip_unref = 1;
+    if (wait_for_status(L, bag->ctx, conn, status, real_connect_cont,
+                        bag->extra) == 0)
+    {
+      skip_unref = 1;
+    }
+    else
+    {
+      int nresults = mariadb_push_wait_error(L);
+      UNREF_CO(bag->ctx);
+      FAN_RESUME(L, NULL, nresults);
+      /* skip_unref stays 0: bag->extra is released below. */
+    }
   }
   else if (ret == conn)
   {
@@ -49,7 +58,9 @@ static void real_connect_cont(int fd, short event, void *_userdata)
 /*
 ** Connects to a data source.
 **     param: one string for each connection parameter, said
-**     datasource, username, password, host and port.
+**     datasource, username, password, host and port. An optional sixth
+**     integer selects the event worker; omitted selects round-robin and -1
+**     explicitly keeps the connection on the main event base.
 */
 LUA_API int real_connect_start(lua_State *L)
 {
@@ -58,11 +69,19 @@ LUA_API int real_connect_start(lua_State *L)
   const char *password = luaL_optstring(L, 3, NULL);
   const char *host = luaL_optstring(L, 4, NULL);
   const int port = luaL_optinteger(L, 5, 0);
+  const int requested_worker = lua_isnoneornil(L, 6)
+                                   ? event_mgr_next_worker()
+                                   : luaL_checkinteger(L, 6);
+  if (requested_worker < -1 ||
+      (requested_worker >= 0 && requested_worker >= event_mgr_worker_count())) {
+    return luaL_error(L, "mariadb worker is unavailable");
+  }
   MYSQL *ret;
 
   DB_CTX *ctx = (DB_CTX *)lua_newuserdata(L, sizeof(DB_CTX));
   memset(ctx, 0, sizeof(DB_CTX));
   ctx->coref = LUA_NOREF;
+  ctx->worker_id = requested_worker;
 
   luasql_setmeta(L, MARIADB_CONNECTION_METATABLE);
 
@@ -82,7 +101,14 @@ LUA_API int real_connect_start(lua_State *L)
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_unlock(L);
     REF_CO(ctx);
-    wait_for_status(L, ctx, &ctx->my_conn, status, real_connect_cont, ref);
+    if (wait_for_status(L, ctx, &ctx->my_conn, status, real_connect_cont, ref) != 0)
+    {
+      lua_lock(L);
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+      lua_unlock(L);
+      UNREF_CO(ctx);
+      return mariadb_push_wait_error(L);
+    }
     return lua_yield(L, 0);
   }
   else if (ret == &ctx->my_conn)

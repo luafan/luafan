@@ -146,6 +146,7 @@ typedef struct
   MYSQL my_conn;
   int coref;
   int coref_count;
+  int worker_id;
 } DB_CTX;
 
 typedef struct
@@ -195,7 +196,12 @@ extern int LONG_DATA;
 // Core utility functions (implemented in luamariadb.c)
 DB_CTX *getconnection(lua_State *L);
 int luamariadb_push_errno(lua_State *L, DB_CTX *ctx);
-void wait_for_status(lua_State *L, DB_CTX *ctx, void *data, int status, event_callback_fn callback, int extra);
+/* Registers the async wait event for `status` on the base of ctx->worker_id.
+ * Returns 0 when the wait event is armed (the caller must yield), non-zero when
+ * it could not be armed (the caller must restore its own coroutine instead of
+ * yielding, otherwise the operation hangs forever). */
+int wait_for_status(lua_State *L, DB_CTX *ctx, void *data, int status, event_callback_fn callback, int extra);
+int mariadb_push_wait_error(lua_State *L);
 
 // Statement utility functions (implemented in luamariadb_stmt.c)
 STMT_CTX *getstatement(lua_State *L);

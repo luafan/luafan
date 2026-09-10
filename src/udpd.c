@@ -84,10 +84,23 @@ LUA_API int udpd_new(lua_State *L) {
     conn->base.interface = udpd_extract_interface_from_lua(L, 1);
     conn->base.config.base.interface = conn->base.interface;
 
-    // Extract optional worker parameter for multi-threaded event base
+    // Extract optional worker parameter for multi-threaded event base.
+    // Unspecified worker keeps the connection on the main event base.
+    // Explicit worker selects that worker event base; invalid values are
+    // rejected instead of silently falling back to the main base.
+    conn->base.worker_id = -1;
     lua_getfield(L, 1, "worker");
-    if (lua_isinteger(L, -1)) {
-        conn->base.worker_id = (int)lua_tointeger(L, -1);
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isinteger(L, -1)) {
+            lua_pop(L, 1);
+            return luaL_error(L, "udp worker must be an integer");
+        }
+        int w = (int)lua_tointeger(L, -1);
+        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
+            lua_pop(L, 1);
+            return luaL_error(L, "udp worker is unavailable");
+        }
+        conn->base.worker_id = w;
     }
     lua_pop(L, 1);
 

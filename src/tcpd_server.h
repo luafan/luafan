@@ -14,6 +14,7 @@ typedef struct tcpd_server {
     char *host;
     int port;
     int ipv6;
+    int worker_id;
     char *unix_path;  // if set, bind on AF_UNIX instead of TCP
 
     tcpd_config_t config;

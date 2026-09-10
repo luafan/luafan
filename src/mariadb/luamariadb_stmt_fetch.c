@@ -138,7 +138,13 @@ static void stmt_fetch_cont(int fd, short event, void *_userdata)
     int status = mysql_stmt_fetch_cont(&ret, st->my_stmt, bag->status);
     if (status)
     {
-      wait_for_status(L, st->ctx, st, status, stmt_fetch_cont, bag->extra);
+      if (wait_for_status(L, st->ctx, st, status, stmt_fetch_cont,
+                          bag->extra) != 0)
+      {
+        int nresults = mariadb_push_wait_error(L);
+        UNREF_CO(st);
+        FAN_RESUME(L, NULL, nresults);
+      }
     }
     else if (ret == 0)
     {
@@ -166,7 +172,11 @@ LUA_API int stmt_fetch_start(lua_State *L)
   if (status)
   {
     REF_CO(st);
-    wait_for_status(L, st->ctx, st, status, stmt_fetch_cont, 0);
+    if (wait_for_status(L, st->ctx, st, status, stmt_fetch_cont, 0) != 0)
+    {
+      UNREF_CO(st);
+      return mariadb_push_wait_error(L);
+    }
     return lua_yield(L, 0);
   }
   else if (ret == 0)

@@ -10,7 +10,7 @@ Used as placeholder for `stmt:bind_param()` when sending large data via `stmt:se
 
 ## Connection Management
 
-### `conn = mariadb.connect(database, username, password, host?, port?)`
+### `conn = mariadb.connect(database, username, password, host?, port?, worker?)`
 
 Establishes an asynchronous connection to MariaDB server.
 
@@ -20,6 +20,7 @@ Establishes an asynchronous connection to MariaDB server.
 - `password` (string): Database password
 - `host` (string, optional): Server hostname, defaults to "localhost"
 - `port` (integer, optional): Server port, defaults to 3306
+- `worker` (integer, optional): Event worker affinity. Omitted selects workers round-robin when `SERVICE_WORKERS` is enabled; `-1` explicitly keeps all connection events on the main event base. Statements and cursors inherit the connection affinity. Invalid or out-of-range values raise an error.
 
 **Returns:**
 - Connection object on success

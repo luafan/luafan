@@ -7,6 +7,8 @@
 #include <signal.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdlib.h>
+#include <time.h>
 
 static struct event_base *base = NULL;
 static struct evdns_base *dnsbase = NULL;
@@ -30,6 +32,9 @@ struct event_worker {
 static struct event_worker workers[EVENT_MGR_MAX_WORKERS];
 static int num_workers = 0;
 static _Atomic unsigned int next_worker_idx = 0;
+static _Atomic int workers_accepting_dispatch = 0;
+static pthread_t main_owner_thread;
+static int main_owner_thread_valid = 0;
 
 static _Thread_local int g_current_worker_id = -1;
 
@@ -49,6 +54,120 @@ static void event_mgr_enable_thread_support(void) {
     pthread_once(&event_threads_once, event_mgr_init_thread_support);
 }
 
+/* ---- framework (internal) hand-off jobs ---------------------------------
+ *
+ * A teardown path arms its own continuation from an owner-thread callback
+ * (httpd_server_teardown_instance() -> httpd_drain_check_cb()): the follow-up
+ * job is dispatched while the first job runs. That never fits the user-level
+ * dispatch path, because event_mgr_worker_once_delay() rejects everything once
+ * workers_accepting_dispatch is cleared, and the shutdown sequence clears it
+ * before the worker loops have run the jobs that are already queued for them.
+ * Refusing the continuation left the evhttp instances of a just-closed server
+ * pinned until process exit ("resources retained until exit").
+ *
+ * These variants bypass that gate, count themselves per owner base and are
+ * drained by the owner loop while it stops (see
+ * event_mgr_drain_internal_jobs()). Only framework code that owns the target
+ * base may use them: a job that is never run is a leak, not a rejected call.
+ */
+typedef struct event_mgr_internal_job {
+    event_callback_fn cb;
+    void *arg;
+    int index;
+} event_mgr_internal_job;
+
+/* Pending/running internal jobs per owner base (index = worker_id + 1, 0 = the
+ * main base). Maintained by event_mgr_internal_job_cb() so the drain knows when
+ * a hand-off chain (teardown -> drain check -> finalize) has finished. */
+static _Atomic int internal_jobs_pending[EVENT_MGR_MAX_WORKERS + 1];
+
+/* Upper bound for one shutdown drain pass loop: each pass runs the owner base
+ * and then sleeps 1ms so short-delay re-arms (the 5ms WebSocket drain check)
+ * become ready. Overridable on the compiler command line — a value of 0
+ * disables the drain, which reproduces the pre-drain "resources pinned until
+ * exit" behaviour for regression testing (test_httpd_async_teardown.lua
+ * scenario E). */
+#ifndef EVENT_MGR_DRAIN_MAX_MS
+#define EVENT_MGR_DRAIN_MAX_MS 100
+#endif
+
+static int internal_job_index(int worker_id) {
+    return (worker_id >= 0 && worker_id < EVENT_MGR_MAX_WORKERS) ? worker_id + 1 : 0;
+}
+
+/* Runs the wrapped callback, then releases its slot. The job is freed before
+ * the callback so a re-arm inside it counts as new work (the drain must not
+ * stop in the middle of a chain). */
+static void event_mgr_internal_job_cb(evutil_socket_t fd, short what, void *arg) {
+    event_mgr_internal_job *job = (event_mgr_internal_job *)arg;
+    event_callback_fn cb = job->cb;
+    void *job_arg = job->arg;
+    int index = job->index;
+    free(job);
+    cb(fd, what, job_arg);
+    atomic_fetch_sub(&internal_jobs_pending[index], 1);
+}
+
+int event_mgr_worker_once_internal_delay(int worker_id, event_callback_fn callback,
+                                         void *arg, long delay_ms) {
+    if (!callback) {
+        return -1;
+    }
+    struct event_base *target = event_mgr_worker_base(worker_id);
+    if (!target) {
+        return -1;
+    }
+    event_mgr_internal_job *job = (event_mgr_internal_job *)malloc(sizeof(*job));
+    if (!job) {
+        return -1;
+    }
+    job->cb = callback;
+    job->arg = arg;
+    job->index = internal_job_index(worker_id);
+    struct timeval tv;
+    tv.tv_sec = delay_ms / 1000;
+    tv.tv_usec = (delay_ms % 1000) * 1000;
+    atomic_fetch_add(&internal_jobs_pending[job->index], 1);
+    if (event_base_once(target, -1, EV_TIMEOUT, event_mgr_internal_job_cb, job, &tv) != 0) {
+        atomic_fetch_sub(&internal_jobs_pending[job->index], 1);
+        free(job);
+        return -1;
+    }
+    return 0;
+}
+
+int event_mgr_worker_once_internal(int worker_id, event_callback_fn callback, void *arg) {
+    return event_mgr_worker_once_internal_delay(worker_id, callback, arg, 0);
+}
+
+/* Run the events already queued for `base` until the framework hand-offs of
+ * `worker_id` (and every job they arm) have completed, or the budget expires.
+ * MUST be called on the thread that owns `base`, and only while that base is
+ * stopping: loop shutdown calls it right after the loop broke, so a teardown
+ * chain queued just before the break still finishes (the main base gets one
+ * pass after the workers stopped, which is when their finalize job arrives). */
+static void event_mgr_drain_internal_jobs(struct event_base *base, int worker_id, int max_ms) {
+    if (!base) {
+        return;
+    }
+    int index = internal_job_index(worker_id);
+    for (int elapsed = 0; elapsed < max_ms; elapsed++) {
+        if (atomic_load(&internal_jobs_pending[index]) <= 0) {
+            return;
+        }
+        event_base_loop(base, EVLOOP_NONBLOCK);
+        struct timespec ts;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 1000000L;
+        nanosleep(&ts, NULL);
+    }
+    int pending = atomic_load(&internal_jobs_pending[index]);
+    if (pending > 0) {
+        fprintf(stderr, "event_mgr: shutdown drain incomplete (owner=%d, pending=%d); "
+                        "resources retained until exit\n", worker_id, pending);
+    }
+}
+
 static void *worker_thread_func(void *arg) {
     struct event_worker *w = (struct event_worker *)arg;
     g_current_worker_id = w->id;
@@ -59,15 +178,24 @@ static void *worker_thread_func(void *arg) {
     pthread_sigmask(SIG_BLOCK, &set, NULL);
 
     event_base_loop(w->base, EVLOOP_NO_EXIT_ON_EMPTY);
+    /* The loop broke (normal shutdown): finish the framework hand-offs that
+     * were queued for this owner before the break, so a server teardown that
+     * was in flight still releases its evhttp instance. No-op when nothing is
+     * pending. */
+    event_mgr_drain_internal_jobs(w->base, w->id, EVENT_MGR_DRAIN_MAX_MS);
     w->running = 0;
     return NULL;
 }
 
 int event_mgr_workers_init(int count) {
+    if (num_workers > 0) {
+        return -1;
+    }
     // count <= 0 means "no workers": stay single-threaded, do NOT spawn any
     // thread and do NOT enable the Lua lock. (Previously this silently became
     // EVENT_MGR_DEFAULT_WORKERS, which was surprising.)
     if (count <= 0) {
+        workers_accepting_dispatch = 0;
         return 0;
     }
     if (count > EVENT_MGR_MAX_WORKERS) {
@@ -80,17 +208,20 @@ int event_mgr_workers_init(int count) {
 
     event_mgr_enable_thread_support();
 
+    workers_accepting_dispatch = 0;
     num_workers = count;
 
     for (int i = 0; i < num_workers; i++) {
         workers[i].id = i;
         workers[i].base = event_base_new();
         if (!workers[i].base) {
+            event_mgr_workers_shutdown();
             return -1;
         }
 
         workers[i].dnsbase = evdns_base_new(workers[i].base, 0);
         if (!workers[i].dnsbase) {
+            event_mgr_workers_shutdown();
             return -1;
         }
         evdns_base_set_option(workers[i].dnsbase, "randomize-case:", "0");
@@ -98,13 +229,18 @@ int event_mgr_workers_init(int count) {
         workers[i].running = 1;
         int rc = pthread_create(&workers[i].thread, NULL, worker_thread_func, &workers[i]);
         if (rc != 0) {
+            workers[i].running = 0;
+            event_mgr_workers_shutdown();
             return -1;
         }
     }
+    workers_accepting_dispatch = 1;
     return 0;
 }
 
 void event_mgr_workers_shutdown(void) {
+    // Reject new cross-thread dispatches before stopping worker loops.
+    workers_accepting_dispatch = 0;
     // Stop the worker threads first so no callbacks fire while we free state.
     for (int i = 0; i < num_workers; i++) {
         if (workers[i].running && workers[i].base) {
@@ -140,6 +276,8 @@ void event_mgr_workers_shutdown(void) {
 // finalisers running afterwards can still bufferevent_free() into them.
 // The matching event_base_free() happens later via event_mgr_workers_free_bases.
 void event_mgr_workers_stop_threads(void) {
+    // No new callbacks may be queued once worker loops are stopping.
+    workers_accepting_dispatch = 0;
     for (int i = 0; i < num_workers; i++) {
         if (workers[i].running && workers[i].base) {
             event_base_loopbreak(workers[i].base);
@@ -154,6 +292,7 @@ void event_mgr_workers_stop_threads(void) {
 }
 
 void event_mgr_workers_free_bases(void) {
+    workers_accepting_dispatch = 0;
     for (int i = 0; i < num_workers; i++) {
         if (workers[i].dnsbase) {
             // fail_requests=1 — see cleanup_dnsbase().
@@ -173,6 +312,28 @@ struct event_base *event_mgr_worker_base(int worker_id) {
         return event_mgr_base(); // fallback to main
     }
     return workers[worker_id].base;
+}
+
+int event_mgr_worker_once_delay(int worker_id, event_callback_fn callback, void *arg, long delay_ms) {
+    if (!callback) {
+        return -1;
+    }
+    if (worker_id >= 0 && !workers_accepting_dispatch) {
+        return -1;
+    }
+
+    struct timeval tv;
+    tv.tv_sec = delay_ms / 1000;
+    tv.tv_usec = (delay_ms % 1000) * 1000;
+    struct event_base *target = event_mgr_worker_base(worker_id);
+    if (!target) {
+        return -1;
+    }
+    return event_base_once(target, -1, EV_TIMEOUT, callback, arg, &tv);
+}
+
+int event_mgr_worker_once(int worker_id, event_callback_fn callback, void *arg) {
+    return event_mgr_worker_once_delay(worker_id, callback, arg, 0);
 }
 
 struct evdns_base *event_mgr_worker_dnsbase(int worker_id) {
@@ -196,10 +357,23 @@ int event_mgr_current_worker_id(void) {
     return g_current_worker_id;
 }
 
+int event_mgr_is_loop_running(void) {
+    return looping != 0;
+}
+
+int event_mgr_is_current_owner(int worker_id) {
+    if (worker_id >= 0) {
+        return g_current_worker_id == worker_id;
+    }
+    return main_owner_thread_valid && pthread_equal(main_owner_thread, pthread_self());
+}
+
 struct event_base *event_mgr_base() {
     if (!base) {
         event_mgr_enable_thread_support();
         base = event_base_new();
+        main_owner_thread = pthread_self();
+        main_owner_thread_valid = 1;
     }
 
     event_mgr_init();
@@ -386,6 +560,8 @@ int event_mgr_init() {
 int event_mgr_loop() {
     if (!looping) {
         event_mgr_init();
+        main_owner_thread = pthread_self();
+        main_owner_thread_valid = 1;
 
         looping = 1;
 
@@ -418,6 +594,10 @@ int event_mgr_loop() {
         cleanup_openssl();
         cleanup_dnsbase();
         event_mgr_workers_stop_threads();
+        // The workers are gone; hand-offs they armed on the main base (the
+        // HTTPD finalize job) still need one pass so server resources are
+        // released instead of being pinned until process exit.
+        event_mgr_drain_internal_jobs(base, -1, EVENT_MGR_DRAIN_MAX_MS);
 
         looping = 0;
         initialized = 0;
@@ -450,6 +630,10 @@ int event_mgr_loop_later_cleanup() {
         cleanup_openssl();
         cleanup_dnsbase();
         event_mgr_workers_stop_threads();
+        // The workers are gone; hand-offs they armed on the main base (the
+        // HTTPD finalize job) still need one pass so server resources are
+        // released instead of being pinned until process exit.
+        event_mgr_drain_internal_jobs(base, -1, EVENT_MGR_DRAIN_MAX_MS);
 
         looping = 0;
         initialized = 0;

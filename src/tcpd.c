@@ -75,11 +75,23 @@ LUA_API int tcpd_connect(lua_State *L) {
     }
     lua_pop(L, 1);
 
-    // Extract optional worker parameter for multi-threaded event base
-    int worker_id = -1; // -1 means use main event_base
+    // Extract optional worker parameter for multi-threaded event base.
+    // Unspecified worker keeps the connection on the main event base.
+    // Explicit worker selects that worker event base; invalid values are
+    // rejected instead of silently falling back to the main base.
+    int worker_id = -1;
     lua_getfield(L, 1, "worker");
-    if (lua_isinteger(L, -1)) {
-        worker_id = (int)lua_tointeger(L, -1);
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isinteger(L, -1)) {
+            lua_pop(L, 1);
+            return luaL_error(L, "tcp worker must be an integer");
+        }
+        int w = (int)lua_tointeger(L, -1);
+        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
+            lua_pop(L, 1);
+            return luaL_error(L, "tcp worker is unavailable");
+        }
+        worker_id = w;
     }
     lua_pop(L, 1);
 

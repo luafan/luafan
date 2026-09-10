@@ -206,6 +206,23 @@ suite:test("server_configuration", function()
     end
 end)
 
+-- Test explicit main-base affinity passthrough. Using -1 keeps this portable
+-- across builds with and without SERVICE_WORKERS.
+suite:test("worker_affinity_main_base", function()
+    local server_info = httpd.bind({
+        host = "127.0.0.1",
+        port = 0,
+        worker = -1,
+        onService = function(req, resp)
+            resp:reply(200, "OK", "Worker affinity test")
+        end
+    })
+
+    TestFramework.assert_not_nil(server_info)
+    TestFramework.assert_not_nil(server_info.serv)
+    TestFramework.assert_true(server_info.port > 0)
+end)
+
 -- Run the test suite
 local failures = TestFramework.run_suite(suite)
 

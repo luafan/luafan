@@ -9,10 +9,26 @@
 
 #define MSG_OUT stdout /* Send info to stdout, change to stderr if you want */
 
-static struct event *timer_event;
-static struct event *timer_check_multi_info;
-static CURLM *multi;
-static int still_running;
+typedef struct _ConnInfo ConnInfo;
+typedef struct _ResumeInfo ResumeInfo;
+
+#define HTTP_RUNTIME_MAIN (-1)
+
+typedef struct _HttpRuntime HttpRuntime;
+
+struct _HttpRuntime {
+    int worker_id;
+    struct event_base *base;
+    struct event *timer_event;
+    struct event *timer_check_multi_info;
+    CURLM *multi;
+    int still_running;
+    ConnInfo *inflight_head;
+    ResumeInfo *resume_head;
+};
+
+static HttpRuntime main_runtime = { .worker_id = HTTP_RUNTIME_MAIN };
+static HttpRuntime worker_runtimes[EVENT_MGR_MAX_WORKERS];
 
 /* Proxy + DNS globals defined here for all platforms. External code (iOS app
    TunnelService.m, Android JNI bridge, future macOS settings UI) may override
@@ -56,7 +72,8 @@ extern void decrRef(lua_State *L);
 #endif
 
 /* Information associated with a specific easy handle */
-typedef struct _ConnInfo {
+struct _ConnInfo {
+    HttpRuntime *runtime;
     CURL *easy;
     //    char *url;
     char error[CURL_ERROR_SIZE];
@@ -89,26 +106,25 @@ typedef struct _ConnInfo {
 
     struct _ConnInfo *next; // linked list for in-flight tracking
     struct _ConnInfo *prev;
-} ConnInfo;
+};
 
-/* Doubly-linked list head for all in-flight connections.
-   Used by cleanup_http_curl() to decrRef for requests that never completed. */
-static ConnInfo *inflight_head = NULL;
-
+/* In-flight connections are owned by their runtime. */
 static void inflight_add(ConnInfo *conn) {
+    HttpRuntime *runtime = conn->runtime;
     conn->prev = NULL;
-    conn->next = inflight_head;
-    if (inflight_head) {
-        inflight_head->prev = conn;
+    conn->next = runtime->inflight_head;
+    if (runtime->inflight_head) {
+        runtime->inflight_head->prev = conn;
     }
-    inflight_head = conn;
+    runtime->inflight_head = conn;
 }
 
 static void inflight_remove(ConnInfo *conn) {
+    HttpRuntime *runtime = conn->runtime;
     if (conn->prev) {
         conn->prev->next = conn->next;
-    } else {
-        inflight_head = conn->next;
+    } else if (runtime->inflight_head == conn) {
+        runtime->inflight_head = conn->next;
     }
     if (conn->next) {
         conn->next->prev = conn->prev;
@@ -117,14 +133,17 @@ static void inflight_remove(ConnInfo *conn) {
     conn->next = NULL;
 }
 
-typedef struct {
+struct _ResumeInfo {
     struct event *resume_timer;
+    HttpRuntime *runtime;
     lua_State *L;
     int coref;
-} ResumeInfo;
+    ResumeInfo *next;
+};
 
 /* Information associated with a specific socket */
 typedef struct _SockInfo {
+    HttpRuntime *runtime;
     curl_socket_t sockfd;
     CURL *easy;
     int action;
@@ -141,24 +160,21 @@ enum { HTTP_GET, HTTP_POST, HTTP_PUT, HTTP_HEAD, HTTP_DELETE, HTTP_UPDATE, HTTP_
 
 /* Update the event timer after curl_multi library calls.
  * timeout_ms < 0 means "delete the timer" (libcurl contract). */
-static int multi_timer_cb(CURLM *multi, long timeout_ms, void *data) {
+static int multi_timer_cb(CURLM *multi_handle, long timeout_ms, void *data) {
     struct timeval timeout;
-    (void)multi; /* unused */
-    (void)data;
+    HttpRuntime *runtime = (HttpRuntime *)data;
+    (void)multi_handle; /* unused */
 
-    if (!timer_event)
+    if (!runtime || !runtime->timer_event)
         return 0;
     if (timeout_ms < 0) {
-        evtimer_del(timer_event);
+        evtimer_del(runtime->timer_event);
         return 0;
     }
 
     timeout.tv_sec = timeout_ms / 1000;
     timeout.tv_usec = (timeout_ms % 1000) * 1000;
-    //    fprintf(MSG_OUT, "multi_timer_cb: Setting timeout to %ld ms\n",
-    //    timeout_ms);
-
-    evtimer_add(timer_event, &timeout);
+    evtimer_add(runtime->timer_event, &timeout);
     return 0;
 }
 
@@ -174,6 +190,23 @@ static const char *mcode_or_die(const char *where, CURLMcode code) {
 }
 
 static void resume_cb(int fd, short kind, void *userp);
+static void timer_cb(int fd, short kind, void *userp);
+static void timer_check_multi_info_cb(int fd, short kind, void *userp);
+static int sock_cb(CURL *e, curl_socket_t s, int what, void *cbp, void *sockp);
+
+static void http_resume_failure(ConnInfo *conn) {
+    lua_State *mainthread = conn->mainthread ? conn->mainthread :
+                            (conn->L ? utlua_mainthread(conn->L) : NULL);
+    if (mainthread && conn->coref != LUA_NOREF) {
+        lua_lock(mainthread);
+        luaL_unref(mainthread, LUA_REGISTRYINDEX, conn->coref);
+        lua_unlock(mainthread);
+        conn->coref = LUA_NOREF;
+    }
+    if (mainthread) {
+        decrRef(mainthread);
+    }
+}
 
 static void http_getpost_complete(ConnInfo *conn) {
     if (conn->completed) {
@@ -309,56 +342,55 @@ static void http_getpost_complete(ConnInfo *conn) {
 
     ResumeInfo *info = malloc(sizeof(ResumeInfo));
     if (!info) {
-        // Critical fix: Handle memory allocation failure
         fprintf(stderr, "Memory allocation failed for ResumeInfo: %zu bytes\n", sizeof(ResumeInfo));
-        lua_State *mainthread = utlua_mainthread(L);
-        // Cannot safely resume, but we need to clean up coref
-        if (conn->coref != LUA_NOREF) {
-            lua_lock(mainthread);
-            luaL_unref(mainthread, LUA_REGISTRYINDEX, conn->coref);
-            lua_unlock(mainthread);
-        }
-        decrRef(mainthread);
+        http_resume_failure(conn);
         return;
     }
+    info->runtime = conn->runtime;
     info->L = L;
     info->coref = conn->coref;
-    info->resume_timer = evtimer_new(event_mgr_base(), resume_cb, info);
+    info->resume_timer = evtimer_new(conn->runtime->base, resume_cb, info);
+    if (!info->resume_timer) {
+        free(info);
+        http_resume_failure(conn);
+        return;
+    }
     struct timeval tv = {0, 1};
-    event_add(info->resume_timer, &tv);
+    if (event_add(info->resume_timer, &tv) != 0) {
+        event_free(info->resume_timer);
+        free(info);
+        http_resume_failure(conn);
+        return;
+    }
+    info->next = conn->runtime->resume_head;
+    conn->runtime->resume_head = info;
 
     conn->coref = LUA_NOREF;
 }
 
 /* Check for completed transfers, and remove their easy handles */
 static void timer_check_multi_info_cb(int fd, short kind, void *userp) {
+    HttpRuntime *runtime = (HttpRuntime *)userp;
     char *eff_url;
     CURLMsg *msg;
     int msgs_left;
+    (void)fd;
+    (void)kind;
 
-    //    printf("REMAINING: %d\n", still_running);
-    while ((msg = curl_multi_info_read(multi, &msgs_left))) {
-        //        printf("MSG_LEFT: %d\n", msgs_left);
+    if (!runtime || !runtime->multi) return;
+    while ((msg = curl_multi_info_read(runtime->multi, &msgs_left))) {
         if (msg->msg == CURLMSG_DONE) {
             CURL *easy = msg->easy_handle;
-
             ConnInfo *conn = NULL;
             curl_easy_getinfo(easy, CURLINFO_PRIVATE, &conn);
             curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &eff_url);
-            //            printf("DONE: %s => (%d) %s\n", eff_url, msg->data.result,
-            //            conn->error);
+            if (!conn) continue;
 
             http_getpost_complete(conn);
+            curl_multi_remove_handle(runtime->multi, easy);
 
-            curl_multi_remove_handle(multi, easy);
-            //            free(conn->url);
-
-            if (conn->outputHeaders) {
-                curl_slist_free_all(conn->outputHeaders);
-            }
-            if (conn->resolve) {
-                curl_slist_free_all(conn->resolve);
-            }
+            if (conn->outputHeaders) curl_slist_free_all(conn->outputHeaders);
+            if (conn->resolve) curl_slist_free_all(conn->resolve);
             curl_easy_cleanup(easy);
             free(conn);
         }
@@ -367,38 +399,55 @@ static void timer_check_multi_info_cb(int fd, short kind, void *userp) {
 
 /* Called by libevent when we get action on a multi socket */
 static void event_cb(int fd, short kind, void *userp) {
-    //    fprintf(MSG_OUT, "event_cb %d %d\n", fd, kind);
-    int action = (kind & EV_READ ? CURL_CSELECT_IN : 0) | (kind & EV_WRITE ? CURL_CSELECT_OUT : 0);
+    HttpRuntime *runtime = (HttpRuntime *)userp;
+    int action = (kind & EV_READ ? CURL_CSELECT_IN : 0) |
+                 (kind & EV_WRITE ? CURL_CSELECT_OUT : 0);
+    if (!runtime || !runtime->multi) return;
 
-    CURLMcode rc = curl_multi_socket_action(multi, fd, action, &still_running);
+    CURLMcode rc = curl_multi_socket_action(runtime->multi, fd, action,
+                                            &runtime->still_running);
     mcode_or_die("event_cb: curl_multi_socket_action", rc);
 
     struct timeval tv = {0, 100};
-    event_add(timer_check_multi_info, &tv);
+    if (runtime->timer_check_multi_info) {
+        event_add(runtime->timer_check_multi_info, &tv);
+    }
 
-    if (still_running <= 0) {
-        // fprintf(MSG_OUT, "last transfer done, kill timeout\n");
-        if (evtimer_pending(timer_event, NULL)) {
-            evtimer_del(timer_event);
-        }
+    if (runtime->still_running <= 0 && runtime->timer_event &&
+        evtimer_pending(runtime->timer_event, NULL)) {
+        evtimer_del(runtime->timer_event);
     }
 }
 
 /* Called by libevent when our timeout expires */
 static void timer_cb(int fd, short kind, void *userp) {
-    CURLMcode rc;
+    HttpRuntime *runtime = (HttpRuntime *)userp;
     (void)fd;
     (void)kind;
+    if (!runtime || !runtime->multi) return;
 
-    rc = curl_multi_socket_action(multi, CURL_SOCKET_TIMEOUT, 0, &still_running);
+    CURLMcode rc = curl_multi_socket_action(runtime->multi, CURL_SOCKET_TIMEOUT,
+                                            0, &runtime->still_running);
     mcode_or_die("timer_cb: curl_multi_socket_action", rc);
 
     struct timeval tv = {0, 1000};
-    event_add(timer_check_multi_info, &tv);
+    if (runtime->timer_check_multi_info) {
+        event_add(runtime->timer_check_multi_info, &tv);
+    }
 }
 
 static void resume_cb(int fd, short kind, void *userp) {
     ResumeInfo *info = (ResumeInfo *)userp;
+    HttpRuntime *runtime = info->runtime;
+    if (runtime) {
+        ResumeInfo **pp = &runtime->resume_head;
+        while (*pp && *pp != info) {
+            pp = &(*pp)->next;
+        }
+        if (*pp == info) {
+            *pp = info->next;
+        }
+    }
     //    fprintf(MSG_OUT, "resume\n");
     lua_State *L = info->L;
     lua_State *mainthread = utlua_mainthread(L);
@@ -426,23 +475,40 @@ static void remsock(SockInfo *f) {
 
 /* Assign information to a SockInfo structure */
 static void setsock(SockInfo *f, curl_socket_t s, CURL *e, int act, void *data) {
-    int kind = (act & CURL_POLL_IN ? EV_READ : 0) | (act & CURL_POLL_OUT ? EV_WRITE : 0) | EV_PERSIST;
+    HttpRuntime *runtime = f ? f->runtime : (HttpRuntime *)data;
+    int kind = (act & CURL_POLL_IN ? EV_READ : 0) |
+               (act & CURL_POLL_OUT ? EV_WRITE : 0) | EV_PERSIST;
 
+    if (!f || !runtime || !runtime->base) return;
     f->sockfd = s;
     f->action = act;
     f->easy = e;
-    if (f->evset)
+    if (f->evset) {
         event_free(f->ev);
-    f->ev = event_new(event_mgr_base(), f->sockfd, kind, event_cb, data);
+        f->ev = NULL;
+        f->evset = 0;
+    }
+    f->ev = event_new(runtime->base, f->sockfd, kind, event_cb, runtime);
+    if (!f->ev) return;
+    if (event_add(f->ev, NULL) != 0) {
+        event_free(f->ev);
+        f->ev = NULL;
+        return;
+    }
     f->evset = 1;
-    event_add(f->ev, NULL);
 }
 
 /* Initialize a new SockInfo structure */
 static void addsock(curl_socket_t s, CURL *easy, int action, void *data) {
+    HttpRuntime *runtime = (HttpRuntime *)data;
     SockInfo *fdp = calloc(1, sizeof(SockInfo));
-    setsock(fdp, s, easy, action, data);
-    curl_multi_assign(multi, s, fdp);
+    if (!fdp || !runtime) {
+        free(fdp);
+        return;
+    }
+    fdp->runtime = runtime;
+    setsock(fdp, s, easy, action, runtime);
+    curl_multi_assign(runtime->multi, s, fdp);
 }
 
 /* CURLMOPT_SOCKETFUNCTION */
@@ -576,7 +642,6 @@ static size_t fillheader(void *ptr, size_t size, size_t nmemb, void *userdata) {
         lua_pushvalue(L, -2); // copy header table above function
         lua_remove(L, -3);    // remove original header table from below function
 
-        lua_unlock(L);
         int pcall_status = lua_pcall(L, 1, 0, 0);
         if (pcall_status != 0) {
             LOGE("http onheader pcall error: %s\n", lua_tostring(L, -1));
@@ -609,7 +674,6 @@ static int onprogress(void *clientp, double dltotal, double dlnow, double ultota
     lua_pushinteger(L, dlnow);
     lua_pushinteger(L, ultotal);
     lua_pushinteger(L, ulnow);
-    lua_unlock(L);
 
     int status = lua_pcall(L, 4, 1, 0);
     long ret = 0;
@@ -623,6 +687,7 @@ static int onprogress(void *clientp, double dltotal, double dlnow, double ultota
         lua_pop(L, 1);
     }
 
+    lua_unlock(L);
     return (int)ret;
 }
 
@@ -645,7 +710,6 @@ static size_t onwrite(char *ptr, size_t size, size_t nmemb, void *userdata) {
         return 0;
     }
     lua_pushlstring(L, ptr, size * nmemb);
-    lua_unlock(L);
 
     int status = lua_pcall(L, 1, 1, 0);
     long ret = 0;
@@ -664,6 +728,7 @@ static size_t onwrite(char *ptr, size_t size, size_t nmemb, void *userdata) {
         ret = size * nmemb;
     }
 
+    lua_unlock(L);
     return (int)ret;
 }
 
@@ -685,7 +750,6 @@ static size_t onread(void *ptr, size_t size, size_t nmemb, void *userdata) {
     size_t accept_size = size * nmemb;
     lua_pushinteger(L, accept_size);
 
-    lua_unlock(L);
     int status = lua_pcall(L, 1, 2, 0);
     long ret = 0;
     if (status == 0) {
@@ -704,6 +768,7 @@ static size_t onread(void *ptr, size_t size, size_t nmemb, void *userdata) {
         LOGE("http onread pcall error: %s\n", lua_tostring(L, -1));
         lua_pop(L, 1);
     }
+    lua_unlock(L);
     return ret;
 }
 
@@ -800,8 +865,116 @@ int debug_callback(CURL *curl_handle, curl_infotype infotype, char *buf, size_t 
     return 0;
 }
 
+static int http_runtime_prepare(HttpRuntime *runtime) {
+    if (!runtime->base) {
+        runtime->base = runtime->worker_id >= 0
+            ? event_mgr_worker_base(runtime->worker_id)
+            : event_mgr_base();
+    }
+    if (!runtime->base) {
+        return -1;
+    }
+    if (!runtime->timer_event) {
+        runtime->timer_event = evtimer_new(runtime->base, timer_cb, runtime);
+        if (!runtime->timer_event) {
+            return -1;
+        }
+    }
+    if (!runtime->timer_check_multi_info) {
+        runtime->timer_check_multi_info = evtimer_new(
+            runtime->base, timer_check_multi_info_cb, runtime);
+        if (!runtime->timer_check_multi_info) {
+            event_free(runtime->timer_event);
+            runtime->timer_event = NULL;
+            return -1;
+        }
+    }
+    if (!runtime->multi) {
+        runtime->multi = curl_multi_init();
+        if (!runtime->multi) {
+            if (runtime->timer_check_multi_info) {
+                event_free(runtime->timer_check_multi_info);
+                runtime->timer_check_multi_info = NULL;
+            }
+            if (runtime->timer_event) {
+                event_free(runtime->timer_event);
+                runtime->timer_event = NULL;
+            }
+            return -1;
+        }
+        curl_multi_setopt(runtime->multi, CURLMOPT_SOCKETFUNCTION, sock_cb);
+        curl_multi_setopt(runtime->multi, CURLMOPT_SOCKETDATA, runtime);
+        curl_multi_setopt(runtime->multi, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
+        curl_multi_setopt(runtime->multi, CURLMOPT_TIMERDATA, runtime);
+    }
+    return 0;
+}
+
+/* Raise a Lua error from a helper called while the coarse Lua lock is held by
+ * http_get()/http_post()/... (see the lock contract on http_getpost()).
+ *
+ * luaL_error() longjmps out of this C function, so the level taken by the
+ * caller would never be released and the global recursive Lua mutex would stay
+ * owned by this thread — every worker thread then blocks in lua_lock() forever
+ * (docs/threading-model.md §2). Releasing our level first keeps the lock depth
+ * balanced across the longjmp, exactly like a C function that never locked. */
+static int http_lua_error(lua_State *L, const char *msg) {
+    lua_unlock(L);
+    return luaL_error(L, "%s", msg);
+}
+
+static HttpRuntime *http_runtime_for_request(lua_State *L) {
+    int current_worker = event_mgr_current_worker_id();
+    int requested_worker = current_worker;
+    int worker_specified = 0;
+
+    if (lua_istable(L, 1)) {
+        lua_getfield(L, 1, "worker");
+        if (!lua_isnil(L, -1)) {
+            worker_specified = 1;
+            if (!lua_isinteger(L, -1)) {
+                lua_pop(L, 1);
+                http_lua_error(L, "http worker must be an integer");
+            }
+            requested_worker = (int)lua_tointeger(L, -1);
+        }
+        lua_pop(L, 1);
+    }
+
+    if (!worker_specified && current_worker < 0) {
+        requested_worker = HTTP_RUNTIME_MAIN;
+    }
+    if (requested_worker < HTTP_RUNTIME_MAIN) {
+        http_lua_error(L, "http worker must be -1 or a non-negative worker id");
+    }
+    if (requested_worker == HTTP_RUNTIME_MAIN) {
+        if (current_worker >= 0 && worker_specified) {
+            http_lua_error(L, "worker thread cannot use the main HTTP runtime");
+        }
+        return &main_runtime;
+    }
+    if (requested_worker >= event_mgr_worker_count()) {
+        http_lua_error(L, "http worker is unavailable");
+    }
+    if (current_worker != requested_worker) {
+        http_lua_error(L, "http worker must match the current event worker");
+    }
+    return &worker_runtimes[requested_worker];
+}
+
+/* Lock contract: every public entry point below (http_get/http_post/...) takes
+ * the global Lua lock for the whole call, so this function and its helpers run
+ * with that coarse level held. Any Lua error raised here MUST go through
+ * http_lua_error() so the level is released before the longjmp — otherwise the
+ * recursive mutex stays owned by this thread and all worker threads deadlock in
+ * lua_lock() (docs/threading-model.md §2). */
 static int http_getpost(lua_State *L, int method) {
+    HttpRuntime *runtime = http_runtime_for_request(L);
     ConnInfo *conn = calloc(1, sizeof(ConnInfo));
+    if (!conn) {
+        return http_lua_error(L, "http request allocation failed");
+    }
+    conn->runtime = runtime;
 
     conn->onheaderref = LUA_NOREF;
     conn->onprogressref = LUA_NOREF;
@@ -819,8 +992,8 @@ static int http_getpost(lua_State *L, int method) {
     if (!conn->easy) {
         bytearray_dealloc(&conn->input);
         free(conn);
-        luaL_error(L, "curl_easy_init() failed");
-        return 0;  // unreachable, luaL_error longjmps
+        http_lua_error(L, "curl_easy_init() failed");
+        return 0;  // unreachable, http_lua_error longjmps
     }
 
     //    printf("lua_gettop(L)=%d\n", lua_gettop(L));
@@ -1341,29 +1514,25 @@ static int http_getpost(lua_State *L, int method) {
         lua_lock(conn->mainthread);
         conn->L = lua_newthread(conn->mainthread);
         conn->coref = luaL_ref(conn->mainthread, LUA_REGISTRYINDEX);
-        lua_unlock(conn->mainthread);
-
         lua_rawgeti(conn->L, LUA_REGISTRYINDEX, oncompleteref);
+        lua_unlock(conn->mainthread);
     } else {
         conn->L = L;
         lua_pushthread(L);
         conn->coref = luaL_ref(L, LUA_REGISTRYINDEX);
     }
 
-    if (!multi) {
-        multi = curl_multi_init();
-
-        curl_multi_setopt(multi, CURLMOPT_SOCKETFUNCTION, sock_cb);
-        curl_multi_setopt(multi, CURLMOPT_SOCKETDATA, NULL);
-        curl_multi_setopt(multi, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
-        curl_multi_setopt(multi, CURLMOPT_TIMERDATA, NULL);
+    runtime = conn->runtime;
+    if (http_runtime_prepare(runtime) != 0) {
+        err = "http runtime initialization failed";
+        goto ERROR;
     }
 
     if (share_handle) {
         curl_easy_setopt(conn->easy, CURLOPT_SHARE, share_handle);
     }
 
-    CURLMcode rc = curl_multi_add_handle(multi, conn->easy);
+    CURLMcode rc = curl_multi_add_handle(runtime->multi, conn->easy);
     if (rc != CURLM_OK) {
         err = mcode_or_die("new_conn: curl_multi_add_handle", rc);
         goto ERROR;
@@ -1418,7 +1587,7 @@ ERROR:
 
     if (err) {
         lua_unlock(L);
-        luaL_error(L, err);
+        luaL_error(L, "%s", err);
     }
 
     return LUA_OK;
@@ -1671,11 +1840,11 @@ extern void reset_dns_servers() {
 // Tears down the curl multi handle and our timer events while the base is
 // still valid, so libcurl's internal callbacks (which remove sockets from
 // libevent) can run without dereferencing a freed base.
-void cleanup_http_curl(void) {
+static void cleanup_http_runtime(HttpRuntime *runtime) {
     // First, drain all in-flight connections that never received CURLMSG_DONE.
     // Each one holds an incrRef that would otherwise leak.
-    while (inflight_head) {
-        ConnInfo *conn = inflight_head;
+    while (runtime->inflight_head) {
+        ConnInfo *conn = runtime->inflight_head;
         inflight_remove(conn);
 
         if (!conn->completed) {
@@ -1724,34 +1893,77 @@ void cleanup_http_curl(void) {
             curl_slist_free_all(conn->resolve);
         }
         if (conn->easy) {
-            curl_multi_remove_handle(multi, conn->easy);
+            if (runtime->multi) {
+                curl_multi_remove_handle(runtime->multi, conn->easy);
+            }
             curl_easy_cleanup(conn->easy);
         }
         free(conn);
     }
 
-    if (multi) {
+    /* Pending Lua resume timers hold a registry ref + decrRef. If the runtime
+     * is torn down before they fire, release them here instead of leaking the
+     * ResumeInfo block and its pin. */
+    while (runtime->resume_head) {
+        ResumeInfo *info = runtime->resume_head;
+        runtime->resume_head = info->next;
+        lua_State *L = info->L;
+        lua_State *mainthread = L ? utlua_mainthread(L) : NULL;
+        if (info->resume_timer) {
+            event_free(info->resume_timer);
+            info->resume_timer = NULL;
+        }
+        if (mainthread && info->coref != LUA_NOREF) {
+            lua_lock(mainthread);
+            luaL_unref(mainthread, LUA_REGISTRYINDEX, info->coref);
+            lua_unlock(mainthread);
+        }
+        if (mainthread) {
+            decrRef(mainthread);
+        }
+        free(info);
+    }
+
+    if (runtime->multi) {
         // curl_multi_cleanup invokes socket/timer callbacks to detach pending
         // sockets from the event base. The base must still be alive for those
         // callbacks to succeed.
-        curl_multi_cleanup(multi);
-        multi = NULL;
+        curl_multi_cleanup(runtime->multi);
+        runtime->multi = NULL;
     }
-    if (timer_event) {
-        event_free(timer_event);
-        timer_event = NULL;
+    if (runtime->timer_event) {
+        event_free(runtime->timer_event);
+        runtime->timer_event = NULL;
     }
-    if (timer_check_multi_info) {
-        event_free(timer_check_multi_info);
-        timer_check_multi_info = NULL;
+    if (runtime->timer_check_multi_info) {
+        event_free(runtime->timer_check_multi_info);
+        runtime->timer_check_multi_info = NULL;
     }
-    still_running = 0;
+    /* The owning event base is freed by event_mgr_loop_cleanup() after this
+     * function returns. Do not retain a dangling pointer across a restart. */
+    runtime->base = NULL;
+    runtime->still_running = 0;
+}
+
+void cleanup_http_curl(void) {
+    cleanup_http_runtime(&main_runtime);
+    for (int i = 0; i < EVENT_MGR_MAX_WORKERS; i++) {
+        if (worker_runtimes[i].base || worker_runtimes[i].multi ||
+            worker_runtimes[i].inflight_head || worker_runtimes[i].timer_event ||
+            worker_runtimes[i].timer_check_multi_info) {
+            cleanup_http_runtime(&worker_runtimes[i]);
+        }
+    }
 }
 
 LUA_API int luaopen_fan_http_core(lua_State *L) {
     curl_global_init(CURL_GLOBAL_ALL);
 
-    struct event_base *cur_base = event_mgr_base();
+    main_runtime.worker_id = HTTP_RUNTIME_MAIN;
+    main_runtime.base = event_mgr_base();
+    for (int i = 0; i < EVENT_MGR_MAX_WORKERS; i++) {
+        worker_runtimes[i].worker_id = i;
+    }
 
     if (!share_handle) {
         share_handle = curl_share_init();
@@ -1768,12 +1980,8 @@ LUA_API int luaopen_fan_http_core(lua_State *L) {
         pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
         pthread_mutex_init(&share_lock, &a);
     }
-    if (!timer_event) {
-        timer_event = evtimer_new(cur_base, timer_cb, NULL);
-    }
-
-    if (!timer_check_multi_info) {
-        timer_check_multi_info = evtimer_new(cur_base, timer_check_multi_info_cb, NULL);
+    if (http_runtime_prepare(&main_runtime) != 0) {
+        return luaL_error(L, "http runtime initialization failed");
     }
 
     lua_newtable(L);

@@ -916,8 +916,15 @@ local function bind(arg)
     local host = arg and arg.host or "0.0.0.0"
     local port = arg and arg.port or 0
 
+    -- Keep the listener and accepted connections on the requested event worker.
+    -- connector.bind forwards this option to fan.tcpd.
+    local connector_args = {}
+    if arg and arg.worker ~= nil then
+        connector_args.worker = arg.worker
+    end
+
     -- Use connector.bind to create the server
-    local serv_result = connector.bind(string.format("tcp://%s:%d", host, port))
+    local serv_result = connector.bind(string.format("tcp://%s:%d", host, port), connector_args)
 
     -- Create the object with actual bound information
     local obj = {

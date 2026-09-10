@@ -118,6 +118,18 @@ keys in the `arg`:
 
 ---------
 
+## Worker and concurrency
+
+The Lua `fan.http.http` implementation accepts `worker` and forwards it to `fan.connector.tcp`, so its request connection uses the selected event base: omitted keeps the connection on the main base, while an explicit worker selects that worker. This applies to the Lua HTTP implementation only.
+
+The core `fan.http` client (C implementation) now owns one libcurl multi handle, timer events, socket events and in-flight list **per event runtime**: the main base plus one runtime per event worker. It accepts `worker` with these rules:
+
+* omitted — uses the current event base (the main runtime on the main thread, or the current worker's runtime inside a worker callback);
+* `worker = -1` — explicitly selects the main runtime (rejected from a worker thread);
+* `worker = N (>= 0)` — selects worker N's runtime and must match the current event worker; a mismatch is an error.
+
+The `curl_share` handle (DNS/SSL session/connect cache) is still process-wide and is serialized by its own recursive lock.
+
 ### responsetable
 
 ---------

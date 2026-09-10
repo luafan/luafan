@@ -47,9 +47,18 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata)
     int status = mysql_stmt_prepare_cont(&ret, st->my_stmt, bag->status);
     if (status)
     {
-      wait_for_status(L, bag->ctx, st, status, stmt_prepare_cont,
-                      bag->extra);
-      skip_unref = 1;
+      if (wait_for_status(L, bag->ctx, st, status, stmt_prepare_cont,
+                          bag->extra) == 0)
+      {
+        skip_unref = 1;
+      }
+      else
+      {
+        int nresults = mariadb_push_wait_error(L);
+        UNREF_CO(st);
+        FAN_RESUME(L, NULL, nresults);
+        /* skip_unref stays 0: bag->extra is released below. */
+      }
     }
     else if (ret == 0)
     {
@@ -123,7 +132,14 @@ LUA_API int stmt_prepare_start(lua_State *L)
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_unlock(L);
     REF_CO(st);
-    wait_for_status(L, ctx, st, status, stmt_prepare_cont, ref);
+    if (wait_for_status(L, ctx, st, status, stmt_prepare_cont, ref) != 0)
+    {
+      lua_lock(L);
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+      lua_unlock(L);
+      UNREF_CO(st);
+      return mariadb_push_wait_error(L);
+    }
     return lua_yield(L, 0);
   }
   else if (ret == 0)

@@ -16,6 +16,7 @@ typedef struct {
     int onDisconnectedRef;
 
     lua_State *mainthread;
+    int worker_id;
 
     struct event *read_ev;
     struct event *write_ev;
@@ -129,6 +130,24 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
     lua_Integer mode = luaL_optinteger(L, -1, 0600);
     lua_pop(L, 1);
 
+    // Validate the optional worker before creating the FIFO so an invalid
+    // value cannot leave a freshly created fifo file behind.
+    int worker_id = -1;
+    lua_getfield(L, 1, "worker");
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isinteger(L, -1)) {
+            lua_pop(L, 1);
+            return luaL_error(L, "fifo worker must be an integer");
+        }
+        int w = (int)lua_tointeger(L, -1);
+        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
+            lua_pop(L, 1);
+            return luaL_error(L, "fifo worker is unavailable");
+        }
+        worker_id = w;
+    }
+    lua_pop(L, 1);
+
     int found_fifo = 0;
     struct stat st;
     if (lstat(fifoname, &st) == 0) {
@@ -158,6 +177,7 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
     luaL_getmetatable(L, LUA_FIFO_CONNECTION_TYPE);
     lua_setmetatable(L, -2);
     fifo->mainthread = utlua_mainthread(L);
+    fifo->worker_id = worker_id;
     // fifo->read_ev = NULL;
     // fifo->write_ev = NULL;
     // fifo->name = NULL;
@@ -201,22 +221,48 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
     }
 
     fifo->socket = socket;
+    struct event_base *fifo_base =
+        (fifo->worker_id >= 0 && event_mgr_worker_count() > 0)
+            ? event_mgr_worker_base(fifo->worker_id)
+            : event_mgr_base();
 
     if (fifo->onSendReadyRef != LUA_NOREF) {
-        fifo->write_ev = event_new(event_mgr_base(), socket, EV_WRITE, fifo_write_cb, fifo);
-        event_add(fifo->write_ev, NULL);
+        fifo->write_ev = event_new(fifo_base, socket, EV_WRITE, fifo_write_cb, fifo);
+        if (!fifo->write_ev || event_add(fifo->write_ev, NULL) < 0) {
+            goto setup_error;
+        }
     } else {
         fifo->write_ev = NULL;
     }
 
     if (fifo->onReadRef != LUA_NOREF) {
-        fifo->read_ev = event_new(event_mgr_base(), socket, EV_PERSIST | EV_READ, fifo_read_cb, fifo);
-        event_add(fifo->read_ev, NULL);
+        fifo->read_ev = event_new(fifo_base, socket, EV_PERSIST | EV_READ, fifo_read_cb, fifo);
+        if (!fifo->read_ev || event_add(fifo->read_ev, NULL) < 0) {
+            goto setup_error;
+        }
     } else {
         fifo->read_ev = NULL;
     }
 
     return 1;
+
+setup_error:
+    if (fifo->read_ev) {
+        event_free(fifo->read_ev);
+        fifo->read_ev = NULL;
+    }
+    if (fifo->write_ev) {
+        event_free(fifo->write_ev);
+        fifo->write_ev = NULL;
+    }
+    close(fifo->socket);
+    fifo->socket = -1;
+    CLEAR_REF(L, fifo->onReadRef)
+    CLEAR_REF(L, fifo->onSendReadyRef)
+    CLEAR_REF(L, fifo->onDisconnectedRef)
+    free(fifo->name);
+    fifo->name = NULL;
+    return luaL_error(L, "failed to set up FIFO events");
 }
 
 LUA_API int luafan_fifo_send_request(lua_State *L) {

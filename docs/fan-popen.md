@@ -44,6 +44,7 @@ Spawn a child process with bidirectional pipe I/O.
 | `ondisconnected` | function | nil | `function(msg, exit_code)` — called when child exits |
 | `capture_stderr` | boolean | true | Whether to capture stderr separately |
 | `process_group` | boolean | false | Start the child in a dedicated process group. `close()` then terminates the group, including shell descendants. Use for bounded one-shot commands, not detached services. |
+| `worker` | integer | omitted | Event worker affinity. Omitted selects workers round-robin when enabled; `-1` keeps the process events on the main event base. Invalid or out-of-range values raise an error. |
 
 **Returns**: `proc` userdata, or `nil, error_message`
 

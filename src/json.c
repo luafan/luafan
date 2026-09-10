@@ -872,6 +872,12 @@ static int json_decode(lua_State *L) {
 
 /* ---- helpers: array / object / null / is_* --------------------------------- */
 
+static int json_null_tostring(lua_State *L) {
+    (void)L;
+    lua_pushliteral(L, "null");
+    return 1;
+}
+
 static int json_array(lua_State *L) {
     if (lua_isnoneornil(L, 1)) {
         lua_newtable(L);
@@ -971,7 +977,7 @@ LUA_API int luaopen_json(lua_State *L) {
     /* null sentinel: unique full userdata (same idea as fan.const) */
     lua_newuserdata(L, 0);
     lua_newtable(L);
-    lua_pushstring(L, "const: json.null");
+    lua_pushcfunction(L, json_null_tostring);
     lua_setfield(L, -2, "__tostring");
     lua_pushboolean(L, 0);
     lua_setfield(L, -2, "__metatable");

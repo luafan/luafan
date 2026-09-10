@@ -2,6 +2,7 @@
 // Includes RFC 7692 permessage-deflate when client offers it.
 
 #include "httpd_internal.h"
+#include "event_mgr.h"
 #include <ctype.h>
 #include <string.h>
 #include <openssl/sha.h>
@@ -14,6 +15,151 @@
 #define WS_PMD_TRAILER_LEN 4
 
 static const unsigned char WS_PMD_TRAILER[WS_PMD_TRAILER_LEN] = {0x00, 0x00, 0xff, 0xff};
+
+static int ws_pmd_deflate_payload(Request *request, const char *data, size_t data_len,
+                                   char **out_data, size_t *out_len);
+static struct evbuffer *websocket_create_frame(websocket_opcode_t opcode,
+                                                const char *payload, uint64_t payload_len,
+                                                int fin, int rsv1);
+
+static int ws_affinity_is_current(Request *request) {
+    return request && event_mgr_is_current_owner(request->worker_id);
+}
+
+typedef struct {
+    Request *request;
+    struct bufferevent *bev;
+    lua_State *mainthread;
+    int request_ref;
+    int opcode;
+    int fin;
+    int control;
+    int close_code;
+    size_t data_len;
+    char *data;
+} ws_send_job_t;
+
+static void ws_release_send_job(ws_send_job_t *job) {
+    if (job->request_ref != LUA_NOREF && job->mainthread) {
+        lua_lock(job->mainthread);
+        luaL_unref(job->mainthread, LUA_REGISTRYINDEX, job->request_ref);
+        lua_unlock(job->mainthread);
+    }
+    free(job->data);
+    free(job);
+}
+
+static void ws_send_done(Request *request) {
+    pthread_mutex_lock(&request->ws_mutex);
+    if (request->ws_pending_sends > 0) {
+        request->ws_pending_sends--;
+    }
+    pthread_mutex_unlock(&request->ws_mutex);
+}
+
+static void ws_send_on_owner(evutil_socket_t fd, short what, void *arg) {
+    ws_send_job_t *job = (ws_send_job_t *)arg;
+    Request *request = job->request;
+    (void)fd;
+    (void)what;
+
+    pthread_mutex_lock(&request->ws_mutex);
+    if (!request->ws_cleaning_up && request->ws_bev == job->bev) {
+        int allowed = job->control && job->opcode == WS_OPCODE_CLOSE
+            ? (request->ws_state == WS_STATE_OPEN || request->ws_state == WS_STATE_CLOSING)
+            : request->ws_state == WS_STATE_OPEN;
+        if (allowed) {
+            const char *send_data = job->data;
+            size_t send_len = job->data_len;
+            char *comp_buf = NULL;
+            int rsv1 = 0;
+            if (!job->control && request->ws_pmd && job->fin &&
+                (job->opcode == WS_OPCODE_TEXT || job->opcode == WS_OPCODE_BINARY) &&
+                ws_pmd_deflate_payload(request, job->data, job->data_len,
+                                       &comp_buf, &send_len) == 0) {
+                send_data = comp_buf;
+                rsv1 = 1;
+            }
+            char close_payload[127];
+            if (job->control && job->opcode == WS_OPCODE_CLOSE) {
+                close_payload[0] = (job->close_code >> 8) & 0xFF;
+                close_payload[1] = job->close_code & 0xFF;
+                if (job->data_len > 0) {
+                    memcpy(close_payload + 2, job->data, job->data_len);
+                }
+                send_data = close_payload;
+                send_len = job->data_len + 2;
+            }
+            struct evbuffer *frame = websocket_create_frame(
+                (websocket_opcode_t)job->opcode, send_data, send_len,
+                job->fin, rsv1);
+            if (frame) {
+                int result = bufferevent_write_buffer(job->bev, frame);
+                evbuffer_free(frame);
+                if (result == 0 && job->control && job->opcode == WS_OPCODE_CLOSE) {
+                    request->ws_state = WS_STATE_CLOSING;
+                }
+            }
+            free(comp_buf);
+        }
+    }
+    pthread_mutex_unlock(&request->ws_mutex);
+    ws_send_done(request);
+    ws_release_send_job(job);
+}
+
+static int ws_queue_control_job(lua_State *L, Request *request,
+                                 int opcode, const char *data, size_t data_len,
+                                 int close_code) {
+    struct bufferevent *bev;
+    ws_send_job_t *job = calloc(1, sizeof(*job));
+    if (!job) return -1;
+
+    pthread_mutex_lock(&request->ws_mutex);
+    bev = request->ws_bev;
+    int state_allowed = request->ws_state == WS_STATE_OPEN ||
+        (opcode == WS_OPCODE_CLOSE && request->ws_state == WS_STATE_CLOSING);
+    if (request->ws_cleaning_up || !state_allowed || !bev) {
+        pthread_mutex_unlock(&request->ws_mutex);
+        free(job);
+        return -1;
+    }
+    request->ws_pending_sends++;
+    job->request = request;
+    job->bev = bev;
+    job->mainthread = request->mainthread;
+    job->request_ref = LUA_NOREF;
+    job->opcode = opcode;
+    job->fin = 1;
+    job->control = 1;
+    job->close_code = close_code;
+    job->data_len = data_len;
+    pthread_mutex_unlock(&request->ws_mutex);
+
+    if (data_len > 0) {
+        job->data = malloc(data_len);
+        if (!job->data) {
+            ws_send_done(request);
+            free(job);
+            return -1;
+        }
+        memcpy(job->data, data, data_len);
+    }
+
+    lua_lock(L);
+    lua_pushvalue(L, 1);
+    job->request_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_unlock(L);
+
+    struct timeval tv = {0, 0};
+    if (event_base_once(bufferevent_get_base(bev), -1, EV_TIMEOUT,
+                        ws_send_on_owner, job, &tv) != 0) {
+        ws_send_done(request);
+        ws_release_send_job(job);
+        return -1;
+    }
+    return 0;
+}
 
 // ============================================================
 // WebSocket upgrade detection
@@ -573,6 +719,26 @@ static void ws_deferred_free_cb(evutil_socket_t fd, short what, void *ctx) {
         return;
     }
 
+    pthread_mutex_lock(&request->ws_mutex);
+    unsigned int pending = request->ws_pending_sends;
+    struct bufferevent *deferred_bev = request->ws_deferred_bev;
+    pthread_mutex_unlock(&request->ws_mutex);
+    if (pending > 0 && deferred_bev) {
+        /* 1 ms backoff: in-flight send jobs are queued on this same loop and
+         * run before this re-arm, so a short delay avoids busy-spinning. */
+        struct timeval tv = {0, 1000};
+        if (event_base_once(bufferevent_get_base(deferred_bev), -1, EV_TIMEOUT,
+                            ws_deferred_free_cb, request, &tv) == 0) {
+            return;
+        }
+        LOG_ERROR_FMT("WebSocket deferred cleanup could not be rescheduled while sends are pending");
+        return;
+    }
+
+    pthread_mutex_lock(&request->ws_mutex);
+    request->ws_deferred_bev = NULL;
+    pthread_mutex_unlock(&request->ws_mutex);
+
     if (request->owns_request && request->req) {
         struct evhttp_connection *evcon = evhttp_request_get_connection(request->req);
         request->req = NULL;
@@ -589,13 +755,26 @@ static void ws_deferred_free_cb(evutil_socket_t fd, short what, void *ctx) {
     if (request->prevent_gc_ref != LUA_NOREF && request->mainthread) {
         CLEAR_REF(request->mainthread, request->prevent_gc_ref);
     }
+    /* Connection fully released: drop the server-side tracking slot so a
+     * draining instance can reach its drain check (fix-plan Phase 1). */
+    httpd_server_ws_detach(request);
 }
 
 static void ws_schedule_free(Request *request, struct bufferevent *bev) {
     struct timeval tv = {0, 0};
+    pthread_mutex_lock(&request->ws_mutex);
+    request->ws_deferred_bev = bev;
+    pthread_mutex_unlock(&request->ws_mutex);
     bufferevent_setcb(bev, NULL, NULL, NULL, NULL);
-    event_base_once(bufferevent_get_base(bev),
-                    -1, EV_TIMEOUT, ws_deferred_free_cb, request, &tv);
+    if (event_base_once(bufferevent_get_base(bev),
+                        -1, EV_TIMEOUT, ws_deferred_free_cb, request, &tv) != 0) {
+        /* The owner loop is stopped or the event could not be allocated. The
+         * connection cannot be released here (we may be inside its callback),
+         * so keep the deferred state and log: the drain-check will keep
+         * waiting instead of freeing a live bufferevent (leak, never UAF). */
+        LOG_ERROR_FMT("WebSocket deferred free could not be scheduled; "
+                      "connection retained until exit");
+    }
 }
 
 static void ws_flush_writecb(struct bufferevent *bev, void *ctx) {
@@ -628,9 +807,12 @@ void ws_connection_cleanup(Request *request) {
     ws_frame_queue_clear(request);
     ws_pmd_end_streams(request);
 
-    if (request->ws_bev) {
-        struct bufferevent *bev = request->ws_bev;
-        request->ws_bev = NULL;
+    pthread_mutex_lock(&request->ws_mutex);
+    struct bufferevent *bev = request->ws_bev;
+    request->ws_bev = NULL;
+    pthread_mutex_unlock(&request->ws_mutex);
+
+    if (bev) {
         bufferevent_disable(bev, EV_READ);
 
         struct evbuffer *output = bufferevent_get_output(bev);
@@ -850,6 +1032,14 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         return luaL_error(L, "connection closed by peer");
     }
 
+    /* Fast-path rejection while the server is draining/gone; the
+     * authoritative check is httpd_server_ws_attach under the accept mutex
+     * (fix-plan Phase 1). */
+    LuaServer *server = request->server;
+    if (!server || (httpd_life_state_t)atomic_load(&server->life_state) != HTTPD_LIVE) {
+        return luaL_error(L, "WebSocket upgrade rejected: server is shutting down");
+    }
+
     if (request->reply_status != REPLY_STATUS_NONE) {
         return luaL_error(L, "Response already started");
     }
@@ -881,6 +1071,15 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         }
     }
 
+    /* Register the connection with its server before owning it: attach
+     * fails only when the server has begun draining, in which case the
+     * upgrade is rejected (fix-plan Phase 1). */
+    if (httpd_server_ws_attach(request) != 0) {
+        free(accept_key);
+        ws_pmd_end_streams(request);
+        return luaL_error(L, "WebSocket upgrade rejected: server is shutting down");
+    }
+
     evhttp_request_own(req);
     request->owns_request = 1;
 
@@ -888,6 +1087,7 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
     if (!response) {
         free(accept_key);
         ws_pmd_end_streams(request);
+        httpd_server_ws_detach(request);
         return luaL_error(L, "Failed to create response buffer");
     }
 
@@ -933,12 +1133,15 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         lua_unlock(L);
     } else {
         ws_pmd_end_streams(request);
+        httpd_server_ws_detach(request);
     }
 
     evbuffer_free(response);
     free(accept_key);
 
+    lua_lock(L);
     lua_pushboolean(L, bev != NULL);
+    lua_unlock(L);
     return 1;
 }
 
@@ -949,11 +1152,14 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
 LUA_API int lua_evhttp_request_websocket_send(lua_State *L) {
     Request *request = request_from_table(L, 1);
 
-    if (!request->is_websocket || request->ws_state != WS_STATE_OPEN) {
+    pthread_mutex_lock(&request->ws_mutex);
+    int is_open = request->is_websocket && request->ws_state == WS_STATE_OPEN;
+    struct bufferevent *current_bev = request->ws_bev;
+    pthread_mutex_unlock(&request->ws_mutex);
+    if (!is_open) {
         return luaL_error(L, "WebSocket connection not open");
     }
-
-    if (!request->ws_bev) {
+    if (!current_bev) {
         return luaL_error(L, "WebSocket connection not available");
     }
 
@@ -967,6 +1173,52 @@ LUA_API int lua_evhttp_request_websocket_send(lua_State *L) {
     }
     int opcode = (int)opcode_value;
     int fin = fin_value != 0;
+
+    if (!ws_affinity_is_current(request)) {
+        ws_send_job_t *job = calloc(1, sizeof(*job));
+        if (!job) {
+            return luaL_error(L, "Failed to allocate WebSocket send job");
+        }
+        pthread_mutex_lock(&request->ws_mutex);
+        if (request->ws_cleaning_up || request->ws_state != WS_STATE_OPEN ||
+            request->ws_bev != current_bev) {
+            pthread_mutex_unlock(&request->ws_mutex);
+            free(job);
+            return luaL_error(L, "WebSocket connection is closing");
+        }
+        request->ws_pending_sends++;
+        job->bev = request->ws_bev;
+        job->mainthread = request->mainthread;
+        pthread_mutex_unlock(&request->ws_mutex);
+        job->request = request;
+        job->request_ref = LUA_NOREF;
+        job->opcode = opcode;
+        job->fin = fin;
+        job->data_len = data_len;
+        job->data = malloc(data_len ? data_len : 1);
+        if (!job->data) {
+            ws_send_done(request);
+            free(job);
+            return luaL_error(L, "Failed to allocate WebSocket payload");
+        }
+        if (data_len > 0) {
+            memcpy(job->data, data, data_len);
+        }
+        lua_lock(L);
+        lua_pushvalue(L, 1);
+        job->request_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        lua_unlock(L);
+
+        struct timeval tv = {0, 0};
+        if (event_base_once(bufferevent_get_base(job->bev), -1, EV_TIMEOUT,
+                            ws_send_on_owner, job, &tv) != 0) {
+            ws_send_done(request);
+            ws_release_send_job(job);
+            return luaL_error(L, "Failed to queue WebSocket send");
+        }
+        lua_pushboolean(L, 1);
+        return 1;
+    }
 
     const char *send_data = data;
     size_t send_len = data_len;
@@ -1002,31 +1254,23 @@ LUA_API int lua_evhttp_request_websocket_send(lua_State *L) {
 
 LUA_API int lua_evhttp_request_websocket_ping(lua_State *L) {
     Request *request = request_from_table(L, 1);
-
-    if (!request->is_websocket || request->ws_state != WS_STATE_OPEN) {
+    pthread_mutex_lock(&request->ws_mutex);
+    int open = request->is_websocket && request->ws_state == WS_STATE_OPEN;
+    pthread_mutex_unlock(&request->ws_mutex);
+    if (!open) {
         return luaL_error(L, "WebSocket connection not open");
     }
 
-    if (!request->ws_bev) {
-        return luaL_error(L, "WebSocket connection not available");
-    }
-
     size_t payload_len = 0;
-    const char *payload = lua_tolstring(L, 2, &payload_len);
-
+    const char *payload = luaL_optlstring(L, 2, "", &payload_len);
     if (payload_len > 125) {
         return luaL_error(L, "Ping payload too large (max 125 bytes)");
     }
 
-    struct evbuffer *frame = websocket_create_frame(WS_OPCODE_PING, payload, payload_len, 1, 0);
-    if (!frame) {
-        return luaL_error(L, "Failed to create ping frame");
+    if (ws_queue_control_job(L, request, WS_OPCODE_PING, payload, payload_len, 0) != 0) {
+        return luaL_error(L, "Failed to queue ping frame");
     }
-
-    int result = bufferevent_write_buffer(request->ws_bev, frame);
-    evbuffer_free(frame);
-
-    lua_pushboolean(L, result == 0);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -1036,31 +1280,23 @@ LUA_API int lua_evhttp_request_websocket_ping(lua_State *L) {
 
 LUA_API int lua_evhttp_request_websocket_pong(lua_State *L) {
     Request *request = request_from_table(L, 1);
-
-    if (!request->is_websocket || request->ws_state != WS_STATE_OPEN) {
+    pthread_mutex_lock(&request->ws_mutex);
+    int open = request->is_websocket && request->ws_state == WS_STATE_OPEN;
+    pthread_mutex_unlock(&request->ws_mutex);
+    if (!open) {
         return luaL_error(L, "WebSocket connection not open");
     }
 
-    if (!request->ws_bev) {
-        return luaL_error(L, "WebSocket connection not available");
-    }
-
     size_t payload_len = 0;
-    const char *payload = lua_tolstring(L, 2, &payload_len);
-
+    const char *payload = luaL_optlstring(L, 2, "", &payload_len);
     if (payload_len > 125) {
         return luaL_error(L, "Pong payload too large (max 125 bytes)");
     }
 
-    struct evbuffer *frame = websocket_create_frame(WS_OPCODE_PONG, payload, payload_len, 1, 0);
-    if (!frame) {
-        return luaL_error(L, "Failed to create pong frame");
+    if (ws_queue_control_job(L, request, WS_OPCODE_PONG, payload, payload_len, 0) != 0) {
+        return luaL_error(L, "Failed to queue pong frame");
     }
-
-    int result = bufferevent_write_buffer(request->ws_bev, frame);
-    evbuffer_free(frame);
-
-    lua_pushboolean(L, result == 0);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -1070,58 +1306,44 @@ LUA_API int lua_evhttp_request_websocket_pong(lua_State *L) {
 
 LUA_API int lua_evhttp_request_websocket_close(lua_State *L) {
     Request *request = request_from_table(L, 1);
-
     if (!request->is_websocket) {
         return luaL_error(L, "Not a WebSocket connection");
     }
 
-    if (request->ws_state == WS_STATE_CLOSED) {
-        lua_pushboolean(L, 1);
-        return 1;
-    }
-
-    if (!request->ws_bev) {
-        request->ws_state = WS_STATE_CLOSED;
-        lua_pushboolean(L, 1);
-        return 1;
-    }
-
     lua_Integer close_code_value = luaL_optinteger(L, 2, 1000);
     size_t reason_len = 0;
-    const char *reason = lua_tolstring(L, 3, &reason_len);
+    const char *reason = luaL_optlstring(L, 3, "", &reason_len);
     if (close_code_value < 1000 || close_code_value > 4999 ||
         close_code_value == 1004 || close_code_value == 1005 ||
         close_code_value == 1006 || close_code_value == 1015) {
         return luaL_error(L, "Invalid WebSocket close code: %lld", (long long)close_code_value);
     }
-    int close_code = (int)close_code_value;
+    if (reason_len > 123) reason_len = 123;
 
-    char close_payload[127];
-    size_t close_payload_len = 0;
-
-    if (close_code >= 1000 && close_code <= 4999) {
-        close_payload[0] = (close_code >> 8) & 0xFF;
-        close_payload[1] = close_code & 0xFF;
-        close_payload_len = 2;
-
-        if (reason && reason_len > 0) {
-            size_t max_reason = sizeof(close_payload) - 2;
-            if (reason_len > max_reason) reason_len = max_reason;
-            memcpy(close_payload + 2, reason, reason_len);
-            close_payload_len += reason_len;
-        }
+    pthread_mutex_lock(&request->ws_mutex);
+    if (request->ws_state == WS_STATE_CLOSED || request->ws_state == WS_STATE_CLOSING) {
+        pthread_mutex_unlock(&request->ws_mutex);
+        lua_pushboolean(L, 1);
+        return 1;
     }
-
-    struct evbuffer *frame = websocket_create_frame(WS_OPCODE_CLOSE,
-                                                   close_payload_len > 0 ? close_payload : NULL,
-                                                   close_payload_len, 1, 0);
-    if (frame) {
-        bufferevent_write_buffer(request->ws_bev, frame);
-        evbuffer_free(frame);
+    if (!request->ws_bev || request->ws_cleaning_up) {
+        request->ws_state = WS_STATE_CLOSED;
+        pthread_mutex_unlock(&request->ws_mutex);
+        lua_pushboolean(L, 1);
+        return 1;
     }
-
     request->ws_state = WS_STATE_CLOSING;
+    pthread_mutex_unlock(&request->ws_mutex);
 
+    if (ws_queue_control_job(L, request, WS_OPCODE_CLOSE, reason, reason_len,
+                             (int)close_code_value) != 0) {
+        pthread_mutex_lock(&request->ws_mutex);
+        if (!request->ws_cleaning_up && request->ws_state == WS_STATE_CLOSING) {
+            request->ws_state = WS_STATE_OPEN;
+        }
+        pthread_mutex_unlock(&request->ws_mutex);
+        return luaL_error(L, "Failed to queue close frame");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }

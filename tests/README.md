@@ -68,6 +68,45 @@ cd tests
 ./run_all_tests.sh --performance --coverage  # Performance + coverage
 ```
 
+### MariaDB multi-worker test (Linux runtime)
+
+`lua/test_mariadb_workers.lua` validates the `worker` affinity of `fan.mariadb`
+against a real server: invalid/round-robin affinity, one event base per worker,
+main→worker and worker→worker resumes, mariadb queries inside per-worker HTTP
+handlers, and concurrent load over every worker. The file enters `fan.loop()`
+itself (and calls `fan.workers_init()` before it), so run it directly and do not
+add it to `run_all_lua_tests.lua` (a nested `fan.loop()` degrades to a
+synchronous `pcall` in which marshal calls cannot yield).
+
+```bash
+cd tests
+./docker-setup.sh start            # MariaDB (test_db / test_user / test_password)
+lua lua/test_mariadb_workers.lua   # exit 0 = pass, 1 = fail, 77 = skipped
+```
+
+Requirements and reasons a run may skip:
+- Linux runtime, because the macOS targets exclude `luafan/src/mariadb`;
+- the Lua `lfs` module, because the `fan.http.http` client used by the test
+  loads the shared `config` module;
+- an event-worker pool (`fan.workers_init`); fewer than 2 workers skips;
+- a reachable server (`LUAN_TEST_DB_HOST/_PORT/_NAME/_USER/_PASSWORD` override
+  the defaults) and `LUAN_TEST_WORKERS` to size the pool (default 8);
+- `LUAN_TEST_MARIADB_XWORKER=1` enables the opt-in cross-worker probe, which
+  only reports the observed outcome of using a connection off its owner worker.
+
+Servers need no artificial wait after `close()`: loop exit drains the teardown
+hand-offs already queued for each owner base
+(`event_mgr_drain_internal_jobs()`), so the evhttp instances are released even
+when the loop stops immediately after `close()`. The
+`httpd teardown drain-check dispatch failed (owner=…)` and
+`event_mgr: shutdown drain incomplete` messages now only appear when a teardown
+is genuinely wedged or its owner loop is unreachable.
+
+Known connector issue: the Ubuntu arm64 `libmariadb3` 3.4.9 from the mariadb
+11.8.6 package returns a garbage wait status from `mysql_real_connect_start()`
+and then `2014 Commands out of sync`; the 3.3.x series and a source build of
+3.4.x behave correctly. Use 3.3.x, or a self-built connector, for these tests.
+
 ### Performance Testing
 
 ```bash

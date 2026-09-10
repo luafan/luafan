@@ -15,6 +15,10 @@ keys in the `arg`:
 
 	port to connect.
 
+* `worker: integer?`
+
+	event worker affinity for the connection. Omitted keeps the connection on the main event base; an explicit non-negative worker selects that worker, and `-1` selects the main event base. Invalid or out-of-range values raise an error.
+
 * `onread: function?`
 
 	stream input callback. Default signature: `function(self, buffer_in:string)`.
@@ -200,6 +204,10 @@ keys in the `arg`:
 * `port: integer?`
 
 	port to listen, if not set, use random port which is available.
+
+* `worker: integer?`
+
+	event worker affinity. Omitted keeps the listener and accepted connections on the main event base; an explicit non-negative worker selects that worker, and `-1` selects the main event base. Rebind preserves the selected affinity. Invalid or out-of-range values raise an error.
 
 * `onaccept: function`
 

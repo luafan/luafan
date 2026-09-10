@@ -115,8 +115,13 @@ static void free_result_cont(int fd, short event, void *_userdata)
   int status = mysql_free_result_cont(cur->my_res, bag->status);
   if (status)
   {
-    wait_for_status(L, bag->ctx, cur->my_res, status, free_result_cont,
-                    bag->extra);
+    if (wait_for_status(L, bag->ctx, cur->my_res, status, free_result_cont,
+                        bag->extra) != 0)
+    {
+      int nresults = mariadb_push_wait_error(L);
+      UNREF_CO(cur);
+      FAN_RESUME(L, NULL, nresults);
+    }
   }
   else
   {
@@ -142,7 +147,14 @@ static int free_result_start(lua_State *L, CURSOR_CTX *cur)
   int status = mysql_free_result_start(cur->my_res);
   if (status)
   {
-    wait_for_status(L, ctx, cur, status, free_result_cont, 0);
+    if (wait_for_status(L, ctx, cur, status, free_result_cont, 0) != 0)
+    {
+      /* Cannot park on an event: mysql_store_result data is already buffered
+       * locally, so the synchronous free does not block on the network. */
+      mysql_free_result(cur->my_res);
+      cur->my_res = NULL;
+      return 0;
+    }
     return CONTINUE_YIELD;
   }
   else
@@ -204,7 +216,12 @@ static void fetch_row_cont(int fd, short event, void *_userdata)
 
   if (status)
   {
-    wait_for_status(L, cur->ctx, cur, status, fetch_row_cont, bag->extra);
+    if (wait_for_status(L, cur->ctx, cur, status, fetch_row_cont, bag->extra) != 0)
+    {
+      int nresults = mariadb_push_wait_error(L);
+      UNREF_CO(cur);
+      FAN_RESUME(L, NULL, nresults);
+    }
   }
   else
   {
@@ -235,7 +252,11 @@ LUA_API int fetch_row_start(lua_State *L)
   if (status)
   {
     REF_CO(cur);
-    wait_for_status(L, cur->ctx, cur, status, fetch_row_cont, 0);
+    if (wait_for_status(L, cur->ctx, cur, status, fetch_row_cont, 0) != 0)
+    {
+      UNREF_CO(cur);
+      return mariadb_push_wait_error(L);
+    }
     return lua_yield(L, 0);
   }
   else

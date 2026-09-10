@@ -153,6 +153,11 @@ void tcpd_server_rebind(lua_State *L, tcpd_server_t *server) {
         server->listener = NULL;
     }
 
+    struct event_base *listener_base =
+        (server->worker_id >= 0 && event_mgr_worker_count() > 0)
+            ? event_mgr_worker_base(server->worker_id)
+            : event_mgr_base();
+
     if (server->unix_path) {
         // Unix domain socket bind
         struct sockaddr_un sun;
@@ -161,7 +166,7 @@ void tcpd_server_rebind(lua_State *L, tcpd_server_t *server) {
         strncpy(sun.sun_path, server->unix_path, sizeof(sun.sun_path) - 1);
         unlink(server->unix_path);  // remove stale socket file
         server->listener = evconnlistener_new_bind(
-            event_mgr_base(), tcpd_server_listener_cb, server,
+            listener_base, tcpd_server_listener_cb, server,
             LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE,
             -1, (struct sockaddr *)&sun, sizeof(sun));
     } else if (server->host) {
@@ -184,7 +189,7 @@ void tcpd_server_rebind(lua_State *L, tcpd_server_t *server) {
         }
 
         server->listener = evconnlistener_new_bind(
-            event_mgr_base(), tcpd_server_listener_cb, server,
+            listener_base, tcpd_server_listener_cb, server,
             LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE,
             -1, answer->ai_addr, answer->ai_addrlen);
         evutil_freeaddrinfo(answer);
@@ -211,7 +216,7 @@ void tcpd_server_rebind(lua_State *L, tcpd_server_t *server) {
         }
 
         server->listener = evconnlistener_new_bind(
-            event_mgr_base(), tcpd_server_listener_cb, server,
+            listener_base, tcpd_server_listener_cb, server,
             LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE,
             -1, addr, (int)addr_size);
     }
@@ -296,6 +301,25 @@ LUA_API int tcpd_bind(lua_State *L) {
     DUP_STR_FROM_TABLE(L, server->host, 1, "host");
     SET_INT_FROM_TABLE(L, server->port, 1, "port");
     DUP_STR_FROM_TABLE(L, server->unix_path, 1, "unix_path");
+
+    // Unspecified worker keeps the listener on the main event base.
+    // Explicit worker selects that worker event base; invalid values are
+    // rejected instead of silently falling back to the main base.
+    server->worker_id = -1;
+    lua_getfield(L, 1, "worker");
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isinteger(L, -1)) {
+            lua_pop(L, 1);
+            return luaL_error(L, "tcpd.bind worker must be an integer");
+        }
+        int w = (int)lua_tointeger(L, -1);
+        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
+            lua_pop(L, 1);
+            return luaL_error(L, "tcpd.bind worker is unavailable");
+        }
+        server->worker_id = w;
+    }
+    lua_pop(L, 1);
 
     // Extract configuration
     tcpd_config_from_lua_table(L, 1, &server->config);

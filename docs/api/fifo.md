@@ -20,6 +20,10 @@ keys in the `arg`:
 
 	fifo read/write mode, can be "r" "w" "rw", default "r"
 
+* `worker: integer?`
+
+	event worker affinity. Omitted keeps the FIFO on the main event base; an explicit non-negative worker selects that worker, and `-1` selects the main event base. Invalid or out-of-range values raise an error.
+
 * `onread: function`
 
 	stream input callback, available if `rwmode` is "r", arg1 => buffer_in:string
