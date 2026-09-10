@@ -1013,17 +1013,34 @@ static struct evhttp_bound_socket *httpd_bind_on_base(
     hints.ai_protocol = IPPROTO_TCP;
     hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
     if (evutil_getaddrinfo(host, portbuf, &hints, &answer) != 0 || !answer) return NULL;
-    unsigned flags = LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE;
-#ifdef LEV_OPT_REUSEABLE_PORT
-    if (reuse_port) flags |= LEV_OPT_REUSEABLE_PORT;
+    struct evconnlistener *listener = NULL;
+    for (struct evutil_addrinfo *ai = answer; ai; ai = ai->ai_next) {
+        evutil_socket_t fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) continue;
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef SO_REUSEPORT
+        if (reuse_port && setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) != 0) {
+            evutil_closesocket(fd);
+            continue;
+        }
 #else
-    if (reuse_port) {
-        evutil_freeaddrinfo(answer);
-        return NULL;
-    }
+        if (reuse_port) {
+            evutil_closesocket(fd);
+            continue;
+        }
 #endif
-    struct evconnlistener *listener = evconnlistener_new_bind(
-        base, NULL, NULL, flags, -1, answer->ai_addr, (int)answer->ai_addrlen);
+        evutil_make_socket_nonblocking(fd);
+        if (bind(fd, ai->ai_addr, (socklen_t)ai->ai_addrlen) != 0
+            || listen(fd, 128) != 0) {
+            evutil_closesocket(fd);
+            continue;
+        }
+        listener = evconnlistener_new(base, NULL, NULL,
+            LEV_OPT_CLOSE_ON_FREE, 0, fd);
+        if (listener) break;
+        evutil_closesocket(fd);
+    }
     evutil_freeaddrinfo(answer);
     if (!listener) return NULL;
     struct evhttp_bound_socket *bound = evhttp_bind_listener(httpd, listener);
