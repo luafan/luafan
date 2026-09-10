@@ -14,12 +14,26 @@ file(GLOB MODULE_SOURCE
 
 # Exclude mariadb if mysql headers are not available
 find_path(MYSQL_INCLUDE_DIR mysql/mysql.h
-    PATHS /usr/local/mysql/include /opt/homebrew/include /usr/include
+    PATHS
+        /usr/local/include
+        /usr/local/mysql/include
+        /opt/homebrew/include
+        /usr/include
 )
-if(NOT MYSQL_INCLUDE_DIR)
+find_library(MYSQL_CLIENT_LIBRARY
+    NAMES mariadb mysqlclient
+    PATHS
+        /usr/local/lib
+        /usr/local/mysql/lib
+        /opt/homebrew/lib
+        /usr/lib
+)
+if(NOT MYSQL_INCLUDE_DIR OR NOT MYSQL_CLIENT_LIBRARY)
     list(FILTER MODULE_SOURCE EXCLUDE REGEX ".*/mariadb/.*")
     list(FILTER MODULE_SOURCE EXCLUDE REGEX "luamariadb\\.c$")
-    message(STATUS "mysql headers not found, excluding mariadb sources")
+    message(STATUS "MariaDB client headers/library not found, excluding mariadb sources")
+else()
+    message(STATUS "Using MariaDB client: ${MYSQL_INCLUDE_DIR}, ${MYSQL_CLIENT_LIBRARY}")
 endif()
 
 add_library(${MODULE_NAME} MODULE ${MODULE_SOURCE})
@@ -47,7 +61,7 @@ target_include_directories(${MODULE_NAME} PRIVATE
     "/usr/local/include/luajit-2.0"
     "/usr/include/luajit-2.0"
     "/opt/homebrew/opt/luajit/include/luajit-2.1"
-    "/usr/local/mysql/include"
+    ${MYSQL_INCLUDE_DIR}
     "/usr/local/Cellar/mariadb/5.5.30/include/mysql"
     "/usr/local/Cellar/openssl/1.0.2g/include/"
     "/usr/local/include"
@@ -57,9 +71,9 @@ target_include_directories(${MODULE_NAME} PRIVATE
 
 # Link directories (target-scoped)
 target_link_directories(${MODULE_NAME} PRIVATE
+    "/usr/local/lib"
     "/usr/local/mysql/lib"
     "/usr/local/Cellar/openssl/1.0.2g/lib"
-    "/usr/local/lib"
     "/opt/homebrew/lib"
     "/opt/homebrew/opt/libevent/lib"
 )
@@ -73,8 +87,8 @@ target_link_libraries(${MODULE_NAME} z)
 
 target_link_libraries(${MODULE_NAME} curl)
 target_link_libraries(${MODULE_NAME} resolv)
-if(MYSQL_INCLUDE_DIR)
-    target_link_libraries(${MODULE_NAME} mysqlclient)
+if(MYSQL_CLIENT_LIBRARY)
+    target_link_libraries(${MODULE_NAME} ${MYSQL_CLIENT_LIBRARY})
 endif()
 
 SET_TARGET_PROPERTIES(
@@ -108,7 +122,7 @@ target_include_directories(run_c_tests PRIVATE
     "/usr/local/include/luajit-2.0"
     "/usr/include/luajit-2.0"
     "/opt/homebrew/opt/luajit/include/luajit-2.1"
-    "/usr/local/mysql/include"
+    ${MYSQL_INCLUDE_DIR}
     "/usr/local/include"
     "/opt/homebrew/include"
     "/opt/homebrew/opt/libevent/include"
@@ -124,10 +138,9 @@ target_link_directories(run_c_tests PRIVATE
     "/opt/homebrew/lib"
     "/opt/homebrew/opt/libevent/lib"
 )
-if(MYSQL_INCLUDE_DIR)
-    target_link_libraries(run_c_tests event_pthreads event_openssl event ssl crypto z curl resolv mysqlclient lua5.3 m)
-else()
-    target_link_libraries(run_c_tests event_pthreads event_openssl event ssl crypto z curl resolv lua5.3 m)
+target_link_libraries(run_c_tests event_pthreads event_openssl event ssl crypto z curl resolv lua5.3 m)
+if(MYSQL_CLIENT_LIBRARY)
+    target_link_libraries(run_c_tests ${MYSQL_CLIENT_LIBRARY})
 endif()
 set_target_properties(run_c_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

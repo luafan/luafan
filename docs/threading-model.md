@@ -57,6 +57,32 @@ Facts that the rest of the document relies on:
   callback (which is why all queued jobs carry their own ownership of
   the payload and either complete or leak, never crash).
 
+### 1.1 Worker lifecycle handshake and shutdown
+
+Worker startup and teardown are an explicit protocol rather than an
+uncoordinated `pthread_create()`/`pthread_join()` pair:
+
+- Each worker starts in `STARTING`, initializes its persistent stop event on
+  its own event base, then publishes `RUNNING` through a mutex/condition
+  variable. `event_mgr_workers_init(n)` waits for this handshake before it
+  enables cross-thread dispatch.
+- Shutdown sets the accepting gate to false before requesting any worker to
+  stop. The request records `stop_requested` and activates that worker's own
+  stop event; the callback runs on the worker's event-loop thread and calls
+  `event_base_loopbreak()` there.
+- The caller joins only threads that were successfully created, and joins all
+  workers before freeing their stop events, DNS bases, event bases, or
+  synchronization primitives. This also covers partial initialization failure
+  and `init` followed immediately by shutdown.
+- `event_mgr_workers_shutdown()` is safe when no workers exist and is
+  repeatable after cleanup. `event_mgr_workers_stop_threads()` uses the same
+  stop/join protocol but deliberately leaves event bases alive for Lua
+  finalizers; `event_mgr_workers_free_bases()` performs the later destruction.
+
+This handshake prevents the main thread from waiting for a worker that has
+not yet entered its loop, and prevents an event base from being freed while a
+worker can still access it.
+
 ## 2. Lua execution model — one VM, one global lock
 
 All worker threads and the main thread share **one** `lua_State`

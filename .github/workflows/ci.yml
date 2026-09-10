@@ -50,6 +50,7 @@ jobs:
   # Additional job for running tests using our comprehensive test suite
   test-comprehensive:
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     needs: [build-ubuntu]
 
     steps:
@@ -62,7 +63,7 @@ jobs:
         sudo apt-get install -y \
           build-essential cmake pkg-config \
           liblua5.3-dev libssl-dev libcurl4-openssl-dev \
-          libevent-dev lua5.3 bison libncurses5-dev \
+          libevent-dev libncurses-dev libncurses5-dev lua5.3 bison \
           luarocks zlib1g-dev libsqlite3-dev
         sudo luarocks install lzlib
         sudo luarocks install lua-cjson 2.1.0-1
@@ -74,7 +75,9 @@ jobs:
         wget https://github.com/MariaDB/server/archive/mariadb-$MARIADB_VERSION.tar.gz
         tar xzf mariadb-$MARIADB_VERSION.tar.gz
         cd server-mariadb-$MARIADB_VERSION
-        cmake . -DDISABLE_LIBMYSQLCLIENT_SYMBOL_VERSIONING=TRUE
+        cmake . \
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+          -DDISABLE_LIBMYSQLCLIENT_SYMBOL_VERSIONING=TRUE
         cd libmysql && sudo make -j$(nproc) install
         cd ../include && sudo make install
         cd ../..

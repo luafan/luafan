@@ -24,9 +24,23 @@ static int initialized = 0;
 struct event_worker {
     struct event_base *base;
     struct evdns_base *dnsbase;
+    struct event *stop_event;
     pthread_t thread;
+    pthread_mutex_t state_mutex;
+    pthread_cond_t state_cond;
     _Atomic int running;
+    _Atomic int stop_requested;
+    int thread_valid;
+    int sync_initialized;
+    int state;
     int id;
+};
+
+enum event_worker_state {
+    EVENT_WORKER_EMPTY = 0,
+    EVENT_WORKER_STARTING,
+    EVENT_WORKER_RUNNING,
+    EVENT_WORKER_STOPPED
 };
 
 static struct event_worker workers[EVENT_MGR_MAX_WORKERS];
@@ -168,6 +182,21 @@ static void event_mgr_drain_internal_jobs(struct event_base *base, int worker_id
     }
 }
 
+static void event_mgr_worker_set_state(struct event_worker *worker, int state) {
+    pthread_mutex_lock(&worker->state_mutex);
+    worker->state = state;
+    pthread_cond_broadcast(&worker->state_cond);
+    pthread_mutex_unlock(&worker->state_mutex);
+}
+
+static void event_mgr_worker_stop_cb(evutil_socket_t fd, short what, void *arg) {
+    struct event_worker *worker = (struct event_worker *)arg;
+    (void)fd;
+    (void)what;
+    atomic_store(&worker->stop_requested, 1);
+    event_base_loopbreak(worker->base);
+}
+
 static void *worker_thread_func(void *arg) {
     struct event_worker *w = (struct event_worker *)arg;
     g_current_worker_id = w->id;
@@ -177,13 +206,33 @@ static void *worker_thread_func(void *arg) {
     sigaddset(&set, SIGPIPE);
     pthread_sigmask(SIG_BLOCK, &set, NULL);
 
+    pthread_mutex_lock(&w->state_mutex);
+    if (atomic_load(&w->stop_requested)) {
+        w->state = EVENT_WORKER_STOPPED;
+        pthread_cond_broadcast(&w->state_cond);
+        pthread_mutex_unlock(&w->state_mutex);
+        atomic_store(&w->running, 0);
+        return NULL;
+    }
+    if (event_add(w->stop_event, NULL) != 0) {
+        w->state = EVENT_WORKER_STOPPED;
+        pthread_cond_broadcast(&w->state_cond);
+        pthread_mutex_unlock(&w->state_mutex);
+        atomic_store(&w->running, 0);
+        return NULL;
+    }
+    w->state = EVENT_WORKER_RUNNING;
+    pthread_cond_broadcast(&w->state_cond);
+    pthread_mutex_unlock(&w->state_mutex);
+
     event_base_loop(w->base, EVLOOP_NO_EXIT_ON_EMPTY);
     /* The loop broke (normal shutdown): finish the framework hand-offs that
      * were queued for this owner before the break, so a server teardown that
      * was in flight still releases its evhttp instance. No-op when nothing is
      * pending. */
     event_mgr_drain_internal_jobs(w->base, w->id, EVENT_MGR_DRAIN_MAX_MS);
-    w->running = 0;
+    atomic_store(&w->running, 0);
+    event_mgr_worker_set_state(w, EVENT_WORKER_STOPPED);
     return NULL;
 }
 
@@ -212,24 +261,57 @@ int event_mgr_workers_init(int count) {
     num_workers = count;
 
     for (int i = 0; i < num_workers; i++) {
-        workers[i].id = i;
-        workers[i].base = event_base_new();
-        if (!workers[i].base) {
+        struct event_worker *worker = &workers[i];
+        worker->id = i;
+        worker->state = EVENT_WORKER_STARTING;
+        worker->thread_valid = 0;
+        worker->sync_initialized = 0;
+        atomic_store(&worker->running, 0);
+        atomic_store(&worker->stop_requested, 0);
+
+        if (pthread_mutex_init(&worker->state_mutex, NULL) != 0) {
+            event_mgr_workers_shutdown();
+            return -1;
+        }
+        if (pthread_cond_init(&worker->state_cond, NULL) != 0) {
+            pthread_mutex_destroy(&worker->state_mutex);
+            event_mgr_workers_shutdown();
+            return -1;
+        }
+        worker->sync_initialized = 1;
+        worker->base = event_base_new();
+        if (!worker->base) {
             event_mgr_workers_shutdown();
             return -1;
         }
 
-        workers[i].dnsbase = evdns_base_new(workers[i].base, 0);
-        if (!workers[i].dnsbase) {
+        worker->dnsbase = evdns_base_new(worker->base, 0);
+        if (!worker->dnsbase) {
             event_mgr_workers_shutdown();
             return -1;
         }
-        evdns_base_set_option(workers[i].dnsbase, "randomize-case:", "0");
+        evdns_base_set_option(worker->dnsbase, "randomize-case:", "0");
+        worker->stop_event = event_new(worker->base, -1, EV_PERSIST,
+                                       event_mgr_worker_stop_cb, worker);
+        if (!worker->stop_event) {
+            event_mgr_workers_shutdown();
+            return -1;
+        }
 
-        workers[i].running = 1;
-        int rc = pthread_create(&workers[i].thread, NULL, worker_thread_func, &workers[i]);
+        int rc = pthread_create(&worker->thread, NULL, worker_thread_func, worker);
         if (rc != 0) {
-            workers[i].running = 0;
+            event_mgr_workers_shutdown();
+            return -1;
+        }
+        worker->thread_valid = 1;
+
+        pthread_mutex_lock(&worker->state_mutex);
+        while (worker->state == EVENT_WORKER_STARTING) {
+            pthread_cond_wait(&worker->state_cond, &worker->state_mutex);
+        }
+        int ready = worker->state == EVENT_WORKER_RUNNING;
+        pthread_mutex_unlock(&worker->state_mutex);
+        if (!ready) {
             event_mgr_workers_shutdown();
             return -1;
         }
@@ -238,36 +320,60 @@ int event_mgr_workers_init(int count) {
     return 0;
 }
 
+static void event_mgr_request_worker_stop(struct event_worker *worker) {
+    if (!worker->sync_initialized || !worker->base) {
+        return;
+    }
+    atomic_store(&worker->stop_requested, 1);
+    pthread_mutex_lock(&worker->state_mutex);
+    int state = worker->state;
+    pthread_mutex_unlock(&worker->state_mutex);
+    if (state == EVENT_WORKER_RUNNING && worker->stop_event) {
+        event_active(worker->stop_event, EV_TIMEOUT, 1);
+    }
+}
+
+static void event_mgr_join_worker(struct event_worker *worker) {
+    if (worker->thread_valid) {
+        pthread_join(worker->thread, NULL);
+        worker->thread = 0;
+        worker->thread_valid = 0;
+    }
+}
+
 void event_mgr_workers_shutdown(void) {
     // Reject new cross-thread dispatches before stopping worker loops.
     workers_accepting_dispatch = 0;
-    // Stop the worker threads first so no callbacks fire while we free state.
     for (int i = 0; i < num_workers; i++) {
-        if (workers[i].running && workers[i].base) {
-            event_base_loopbreak(workers[i].base);
-        }
+        event_mgr_request_worker_stop(&workers[i]);
     }
     for (int i = 0; i < num_workers; i++) {
-        if (workers[i].thread) {
-            pthread_join(workers[i].thread, NULL);
-            workers[i].thread = 0;
-        }
+        event_mgr_join_worker(&workers[i]);
     }
 
     // Free the bases. Callers that still need to run Lua finalisers (which may
     // bufferevent_free into a worker base) MUST do so before reaching here —
     // see event_mgr_workers_stop_threads().
     for (int i = 0; i < num_workers; i++) {
-        if (workers[i].dnsbase) {
-            // fail_requests=1 — see cleanup_dnsbase(): dropping pending DNS
-            // callbacks silently can leave Lua refs dangling.
-            evdns_base_free(workers[i].dnsbase, 1);
-            workers[i].dnsbase = NULL;
+        struct event_worker *worker = &workers[i];
+        if (worker->stop_event) {
+            event_free(worker->stop_event);
+            worker->stop_event = NULL;
         }
-        if (workers[i].base) {
-            event_base_free(workers[i].base);
-            workers[i].base = NULL;
+        if (worker->dnsbase) {
+            evdns_base_free(worker->dnsbase, 1);
+            worker->dnsbase = NULL;
         }
+        if (worker->base) {
+            event_base_free(worker->base);
+            worker->base = NULL;
+        }
+        if (worker->sync_initialized) {
+            pthread_cond_destroy(&worker->state_cond);
+            pthread_mutex_destroy(&worker->state_mutex);
+            worker->sync_initialized = 0;
+        }
+        worker->state = EVENT_WORKER_EMPTY;
     }
     num_workers = 0;
 }
@@ -279,30 +385,36 @@ void event_mgr_workers_stop_threads(void) {
     // No new callbacks may be queued once worker loops are stopping.
     workers_accepting_dispatch = 0;
     for (int i = 0; i < num_workers; i++) {
-        if (workers[i].running && workers[i].base) {
-            event_base_loopbreak(workers[i].base);
-        }
+        event_mgr_request_worker_stop(&workers[i]);
     }
     for (int i = 0; i < num_workers; i++) {
-        if (workers[i].thread) {
-            pthread_join(workers[i].thread, NULL);
-            workers[i].thread = 0;
-        }
+        event_mgr_join_worker(&workers[i]);
     }
 }
 
 void event_mgr_workers_free_bases(void) {
     workers_accepting_dispatch = 0;
     for (int i = 0; i < num_workers; i++) {
-        if (workers[i].dnsbase) {
+        struct event_worker *worker = &workers[i];
+        if (worker->stop_event) {
+            event_free(worker->stop_event);
+            worker->stop_event = NULL;
+        }
+        if (worker->dnsbase) {
             // fail_requests=1 — see cleanup_dnsbase().
-            evdns_base_free(workers[i].dnsbase, 1);
-            workers[i].dnsbase = NULL;
+            evdns_base_free(worker->dnsbase, 1);
+            worker->dnsbase = NULL;
         }
-        if (workers[i].base) {
-            event_base_free(workers[i].base);
-            workers[i].base = NULL;
+        if (worker->base) {
+            event_base_free(worker->base);
+            worker->base = NULL;
         }
+        if (worker->sync_initialized) {
+            pthread_cond_destroy(&worker->state_cond);
+            pthread_mutex_destroy(&worker->state_mutex);
+            worker->sync_initialized = 0;
+        }
+        worker->state = EVENT_WORKER_EMPTY;
     }
     num_workers = 0;
 }
