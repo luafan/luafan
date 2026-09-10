@@ -197,11 +197,19 @@ if [ "$BUILD_TESTS" = true ]; then
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
 
-    # Configure with CMake
+    # Configure with CMake. CI supplies the source-built MariaDB client;
+    # preserve those explicit paths for this second configure pass as well.
+    CMAKE_ARGS=("$PROJECT_ROOT" "-DCMAKE_BUILD_TYPE=Debug")
+    if [ -n "${MYSQL_INCLUDE_DIR:-}" ]; then
+        CMAKE_ARGS+=("-DMYSQL_INCLUDE_DIR=${MYSQL_INCLUDE_DIR}")
+    fi
+    if [ -n "${MYSQL_CLIENT_LIBRARY:-}" ]; then
+        CMAKE_ARGS+=("-DMYSQL_CLIENT_LIBRARY=${MYSQL_CLIENT_LIBRARY}")
+    fi
     if [ "$VERBOSE" = true ]; then
-        cmake "$PROJECT_ROOT" -DCMAKE_BUILD_TYPE=Debug
+        cmake "${CMAKE_ARGS[@]}"
     else
-        cmake "$PROJECT_ROOT" -DCMAKE_BUILD_TYPE=Debug >/dev/null 2>&1
+        cmake "${CMAKE_ARGS[@]}" >/dev/null 2>&1
     fi
 
     # Build

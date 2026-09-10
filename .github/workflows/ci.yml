@@ -47,32 +47,39 @@ jobs:
     - name: Build completion
       run: echo "Build Ubuntu finished!"
 
-  # Additional job for running tests using our comprehensive test suite
+  # Run the comprehensive suite inside a clean container so the build and
+  # test-time CMake configure cannot see the GitHub runner's MySQL client.
   test-comprehensive:
     runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:22.04
     timeout-minutes: 10
     needs: [build-ubuntu]
 
     steps:
+    - name: Install git
+      run: apt-get update && apt-get install -y git
+
     - name: Checkout code
       uses: actions/checkout@v6
 
     - name: Install test dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential cmake pkg-config wget \
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          build-essential cmake pkg-config wget ca-certificates \
           liblua5.3-dev libssl-dev libcurl4-openssl-dev \
           libevent-dev libncurses-dev libncurses5-dev lua5.3 bison \
           luarocks zlib1g-dev libsqlite3-dev
-        sudo luarocks install lzlib
-        sudo luarocks install lua-cjson 2.1.0-1
-        sudo luarocks install lsqlite3
+        luarocks install lzlib
+        luarocks install lua-cjson 2.1.0-1
+        luarocks install lsqlite3
 
     - name: Build MariaDB client from source
+      env:
+        MARIADB_PREFIX: /opt/luafan/mariadb-client
       run: |
         MARIADB_VERSION=5.5.68
-        MARIADB_PREFIX=/opt/luafan/mariadb-client
         wget https://github.com/MariaDB/server/archive/mariadb-$MARIADB_VERSION.tar.gz
         tar xzf mariadb-$MARIADB_VERSION.tar.gz
         cd server-mariadb-$MARIADB_VERSION
@@ -80,25 +87,20 @@ jobs:
           -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
           -DCMAKE_INSTALL_PREFIX=$MARIADB_PREFIX \
           -DDISABLE_LIBMYSQLCLIENT_SYMBOL_VERSIONING=TRUE
-        cd libmysql && sudo make -j$(nproc) install
-        cd ../include && sudo make install
+        cd libmysql && make -j$(nproc) install
+        cd ../include && make install
         test -f "$MARIADB_PREFIX/include/mysql/mysql.h"
         test -f "$MARIADB_PREFIX/lib/libmysqlclient.so"
+        grep -q 'MYSQL_WAIT_READ' "$MARIADB_PREFIX/include/mysql/mysql.h"
+        grep -q 'mysql_get_socket' "$MARIADB_PREFIX/include/mysql/mysql.h"
         cd ../..
-        sudo rm -rf mariadb-$MARIADB_VERSION.tar.gz server-mariadb-$MARIADB_VERSION
-
-    - name: Build for testing
-      run: |
-        mkdir -p build
-        cd build
-        cmake .. \
-          -DCMAKE_BUILD_TYPE=Debug \
-          -DMYSQL_INCLUDE_DIR=/opt/luafan/mariadb-client/include \
-          -DMYSQL_CLIENT_LIBRARY=/opt/luafan/mariadb-client/lib/libmysqlclient.so
-        make -j$(nproc)
+        rm -rf mariadb-$MARIADB_VERSION.tar.gz server-mariadb-$MARIADB_VERSION
 
     - name: Run comprehensive tests
       env:
+        MARIADB_PREFIX: /opt/luafan/mariadb-client
+        MYSQL_INCLUDE_DIR: /opt/luafan/mariadb-client/include
+        MYSQL_CLIENT_LIBRARY: /opt/luafan/mariadb-client/lib/libmysqlclient.so
         LD_LIBRARY_PATH: /opt/luafan/mariadb-client/lib
       run: |
         cd tests
