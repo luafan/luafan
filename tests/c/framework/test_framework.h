@@ -43,10 +43,10 @@ extern int g_current_test_failed;
     } while(0)
 
 #define TEST_ASSERT_EQUAL(expected, actual) \
-    TEST_ASSERT((expected) == (actual), "Expected %d, got %d", (expected), (actual))
+    TEST_ASSERT((expected) == (actual), "Expected values to be equal")
 
 #define TEST_ASSERT_NOT_EQUAL(expected, actual) \
-    TEST_ASSERT((expected) != (actual), "Expected not %d, but got %d", (expected), (actual))
+    TEST_ASSERT((expected) != (actual), "Expected values to differ")
 
 #define TEST_ASSERT_STRING_EQUAL(expected, actual) \
     TEST_ASSERT(strcmp((expected), (actual)) == 0, "Expected '%s', got '%s'", (expected), (actual))

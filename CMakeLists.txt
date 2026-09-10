@@ -15,16 +15,16 @@ file(GLOB MODULE_SOURCE
 # Exclude mariadb if mysql headers are not available
 find_path(MYSQL_INCLUDE_DIR mysql/mysql.h
     PATHS
-        /usr/local/include
         /usr/local/mysql/include
+        /usr/local/include
         /opt/homebrew/include
         /usr/include
 )
 find_library(MYSQL_CLIENT_LIBRARY
     NAMES mariadb mysqlclient
     PATHS
-        /usr/local/lib
         /usr/local/mysql/lib
+        /usr/local/lib
         /opt/homebrew/lib
         /usr/lib
 )

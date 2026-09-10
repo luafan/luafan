@@ -80,7 +80,7 @@ TEST_CASE(benchmark_current_implementation) {
         double time_us = end - start;
         double ops_per_sec = (BENCHMARK_ITERATIONS / 10) / (time_us / 1000000.0);
         printf("Expansion writes:      %.2f us total, %.0f ops/sec\n", time_us, ops_per_sec);
-        printf("Final buffer size:     %u bytes\n", ba.buflen);
+        printf("Final buffer size:     %zu bytes\n", ba.buflen);
 
         bytearray_dealloc(&ba);
     }
