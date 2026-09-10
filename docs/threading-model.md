@@ -127,17 +127,18 @@ optional `worker` field plus the presence of the global worker pool:
 | no `worker`, workers=0 | main base; single-threaded HTTPD (legacy)     |
 | `worker = -1`          | main base; single-threaded HTTPD              |
 | `worker = N (>=0)`     | everything on worker base N                   |
-| no `worker`, workers>0 | listener on main base; each accepted socket is dispatched round-robin to an independent per-worker `evhttp` instance |
+| no `worker`, workers>0 | one listener per worker base; `SO_REUSEPORT` lets the kernel distribute new connections |
 
-The last mode is the new "distribute connections" model:
+The last mode is the multi-listener reuse-port model:
 
-- The main `evhttp` (`server->httpd`) only owns the listener. A libevent
-  patch adds an accept hook (`evhttp_set_accept_callback`) so accepted
-  sockets are **not** parsed on the main base.
 - `server->workers[i].httpd` is a full, independently configured
-  `evhttp` created on worker base i (own timeouts, callback table,
-  `/metrics`, `/smoketest`, generic handler, TLS bevcb). Connections
-  distributed to worker i are parsed, kept alive and upgraded there.
+  `evhttp` created on worker base i (own listener, timeouts, callback table,
+  `/metrics`, `/smoketest`, generic handler, TLS bevcb).
+- Each worker binds the same host/port using upstream libevent's
+  `LEV_OPT_REUSEABLE_PORT`; the kernel selects the listener for each new
+  connection. No accepted socket is transferred between event bases.
+- The main `server->httpd` remains a listener-less configuration instance
+  and is only used for common server state and lifecycle ownership.
 - The per-connection worker id is recorded on the request
   (`Request.worker_id`, exposed read-only to Lua) and is stable for the
   whole keep-alive / WebSocket lifetime.
@@ -145,6 +146,8 @@ The last mode is the new "distribute connections" model:
   libevent state (HTTP parser, bufferevent, keep-alive list, WebSocket
   frame pipeline). No libevent object is ever touched concurrently from
   two threads.
+- This mode uses only upstream libevent APIs and does not require a
+  patched libevent tree.
 
 ### TLS
 
@@ -223,9 +226,8 @@ while owner Lua is running (which would otherwise deadlock).
 |-------------------------|----------------------|-------------------------------------------------|
 | global Lua lock         | recursive mutex + TLS depth | all Lua state access (one VM)             |
 | `request->ws_mutex`     | plain mutex          | `ws_bev`, `ws_state` (for cross-thread ops), `ws_pending_sends`, `ws_cleaning_up` hand-off |
-| `server->accept_mutex` | mutex | `accepting`, `pending_accepts`, `instance_ws`, `instance_accepts`, teardown counters ( `life_state` is `_Atomic`) |
+| `server->accept_mutex` | mutex | `accepting`, per-owner WebSocket counters, teardown counters (`life_state` is `_Atomic`) |
 | `workers_accepting_dispatch` | atomic flag     | rejects new cross-thread dispatch once worker shutdown starts |
-| `next_worker_idx` / `server->next_worker` | atomic counter | round-robin worker selection |
 | `request->ws_cleaning_up` | atomic CAS (`__sync`) | single-entrance connection cleanup       |
 | `event_base_once` jobs  | libevent cross-thread event add | run the job on the owning loop thread   |
 
@@ -340,7 +342,7 @@ Fix status and detailed designs live in
 | R5 | cross-sender frame ordering not guaranteed | keep as documented constraint |
 | R6 | `ws_mutex`/sync objects never explicitly destroyed | fixed — Phase 3 (`__gc` destroys `ws_mutex` once detached) |
 | R7 | conservative leaks when an owner loop is stopped | narrowed — loop exit drains the hand-offs already queued per owner (`event_mgr_drain_internal_jobs()`); a server closed *after* the loop stopped is still pinned until exit (deterministic) |
-| R8 | accept dispatch has no backpressure (unbounded job queue) | fixed — Phase 2 (high-water + listener pause/resume) |
+| R8 | accepted-connection handoff added queue/backpressure complexity | removed — distributed HTTP uses one upstream-libevent listener per worker with `SO_REUSEPORT` |
 | R9 | a C API entry point holding the coarse Lua lock raises a Lua error (longjmp) → that lock level leaks and every worker thread blocks forever | fixed — `http_lua_error()` in `src/http.c` (see §2.1); regression-covered by `luan/tests/test_luafan_httpd_workers.lua` |
 
 Implementation status is tracked in
@@ -550,7 +552,7 @@ Reviewed against the bundled libevent sources and its public headers.
 
 | aspect | upstream-typical practice | current luafan | gap |
 |---|---|---|---|
-| accept fan-out | one listener, worker loop pulls accepted fds (nginx-style), or kernel `SO_REUSEPORT` with one listener per worker | main-base listener + round-robin push via `event_base_once` | **no backpressure**: pushes are unbounded while a worker loop is busy/blocked on the Lua lock → unbounded queue + fd/memory buildup. Mitigate by capping in-flight dispatch jobs (pause the listener or refuse new accepts above a high-water mark) |
+| accept fan-out | one listener, worker loop pulls accepted fds (nginx-style), or kernel `SO_REUSEPORT` with one listener per worker | one upstream-libevent listener per worker with `SO_REUSEPORT` | kernel owns distribution; accepted sockets stay on their listener's event base |
 | callback duration | keep loop callbacks short, never block the loop | worker callbacks may block on the single global Lua lock (Lua is serialized VM-wide) | a slow/busy Lua handler stalls *its* worker's loop. Mitigate: enough workers for the expected Lua-blocking concurrency, or per-worker `lua_State` (large change, out of scope) |
 | state sharing | one thread per object; share only via queues | enforced per-connection owner + marshaled jobs | correct, but R4 shows a few fields (`ws_state`, metrics) are still read without synchronization |
 | server teardown | never free another thread's event state synchronously from a Lua callback | owner-thread cleanup jobs + barriers | R1 (force-free races live WS state) and R2 (condvar wait can deadlock against the Lua lock) |

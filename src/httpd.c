@@ -20,8 +20,6 @@ static void httpd_server_teardown_instance(LuaServer *server,
                                            struct evhttp **slot, int owner_id);
 static void httpd_server_teardown_done(LuaServer *server);
 static void httpd_server_finalize(LuaServer *server);
-static void httpd_accept_check_resume(LuaServer *server);
-static void httpd_resume_accept_cb(evutil_socket_t fd, short what, void *arg);
 
 const MethodMap methodMap[] = {
     {"GET", EVHTTP_REQ_GET},       {"POST", EVHTTP_REQ_POST},
@@ -561,20 +559,16 @@ static void httpd_server_teardown_instance(LuaServer *server,
     }
 
     pthread_mutex_lock(&server->accept_mutex);
-    if (server->boundsocket && slot == &server->httpd) {
-        /* If the main listener was paused above high-water (Phase 2), re-enable
-         * it before deleting so the delete path never operates on a disabled
-         * listener (a paused listener must not block the drain-check). */
-        if (server->listener_paused) {
-            struct evconnlistener *lev =
-                evhttp_bound_socket_get_listener(server->boundsocket);
-            if (lev) {
-                evconnlistener_enable(lev);
-            }
-            server->listener_paused = 0;
-        }
-        evhttp_del_accept_socket(httpd, server->boundsocket);
-        server->boundsocket = NULL;
+    struct evhttp_bound_socket **bound_slot = NULL;
+    if (slot == &server->httpd) {
+        bound_slot = &server->boundsocket;
+    } else if (owner_id >= 0 && server->workers
+               && owner_id < server->worker_count) {
+        bound_slot = &server->workers[owner_id].boundsocket;
+    }
+    if (bound_slot && *bound_slot) {
+        evhttp_del_accept_socket(httpd, *bound_slot);
+        *bound_slot = NULL;
     }
     pthread_mutex_unlock(&server->accept_mutex);
 
@@ -676,7 +670,8 @@ void httpd_server_begin_destroy(LuaServer *server) {
     pthread_mutex_unlock(&server->accept_mutex);
 
     if (server->distribute_connections) {
-        /* Main listener instance (owner = main base) + one per worker. */
+        /* Workers own listeners; the main evhttp is a listener-less config
+         * instance and still needs owner-thread teardown. */
         httpd_server_queue_teardown(server, &server->httpd, -1);
         for (int i = 0; i < server->worker_count; i++) {
             httpd_server_queue_teardown(server, &server->workers[i].httpd, i);
@@ -974,148 +969,6 @@ static void httpd_configure_instance(LuaServer *server, struct evhttp *httpd,
 #endif
 }
 
-typedef struct {
-    LuaServer *server;
-    struct evhttp *target;
-    int owner_id;
-    evutil_socket_t fd;
-    struct sockaddr_storage peer;
-    int peer_len;
-} httpd_accept_job_t;
-
-static void httpd_accept_job_done(LuaServer *server, int owner_id) {
-    int idx = owner_id + 1;
-    pthread_mutex_lock(&server->accept_mutex);
-    if (server->pending_accepts > 0) {
-        server->pending_accepts--;
-    }
-    if (server->instance_accepts && idx >= 0 && idx < server->instance_ws_len &&
-        server->instance_accepts[idx] > 0) {
-        server->instance_accepts[idx]--;
-    }
-    pthread_mutex_unlock(&server->accept_mutex);
-    /* Runs on the worker that consumed the dispatch; gives the paused main
-     * listener a chance to resume once the backlog drains (Phase 2). */
-    httpd_accept_check_resume(server);
-}
-
-static void httpd_accept_on_worker(evutil_socket_t fd, short what, void *arg) {
-    httpd_accept_job_t *job = (httpd_accept_job_t *)arg;
-    (void)fd;
-    (void)what;
-    if (evhttp_accept_socket_on_base(job->target, job->fd,
-                                     (struct sockaddr *)&job->peer,
-                                     job->peer_len) != 0) {
-        evutil_closesocket(job->fd);
-    }
-    httpd_accept_job_done(job->server, job->owner_id);
-    free(job);
-}
-
-/* Called on a worker after a dispatched accept completes. If the main
- * listener is paused (backlog reached high-water) and the in-flight count
- * has dropped to half the high-water mark, dispatch an enable job to the
- * main base to start accepting again. Runs on the worker thread. */
-static void httpd_accept_check_resume(LuaServer *server) {
-    int should_enable = 0;
-    pthread_mutex_lock(&server->accept_mutex);
-    if (server->listener_paused && !server->pending_resume &&
-        server->accept_high_water > 0 &&
-        server->pending_accepts < (unsigned int)(server->accept_high_water / 2)) {
-        server->pending_resume = 1;
-        should_enable = 1;
-    }
-    pthread_mutex_unlock(&server->accept_mutex);
-    if (should_enable) {
-        if (event_mgr_worker_once(-1, httpd_resume_accept_cb, server) != 0) {
-            /* Loop stopped; keep the listener marked paused and allow a later
-             * completion to retry dispatching the resume job. */
-            pthread_mutex_lock(&server->accept_mutex);
-            server->pending_resume = 0;
-            pthread_mutex_unlock(&server->accept_mutex);
-        }
-    }
-}
-
-/* Runs on the main base: re-enable the listener. */
-static void httpd_resume_accept_cb(evutil_socket_t fd, short what, void *arg) {
-    (void)fd;
-    (void)what;
-    LuaServer *server = (LuaServer *)arg;
-    pthread_mutex_lock(&server->accept_mutex);
-    server->pending_resume = 0;
-    if (server->listener_paused && server->boundsocket &&
-        (httpd_life_state_t)atomic_load(&server->life_state) == HTTPD_LIVE) {
-        struct evconnlistener *lev =
-            evhttp_bound_socket_get_listener(server->boundsocket);
-        if (lev && evconnlistener_enable(lev) == 0) {
-            server->listener_paused = 0;
-        }
-    }
-    pthread_mutex_unlock(&server->accept_mutex);
-}
-
-static void httpd_accept_dispatch(struct evhttp *http, evutil_socket_t fd,
-                                  struct sockaddr *peer, int peer_len, void *arg) {
-    LuaServer *server = (LuaServer *)arg;
-    if (!server || server->worker_count <= 0 || !server->workers) {
-        evutil_closesocket(fd);
-        return;
-    }
-    pthread_mutex_lock(&server->accept_mutex);
-    if (!server->accepting ||
-        (httpd_life_state_t)atomic_load(&server->life_state) != HTTPD_LIVE) {
-        pthread_mutex_unlock(&server->accept_mutex);
-        evutil_closesocket(fd);
-        return;
-    }
-    if (!server->instance_accepts) {
-        pthread_mutex_unlock(&server->accept_mutex);
-        evutil_closesocket(fd);
-        return;
-    }
-    server->pending_accepts++;
-    unsigned int index = atomic_fetch_add(&server->next_worker, 1) %
-                         (unsigned int)server->worker_count;
-    int owner_id = (int)index;
-    int idx = owner_id + 1;
-    if (idx >= 0 && idx < server->instance_ws_len) {
-        /* Counted under accept_mutex before the instance pointer is read: a
-         * concurrent teardown drain-check waits for this to reach zero before
-         * it frees server->workers[index].httpd. */
-        server->instance_accepts[idx]++;
-    }
-    int high = server->accept_high_water > 0 ? server->accept_high_water : 0;
-    if (high > 0 && server->pending_accepts >= (unsigned int)high &&
-        !server->listener_paused && server->boundsocket) {
-        struct evconnlistener *lev =
-            evhttp_bound_socket_get_listener(server->boundsocket);
-        if (lev) {
-            evconnlistener_disable(lev);
-            server->listener_paused = 1;
-        }
-    }
-    pthread_mutex_unlock(&server->accept_mutex);
-
-    httpd_accept_job_t *job = calloc(1, sizeof(*job));
-    if (!job || peer_len <= 0 || peer_len > (int)sizeof(job->peer)) {
-        free(job);
-        evutil_closesocket(fd);
-        httpd_accept_job_done(server, owner_id);
-        return;
-    }
-    job->server = server;
-    job->owner_id = owner_id;
-    job->target = server->workers[index].httpd;
-    job->fd = fd;
-    memcpy(&job->peer, peer, (size_t)peer_len);
-    job->peer_len = peer_len;
-    if (event_mgr_worker_once(owner_id, httpd_accept_on_worker, job) != 0) {
-        free(job);
-        evutil_closesocket(fd);
-        httpd_accept_job_done(server, owner_id);
-    }
-}
 
 // ============================================================
 // Configuration validation
@@ -1147,9 +1000,67 @@ static int validate_httpd_config(LuaServer *server) {
 // Server bind and rebind
 // ============================================================
 
+static struct evhttp_bound_socket *httpd_bind_on_base(
+    struct evhttp *httpd, struct event_base *base, const char *host, int port,
+    int reuse_port) {
+    struct evutil_addrinfo hints;
+    struct evutil_addrinfo *answer = NULL;
+    char portbuf[16];
+    memset(&hints, 0, sizeof(hints));
+    evutil_snprintf(portbuf, sizeof(portbuf), "%d", port);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
+    if (evutil_getaddrinfo(host, portbuf, &hints, &answer) != 0 || !answer) return NULL;
+    unsigned flags = LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE;
+#ifdef LEV_OPT_REUSEABLE_PORT
+    if (reuse_port) flags |= LEV_OPT_REUSEABLE_PORT;
+#else
+    if (reuse_port) {
+        evutil_freeaddrinfo(answer);
+        return NULL;
+    }
+#endif
+    struct evconnlistener *listener = evconnlistener_new_bind(
+        base, NULL, NULL, flags, -1, answer->ai_addr, (int)answer->ai_addrlen);
+    evutil_freeaddrinfo(answer);
+    if (!listener) return NULL;
+    struct evhttp_bound_socket *bound = evhttp_bind_listener(httpd, listener);
+    if (!bound) evconnlistener_free(listener);
+    return bound;
+}
+
 int httpd_server_rebind(LuaServer *server) {
     if (!server || !server->httpd) {
         return 0;
+    }
+    if (server->distribute_connections && server->workers) {
+        int requested_port = server->port;
+        for (int i = 0; i < server->worker_count; i++) {
+            if (server->workers[i].boundsocket) {
+                evhttp_del_accept_socket(server->workers[i].httpd, server->workers[i].boundsocket);
+                server->workers[i].boundsocket = NULL;
+            }
+        }
+        for (int i = 0; i < server->worker_count; i++) {
+            server->workers[i].boundsocket = httpd_bind_on_base(
+                server->workers[i].httpd, event_mgr_worker_base(i), server->host,
+                requested_port, 1);
+            if (!server->workers[i].boundsocket) {
+                server->bind_errno = errno;
+                return 0;
+            }
+            if (i == 0) {
+                server->port = regress_get_socket_port(
+                    evhttp_bound_socket_get_fd(server->workers[i].boundsocket));
+                if (server->port < 0) return 0;
+                requested_port = server->port;
+            }
+        }
+        server->boundsocket = NULL;
+        server->bind_errno = 0;
+        return 1;
     }
     if (server->boundsocket) {
         evhttp_del_accept_socket(server->httpd, server->boundsocket);
@@ -1371,19 +1282,17 @@ LUA_API int utd_bind(lua_State *L) {
                 httpd_server_free_after_bind_error(server);
                 return luaL_error(L, "Failed to create HTTP worker instance");
             }
+            server->workers[i].boundsocket = NULL;
             httpd_configure_instance(server, server->workers[i].httpd, server->ctx);
         }
-        evhttp_set_accept_callback(httpd, httpd_accept_dispatch, server);
     }
 
     /* Per-owner WebSocket counters, index = worker_id + 1 (accept_mutex).
-     * Sized for the largest owner id this server can serve:
-     *  - distribute: workers 0..N-1 (+ main base slot 0, unused);
-     *  - single instance on worker N: idx N+1;
-     *  - single instance on the main base: idx 0. */
+     * Distributed mode has one owner slot per worker; single-instance mode
+     * has one slot for main or the selected worker. */
     size_t ws_count = 1;
     if (server->distribute_connections) {
-        ws_count = (size_t)server->worker_count + 1;
+        ws_count = (size_t)server->worker_count;
     } else if (server->worker_specified && server->worker_id >= 0) {
         ws_count = (size_t)server->worker_id + 2;
     }

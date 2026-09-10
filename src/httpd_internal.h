@@ -9,7 +9,10 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netdb.h>
 #include <event2/http.h>
+#include <event2/listener.h>
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
 #include <event2/http_struct.h>
@@ -102,6 +105,7 @@ typedef struct ws_frame_node {
 
 typedef struct httpd_worker_instance {
     struct evhttp *httpd;
+    struct evhttp_bound_socket *boundsocket;
 } httpd_worker_instance_t;
 
 /* Forward declaration: LuaServer embeds an intrusive list of live

@@ -48,7 +48,7 @@ http service listening port, leave empty for random port that available.
 Event-worker affinity. Semantics differ between the two backends:
 
 * Lua HTTPD (`config.httpd_using_core = false`, runs on `fan.tcpd`): when omitted, the listener and accepted connections stay on the main event base; an explicit non-negative `worker` puts the listener and all accepted connections on that worker's event base, and `-1` explicitly selects the main event base.
-* `fan.httpd.core` (C backend, `config.httpd_using_core = true`): when omitted **and** a worker pool exists (`workers_init(n)` with `n > 0`), the listener stays on the main event base while each accepted connection is distributed round-robin to an independent per-worker `evhttp` instance (see [threading-model](../threading-model.md)). `worker = N (≥ 0)` pins the listener and all connections to worker N; `worker = -1` keeps everything single-threaded on the main event base.
+* `fan.httpd.core` (C backend, `config.httpd_using_core = true`): when omitted **and** a worker pool exists (`workers_init(n)` with `n > 0`), each worker owns an independent `evhttp` listener on the same port using upstream libevent `SO_REUSEPORT`; the kernel distributes new connections. `worker = N` pins the listener and all connections to worker N; `worker = -1` keeps everything single-threaded on the main event base.
 
 * `onService`
 
