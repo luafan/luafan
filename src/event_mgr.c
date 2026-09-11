@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 static struct event_base *base = NULL;
@@ -16,6 +17,8 @@ static struct evdns_base *dnsbase = NULL;
 static int signal_count = 0;
 static struct event signal_int;
 static struct event signal_pipe;
+static int signal_int_added = 0;
+static int signal_pipe_added = 0;
 
 static int looping = 0;
 static int initialized = 0;
@@ -558,10 +561,16 @@ static void cleanup_signals() {
 }
 
 static void cleanup_signal_events() {
-    if (base) {
+    if (signal_int_added) {
         event_del(&signal_int);
-        event_del(&signal_pipe);
+        signal_int_added = 0;
     }
+    if (signal_pipe_added) {
+        event_del(&signal_pipe);
+        signal_pipe_added = 0;
+    }
+    memset(&signal_int, 0, sizeof(signal_int));
+    memset(&signal_pipe, 0, sizeof(signal_pipe));
 }
 
 static void cleanup_openssl() {
@@ -659,10 +668,10 @@ int event_mgr_init() {
         signal(SIGPIPE, signal_handler);
 
         event_assign(&signal_int, event_mgr_base_current(), SIGINT, EV_SIGNAL | EV_PERSIST, signal_cb, &signal_int);
-        event_add(&signal_int, NULL);
+        signal_int_added = event_add(&signal_int, NULL) == 0;
 
         event_assign(&signal_pipe, event_mgr_base_current(), SIGPIPE, EV_SIGNAL | EV_PERSIST, signal_cb, &signal_pipe);
-        event_add(&signal_pipe, NULL);
+        signal_pipe_added = event_add(&signal_pipe, NULL) == 0;
         return 0;
     }
 
@@ -762,6 +771,10 @@ void event_mgr_cleanup() {
 }
 
 void event_mgr_loop_cleanup() {
+    // Signal events borrow the main base and event_del() reads ev_base before
+    // it can report an inactive event. Remove them before freeing the base;
+    // cleanup_signal_events() is idempotent for repeated shutdown paths.
+    cleanup_signal_events();
     // Free worker bases now — by this point the caller has run lua_close()
     // so all bevs created on these bases have been removed.
     event_mgr_workers_free_bases();
