@@ -49,26 +49,15 @@ git clone https://github.com/luafan/luafan.git /opt/luafan
 
 # --- Lua interpreter built from source WITH the global lua_lock hook ---
 # Stock apt lua5.3 bakes lua_lock as a no-op, which is unsafe once luafan runs
-# worker threads (they share one lua_State). We compile Lua ourselves,
-# force-including luafan/src/fan_lua_lock.h and linking fan_lua_lock.c into the
-# core objects so LockMainState/... are exported (-Wl,-E) for fan.so.
-# We also DROP readline: the container has no interactive REPL use case, and
+# worker threads (they share one lua_State). tests/build_hooked_lua.sh is the
+# single source of truth for that build layout (CI uses the same script): it
+# copies fan_lua_lock.{c,h} into the core objects, force-includes
+# fan_lua_lock.h, defines FAN_LUA_LOCK_CORE=1 and links with -Wl,-E so a
+# dlopen'd fan.so can resolve LockMainState.
+# readline stays out: the container has no interactive REPL use case, and
 # libreadline-dev pulls libreadline8 which gets swept by autoremove during
 # cleanup below -- leaving /usr/local/bin/lua broken at runtime.
-wget https://www.lua.org/ftp/lua-$LUA_VERSION.tar.gz
-tar xzf lua-$LUA_VERSION.tar.gz
-(
-    cd lua-$LUA_VERSION
-    cp /opt/luafan/src/fan_lua_lock.c /opt/luafan/src/fan_lua_lock.h src/
-    sed -i 's/^CORE_O=/CORE_O= fan_lua_lock.o /' src/Makefile
-    # Strip readline from the linux target and from luaconf.h auto-defines.
-    sed -i 's/ -lreadline//' src/Makefile
-    sed -i 's|^#define LUA_USE_READLINE|/* readline disabled */|' src/luaconf.h
-    make linux MYCFLAGS="-fPIC -include fan_lua_lock.h -pthread" MYLIBS="-pthread"
-    make install INSTALL_TOP=/usr/local
-    cp src/luaconf.h /usr/local/include/
-)
-rm -rf lua-$LUA_VERSION*
+sh /opt/luafan/tests/build_hooked_lua.sh "$LUA_VERSION" /opt/luafan/src /usr/local
 
 # --- luarocks (kept until end so we can 'make uninstall' during cleanup) ---
 wget https://luarocks.github.io/luarocks/releases/luarocks-$LUAROCKS_VERSION.tar.gz

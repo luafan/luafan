@@ -75,6 +75,29 @@ FAN_LUA_LOCK_WEAK_IMPORT void LuaLockEnable(void);
 /* State-less lock variants (luauser.c / fan_lua_lock.c). Same weak linkage. */
 FAN_LUA_LOCK_WEAK_IMPORT void LuaGlobalLock(void);
 FAN_LUA_LOCK_WEAK_IMPORT void LuaGlobalUnlock(void);
+
+/* Whether the RUNNING INTERPRETER owns the lock (hooked core). Deliberately not
+ * declared by the wiring headers so this file stays the single declaration
+ * point; absent_import => NULL => "assume stock core" => keep the wrapper. */
+FAN_LUA_LOCK_WEAK_IMPORT int LuaCoreLockHooked(void);
+
+/* Recursive depth accessors, declared by luauser.h on Apple and by
+ * fan_lua_lock.h on Linux; weakly imported so unwired embedders still build. */
+FAN_LUA_LOCK_WEAK_IMPORT int LuaLockDepthGet(void);
+FAN_LUA_LOCK_WEAK_IMPORT void LuaLockDepthSet(int depth);
+#endif
+
+/* Lock-wiring queries used below. When the wiring header was force-included
+ * (FAN_LUA_LOCK_WIRED) the symbols are present by construction; otherwise they
+ * are resolved weakly and a missing implementation reads as "no hook". */
+#if defined(FAN_LUA_LOCK_WIRED)
+#define FAN_CORE_LOCK_HOOKED() (LuaCoreLockHooked() != 0)
+#define FAN_LOCK_DEPTH_GET()   (LuaLockDepthGet())
+#define FAN_LOCK_DEPTH_SET(d)  (LuaLockDepthSet(d))
+#else
+#define FAN_CORE_LOCK_HOOKED() (LuaCoreLockHooked && LuaCoreLockHooked() != 0)
+#define FAN_LOCK_DEPTH_GET()   (LuaLockDepthGet ? LuaLockDepthGet() : 0)
+#define FAN_LOCK_DEPTH_SET(d)  do { if (LuaLockDepthSet) LuaLockDepthSet(d); } while (0)
 #endif
 
 static pthread_once_t event_threads_once = PTHREAD_ONCE_INIT;
@@ -210,39 +233,84 @@ static void event_mgr_worker_set_state(struct event_worker *worker, int state) {
     pthread_mutex_unlock(&worker->state_mutex);
 }
 
+/* ---- Lua lock mode ------------------------------------------------------ *
+ *
+ * Which mechanism actually serialises Lua in this process. Reported through
+ * fan.diag_lock_mode() and asserted by tests/lua/test_lock_granularity.lua. */
+
+static int lua_lock_mode = FAN_LUA_LOCK_MODE_NONE;
+
+int event_mgr_lua_lock_mode(void) {
+    if (!LuaLockEnable && !LuaGlobalLock) {
+        /* No lock implementation is linked at all: workers_init refuses to run
+         * (see below), so there is nothing to report but "none". */
+        return FAN_LUA_LOCK_MODE_NONE;
+    }
+    if (lua_lock_mode == FAN_LUA_LOCK_MODE_WRAPPER) {
+        return FAN_LUA_LOCK_MODE_WRAPPER;
+    }
+    if (FAN_CORE_LOCK_HOOKED()) {
+        return FAN_LUA_LOCK_MODE_CORE_HOOK;
+    }
+    /* Lock implementation linked, but no workers yet: locking is off by design
+     * (single-threaded runs pay nothing). */
+    return FAN_LUA_LOCK_MODE_SINGLE;
+}
+
+int event_mgr_lua_lock_depth(void) {
+    return FAN_LOCK_DEPTH_GET();
+}
+
+void event_mgr_lua_lock_depth_set(int depth) {
+    FAN_LOCK_DEPTH_SET(depth);
+}
+
 /* ---- locking resume wrapper ----------------------------------------------
  *
- * lua_resume holds the global Lua lock for the whole coroutine run only when
- * the Lua CORE itself was compiled with the lua_lock user hook
- * (DLUA_USER_H=luauser.h on Apple / fan_lua_lock.h on Linux docker builds).
- * Those builds hook the core so every FAN_RESUME site is already serialized.
- * But a build that links a stock Lua core (e.g. CMake on a dev box, or a distro
- * /usr/bin/lua whose lua_lock is a no-op) must still be safe when workers are
- * started: otherwise two worker threads could execute Lua in parallel and
- * corrupt the shared lua_State.
+ * A stock Lua core compiles lua_lock/lua_unlock to nothing (lua53/llimits.h), so
+ * lua_resume() does NOT hold the mutex across a coroutine run. luafan's callback
+ * sites rely on the resume layer owning the lock: they build the arguments under
+ * lua_lock, release it, and only then call FAN_RESUME (tcpd_server.c,
+ * httpd_websocket.c, http.c, ...). A core compiled with the lock hook keeps that
+ * promise; a stock core does not, so luafan provides it here.
  *
- * Wrapping whichever resume function is currently installed (the default
- * _utlua_resume or an embedder-provided one) closes that gap with a single code
- * path: on hooked cores the extra acquisition just nests into the recursive
- * mutex, on hooked-module-only builds it provides the missing serialization.
- * Installed once, inside workers_init, before the first worker thread can run a
- * callback. */
-static FAN_RESUME_TYPE previous_resume = NULL;
-
+ * This wrapper is therefore only for stock cores. On a hooked core it is
+ * actively harmful: it takes one lock level OUTSIDE lua_resume, which the core's
+ * cooperative yield points (luai_threadyield inside checkGC, llimits.h) never
+ * release, so an entire resume -- however many yield points it passes -- becomes
+ * one indivisible critical section.
+ *
+ * Note: this is unrelated to the fan.loop() hand-off. That hand-off
+ * (LuaLockSuspendForLoop in luafan_start) is mandatory on BOTH shapes, because
+ * the level it releases is the extra one event_mgr_workers_init() takes on the
+ * calling thread -- not the wrapper's level, which exists only for the duration
+ * of a resume.
+ *
+ * The wrapper always stays the OUTERMOST resume layer (utlua_set_outer_resume),
+ * so an embedder that installs its own resume later cannot silently drop it. */
 static int locking_resume(lua_State *co, lua_State *from, int count) {
     int status;
     if (LuaGlobalLock) LuaGlobalLock();
-    status = previous_resume(co, from, count);
+    status = utlua_inner_resume(co, from, count);
     if (LuaGlobalUnlock) LuaGlobalUnlock();
     return status;
 }
 
+static _Atomic int resume_wrapper_installed = 0;
+
+/* Installed once, inside workers_init, before the first worker thread can run a
+ * callback. Weak symbols: embedders without any lock implementation resolve
+ * FAN_CORE_LOCK_HOOKED() to false and keep today's behaviour. */
 static void install_locking_resume(void) {
-    static _Atomic int installed = 0;
+    if (FAN_CORE_LOCK_HOOKED()) {
+        lua_lock_mode = FAN_LUA_LOCK_MODE_CORE_HOOK;
+        return;
+    }
+
     int expected = 0;
-    if (atomic_compare_exchange_strong(&installed, &expected, 1)) {
-        previous_resume = FAN_RESUME;
-        utlua_set_resume(locking_resume);
+    if (atomic_compare_exchange_strong(&resume_wrapper_installed, &expected, 1)) {
+        utlua_set_outer_resume(locking_resume);
+        lua_lock_mode = FAN_LUA_LOCK_MODE_WRAPPER;
     }
 }
 
@@ -326,10 +394,10 @@ int event_mgr_workers_init(int count) {
         LuaLockEnable();
     }
 
-    // Serialize every FAN_RESUME with the global lock before any worker can run
-    // a callback. Mandatory for cores whose lua_lock is a no-op (stock / distro
-    // Lua); on hooked cores the wrapper nests harmlessly into the recursive
-    // mutex.
+    // Decide who owns the Lua lock before any worker can run a callback: on a
+    // hooked interpreter the core already serialises every resume (no wrapper),
+    // on a stock core luafan installs its resume wrapper. See
+    // install_locking_resume() and event_mgr_lua_lock_mode().
     install_locking_resume();
 
     event_mgr_enable_thread_support();

@@ -87,6 +87,23 @@ void LuaLockEnable(void);
 int  LuaLockSuspendForLoop(void);
 void LuaLockResumeAfterLoop(int depth);
 
+/* BUILD ROLE MARKER ------------------------------------------------ *
+ * Pass -DFAN_LUA_LOCK_CORE=1 when this file is compiled INTO the Lua
+ * interpreter (added to CORE_O): LuaCoreLockHooked() then reports 1, which is
+ * how fan.so learns that the running interpreter already serialises every
+ * resume and therefore does not need event_mgr's locking resume wrapper
+ * (see install_locking_resume() in event_mgr.c).
+ *
+ * When this file is compiled into fan.so instead (stock interpreter; CMake
+ * build), the marker is absent and LuaCoreLockHooked() reports 0 -- i.e. the
+ * conservative answer, "assume no core hook, install the wrapper".
+ *
+ * Both roles must NEVER be combined in one process: two copies would mean two
+ * mutexes and two thread-local depth counters. The CMake build enforces that by
+ * excluding this file from fan.so when it assumes a hooked core, and
+ * fan_lua_lock.c refuses to compile if both markers are set. */
+int LuaCoreLockHooked(void);
+
 /* Depth accessors used by luafan's fan_cb_setup() to reconcile both the
  * thread-local depth and the recursive mutex ownership count. */
 int  LuaLockDepthGet(void);

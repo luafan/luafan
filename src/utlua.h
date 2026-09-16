@@ -150,7 +150,23 @@ typedef int (*FAN_RESUME_TYPE)(lua_State *co, lua_State *from, int count);
  * event_mgr's locking_resume wrapper can chain it. */
 int _utlua_resume(lua_State *co, lua_State *from, int count);
 
+/* Resume layering.
+ *
+ * FAN_RESUME is the single entry point every callback site resumes through. It
+ * is a plain function pointer, so whoever calls utlua_set_resume() last wins --
+ * an embedder installing its own resume after luafan installed a guard would
+ * silently drop that guard. These entry points remove the ordering hazard:
+ *
+ *   utlua_set_resume(fn)       embedder's resume (the INNER layer)
+ *   utlua_set_outer_resume(fn) luafan's guard (always the OUTERMOST layer)
+ *
+ * While a guard is active, FAN_RESUME points at an internal dispatcher and the
+ * guard must reach the embedder's resume through utlua_inner_resume(). With no
+ * guard installed FAN_RESUME is exactly the pointer passed to
+ * utlua_set_resume(), so reading it back keeps working. */
 void utlua_set_resume(FAN_RESUME_TYPE resume);
+void utlua_set_outer_resume(FAN_RESUME_TYPE guard);
+int utlua_inner_resume(lua_State *co, lua_State *from, int count);
 
 extern FAN_RESUME_TYPE FAN_RESUME;
 

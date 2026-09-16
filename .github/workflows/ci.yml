@@ -96,13 +96,42 @@ jobs:
         cd ../..
         rm -rf mariadb-$MARIADB_VERSION.tar.gz server-mariadb-$MARIADB_VERSION
 
+    - name: Build hooked Lua interpreter
+      run: |
+        # /usr/local is a system prefix: the install step needs root (the
+        # runner has passwordless sudo), both for bin/lua and include/luaconf.h.
+        sudo bash tests/build_hooked_lua.sh 5.3.3 src /usr/local
+
     - name: Run comprehensive tests
       env:
         MARIADB_PREFIX: /opt/luafan/mariadb-client
         MYSQL_INCLUDE_DIR: /opt/luafan/mariadb-client/include
         MYSQL_CLIENT_LIBRARY: /opt/luafan/mariadb-client/lib/libmysqlclient.so
         LD_LIBRARY_PATH: /opt/luafan/mariadb-client/lib
+        # Exercise the same lock semantics as LuanMac/release images: the
+        # interpreter is built with the global lua_lock hook (see
+        # tests/build_hooked_lua.sh), so fan.so must not carry its own lock copy
+        # and must compile the lock diagnostics used by the worker test below.
+        LUAFAN_CORE_LOCK_HOOK: "ON"
+        LUAFAN_TESTING: "ON"
+        LUAFAN_LUA_BIN: /usr/local/bin/lua
       run: |
+        export PATH=/usr/local/bin:$PATH
+        lua -v
         cd tests
         chmod +x run_all_tests.sh
         ./run_all_tests.sh --verbose
+
+    # Worker-pool suites are standalone scripts (they need the pool before
+    # fan.loop), so run the lock one explicitly: it asserts the hooked build
+    # reports "core-hook" and that its granularity is what that implies.
+    - name: Run lock granularity test
+      env:
+        LUAN_TEST_WORKERS: "4"
+        LUAN_LOCK_MODE_EXPECT: core-hook
+      run: |
+        export PATH=/usr/local/bin:$PATH
+        cd tests
+        export LUA_PATH="$PWD/../modules/?.lua;$PWD/../modules/?/init.lua;$PWD/lua/framework/?.lua;$PWD/lua/?.lua;;"
+        export LUA_CPATH="$PWD/build/?.so;$PWD/../?.so;;"
+        lua lua/test_lock_granularity.lua

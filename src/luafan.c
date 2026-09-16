@@ -5,15 +5,20 @@
 #include "utlua.h"
 
 #include <fcntl.h>
+#include <errno.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
-// Global Lua lock suspend/resume around the blocking main-thread event loop.
-// Weak symbols keep luafan usable by embedders without the optional lock hook.
+// Global Lua lock suspend/resume around the blocking main-thread event loop, and
+// the lock/unlock pair used by the FAN_LOCK_PROBE diagnostics below. Weak symbols
+// keep luafan usable by embedders without the optional lock hook.
 __attribute__((weak)) int LuaLockSuspendForLoop(void);
 __attribute__((weak)) void LuaLockResumeAfterLoop(int depth);
+__attribute__((weak)) void LuaGlobalLock(void);
+__attribute__((weak)) void LuaGlobalUnlock(void);
 
 static struct event *mainevent;
 static int main_ref;
@@ -98,15 +103,21 @@ LUA_API int luafan_start(lua_State *L) {
 
     // Start the actual event loop.
     //
-    // The main thread reaches here from inside a resume that holds the global
-    // Lua lock (lua_lock_depth > 0), and event_mgr_loop() blocks until the
-    // service stops. If we kept the lock held, worker-thread callbacks that
-    // need to enter Lua (tcpd/udpd read/connect on a worker event_base) would
-    // deadlock forever in LockMainState waiting for a mutex the parked main
-    // thread never releases. Suspend the lock across the loop so workers can
-    // acquire it; the main thread still serializes its own callbacks through
-    // the normal lock/unlock pairs inside each resume. Restore on exit so the
-    // enclosing resume's trailing unlock stays balanced.
+    // The calling thread still owns at least one lock level here:
+    // event_mgr_workers_init() takes one when the pool is started from the main
+    // script (on a hooked core the resume-level layer is already dropped at this
+    // C-call boundary, so that hold is typically the only level left).
+    // event_mgr_loop() blocks until the service stops; if we kept the level,
+    // worker-thread callbacks that need to enter Lua (tcpd/udpd read/connect on
+    // a worker event_base) would deadlock forever in LockMainState waiting for a
+    // mutex the parked main thread never releases. Suspend the lock across the
+    // loop so workers can acquire it; the main thread still serializes its own
+    // callbacks through the normal lock/unlock pairs inside each resume. Restore
+    // on exit so the enclosing resume's trailing unlock stays balanced.
+    //
+    // Not a no-op on a hooked (core-hook) interpreter: the level released here
+    // is the worker-pool hold, not the resume. Only a run with no worker pool
+    // (locking disabled) degenerates to nothing to release.
     //
     // Weak symbols: embedders without the lock hook resolve them to NULL.
     int __lua_lock_depth = 0;
@@ -396,6 +407,88 @@ LUA_API int luafan_workers_init(lua_State *L) {
     return 1;
 }
 
+/* ---- lock diagnostics ---------------------------------------------------
+ *
+ * Read-only probes that tell HOW the Lua lock is provided in this process (see
+ * docs/threading-model.md and tests/lua/test_lock_granularity.lua):
+ *
+ *   fan.diag_lock_mode()  -> "none"      no lock implementation linked at all
+ *                          | "single"    linked, no workers: locking off by design
+ *                          | "core-hook" the interpreter serialises every resume
+ *                          | "wrapper"   luafan wraps FAN_RESUME (stock core)
+ *   fan.diag_lock_depth() -> this thread's recursive lock depth (0 when unused)
+ */
+LUA_API int luafan_diag_lock_mode(lua_State *L) {
+    switch (event_mgr_lua_lock_mode()) {
+    case FAN_LUA_LOCK_MODE_CORE_HOOK: lua_pushliteral(L, "core-hook"); break;
+    case FAN_LUA_LOCK_MODE_WRAPPER:   lua_pushliteral(L, "wrapper");   break;
+    case FAN_LUA_LOCK_MODE_SINGLE:    lua_pushliteral(L, "single");    break;
+    default:                          lua_pushliteral(L, "none");      break;
+    }
+    return 1;
+}
+
+LUA_API int luafan_diag_lock_depth(lua_State *L) {
+    lua_pushinteger(L, event_mgr_lua_lock_depth());
+    return 1;
+}
+
+#if defined(FAN_LOCK_PROBE)
+/* Diagnostic timing lever (compile-time opt-in with -DFAN_LOCK_PROBE=1, NOT part
+ * of the normal build -- same style as EVENT_MGR_DRAIN_MAX_MS and
+ * TCPD_ACCEPT_FAIL_INJECT_EVERY):
+ *
+ *   fan.diag_lock_sleep(sec [, keep_lock]) -> sec
+ *
+ * Blocks the CALLING thread in C for `sec` seconds without touching the Lua
+ * state, so from Lua one can tell worker threads really run in parallel (N
+ * sleeping callbacks overlap) and that it is the global Lua lock -- not the
+ * threads -- that serialises them:
+ *
+ *   keep_lock=false (default): give the lock up first (the rule for any blocking,
+ *     non-Lua work: holding it would stall every other thread's Lua) and restore
+ *     the previous level afterwards. N sleeping callbacks overlap (~sec).
+ *   keep_lock=true: TAKE the global lock for the duration (one level on top of
+ *     whatever this thread already owns, released again before returning). The
+ *     other workers' resumes then wait, so N sleeping callbacks serialise
+ *     (~N*sec). The lock is taken here rather than merely kept because the
+ *     caller's own level depends on the shape: a hooked interpreter does not
+ *     hold the resume-level lock while a C function runs, so "keep what you
+ *     have" would be a no-op there.
+ */
+LUA_API int luafan_diag_lock_sleep(lua_State *L) {
+    lua_Number sec = luaL_optnumber(L, 1, 0.0);
+    int keep_lock = lua_toboolean(L, 2);
+    int depth = 0;
+
+    if (keep_lock) {
+        if (LuaGlobalLock) LuaGlobalLock();
+    } else {
+        /* Blocking, non-Lua work must not hold the lock (same rule the main
+         * thread applies around its blocking event loop). */
+        depth = event_mgr_lua_lock_depth();
+        event_mgr_lua_lock_depth_set(0);
+    }
+
+    struct timespec ts;
+    if (sec < 0) sec = 0;
+    ts.tv_sec = (time_t)sec;
+    ts.tv_nsec = (long)((sec - (lua_Number)ts.tv_sec) * 1000000000.0);
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+        /* interrupted: ts holds the remaining time */
+    }
+
+    if (keep_lock) {
+        if (LuaGlobalUnlock) LuaGlobalUnlock();
+    } else if (depth > 0) {
+        event_mgr_lua_lock_depth_set(depth);
+    }
+
+    lua_pushnumber(L, sec);
+    return 1;
+}
+#endif
+
 #define LUA_FAN_CONST_TYPE "fan.const"
 
 static int luafan_const_tostring(lua_State *L) {
@@ -434,6 +527,13 @@ static const struct luaL_Reg fanlib[] = {
     {"sleep", luafan_sleep},
     {"gettime", luafan_gettime},
     {"gettop", luafan_gettop},
+
+    {"diag_lock_mode", luafan_diag_lock_mode},
+    {"diag_lock_depth", luafan_diag_lock_depth},
+
+#if defined(FAN_LOCK_PROBE)
+    {"diag_lock_sleep", luafan_diag_lock_sleep},
+#endif
 
     {"data2hex", data2hex},
     {"hex2data", hex2data},

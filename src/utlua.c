@@ -69,8 +69,28 @@ int _utlua_resume(lua_State *co, lua_State *from, int count) {
 
 FAN_RESUME_TYPE FAN_RESUME = &_utlua_resume;
 
+/* Inner (embedder) resume plus an optional outermost guard; see utlua.h. */
+static FAN_RESUME_TYPE embed_resume = &_utlua_resume;
+static FAN_RESUME_TYPE outer_resume = NULL;
+
+/* Installed into FAN_RESUME while a guard is active: hands off to the guard,
+ * which re-enters through utlua_inner_resume(). */
+static int utlua_resume_dispatch(lua_State *co, lua_State *from, int count) {
+    return outer_resume(co, from, count);
+}
+
 void utlua_set_resume(FAN_RESUME_TYPE resume) {
-    FAN_RESUME = resume;
+    embed_resume = resume ? resume : &_utlua_resume;
+    FAN_RESUME = outer_resume ? utlua_resume_dispatch : embed_resume;
+}
+
+void utlua_set_outer_resume(FAN_RESUME_TYPE guard) {
+    outer_resume = guard;
+    FAN_RESUME = guard ? utlua_resume_dispatch : embed_resume;
+}
+
+int utlua_inner_resume(lua_State *co, lua_State *from, int count) {
+    return embed_resume(co, from, count);
 }
 
 void d2tv(double x, struct timeval *tv) {

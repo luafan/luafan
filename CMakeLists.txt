@@ -36,12 +36,42 @@ else()
     message(STATUS "Using MariaDB client: ${MYSQL_INCLUDE_DIR}, ${MYSQL_CLIENT_LIBRARY}")
 endif()
 
+# ---------------------------------------------------------------------------
+# Optional build modes (see docs/threading-model.md, "Build shapes")
+# ---------------------------------------------------------------------------
+# LUAFAN_CORE_LOCK_HOOK=ON: the interpreter that will load fan.so was built with
+# the global lua_lock hook (fan_lua_lock.c added to CORE_O, -include
+# fan_lua_lock.h, symbols exported with -Wl,-E). fan.so must then NOT carry its
+# own copy of the lock implementation: two copies would mean two recursive
+# mutexes and two thread-local depth counters -- silent on ELF (symbol
+# interposition hides it) and plainly wrong on Mach-O. LuaCoreLockHooked() then
+# reports "hooked core" as well, so event_mgr skips its resume wrapper.
+option(LUAFAN_CORE_LOCK_HOOK "Interpreter provides the global Lua lock (module must not carry a copy)" OFF)
+# LUAFAN_TESTING=ON: compile the FAN_LOCK_PROBE diagnostics used by
+# tests/lua/test_lock_granularity.lua (fan.diag_lock_sleep). Off by default so
+# release builds expose no lock-timing lever.
+option(LUAFAN_TESTING "Enable test-only diagnostics (FAN_LOCK_PROBE)" OFF)
+
+# run_c_tests links a stock interpreter, so it always needs the module-side lock.
+set(MODULE_SOURCE_FULL ${MODULE_SOURCE})
+if(LUAFAN_CORE_LOCK_HOOK)
+    list(FILTER MODULE_SOURCE EXCLUDE REGEX "fan_lua_lock\\.c$")
+    message(STATUS "LUAFAN_CORE_LOCK_HOOK=ON: fan.so will use the interpreter's lock implementation")
+endif()
+
 add_library(${MODULE_NAME} MODULE ${MODULE_SOURCE})
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_include_directories(${MODULE_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_compile_options(${MODULE_NAME} PRIVATE
         "-include${CMAKE_CURRENT_SOURCE_DIR}/src/fan_lua_lock.h")
+endif()
+
+if(LUAFAN_CORE_LOCK_HOOK)
+    target_compile_definitions(${MODULE_NAME} PRIVATE FAN_CORE_LOCK_HOOK=1)
+endif()
+if(LUAFAN_TESTING)
+    target_compile_definitions(${MODULE_NAME} PRIVATE FAN_LOCK_PROBE=1)
 endif()
 
 # Platform-specific compile definitions (target-scoped)
@@ -121,10 +151,15 @@ file(GLOB C_TEST_SOURCES
     "tests/c/framework/*.c"
     "tests/c/unit/*.c"
 )
-add_executable(run_c_tests ${C_TEST_SOURCES} ${MODULE_SOURCE})
+add_executable(run_c_tests ${C_TEST_SOURCES} ${MODULE_SOURCE_FULL})
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(run_c_tests PRIVATE
         "-include${CMAKE_CURRENT_SOURCE_DIR}/src/fan_lua_lock.h")
+endif()
+# The C tests only use FAN_LOCK_PROBE through the module API, but keep the flag
+# in sync so both binaries of a LUAFAN_TESTING build behave the same.
+if(LUAFAN_TESTING)
+    target_compile_definitions(run_c_tests PRIVATE FAN_LOCK_PROBE=1)
 endif()
 target_include_directories(run_c_tests PRIVATE
     "tests/c/framework"

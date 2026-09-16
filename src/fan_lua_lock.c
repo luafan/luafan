@@ -10,6 +10,17 @@
 
 #include "fan_lua_lock.h"
 
+/* Build-role guard: this file is EITHER the interpreter's lock implementation
+ * (FAN_LUA_LOCK_CORE, added to CORE_O) OR the module's fallback copy -- never
+ * both in one process, which would create two mutexes and two thread-local
+ * depth counters. FAN_CORE_LOCK_HOOK is defined by the CMake build when fan.so
+ * assumes the interpreter provides the lock; the matching CMake config also
+ * excludes this file from fan.so, so reaching this #error means the build was
+ * wired wrongly. */
+#if defined(FAN_CORE_LOCK_HOOK) && !defined(FAN_LUA_LOCK_CORE)
+#error "FAN_CORE_LOCK_HOOK is set (the interpreter owns the lock), so fan_lua_lock.c must not be compiled into fan.so -- see luafan/CMakeLists.txt."
+#endif
+
 /* One process-wide recursive mutex. The thread-local depth mirrors the
  * recursive ownership count so longjmp recovery can restore both states. */
 static pthread_mutex_t g_lock;
@@ -101,6 +112,16 @@ void LuaLockResumeAfterLoop(int depth) {
 }
 
 int LuaLockDepthGet(void) { return lua_lock_depth; }
+
+/* Build-role query: 1 when this file was compiled INTO the interpreter
+ * (-DFAN_LUA_LOCK_CORE=1, added to CORE_O), 0 when it is the module's own
+ * fallback copy. fan.so uses it to decide whether the interpreter already
+ * serialises every resume (see event_mgr.c install_locking_resume()). */
+#if defined(FAN_LUA_LOCK_CORE)
+int LuaCoreLockHooked(void) { return 1; }
+#else
+int LuaCoreLockHooked(void) { return 0; }
+#endif
 
 /* Restore both the TLS mirror and the recursive mutex's actual count. */
 void LuaLockDepthSet(int depth) {

@@ -45,4 +45,23 @@ int event_mgr_next_worker(void);
 int event_mgr_worker_count(void);
 int event_mgr_current_worker_id(void);
 
+/* How the global Lua lock is currently provided (see docs/threading-model.md).
+ * Reported by fan.diag_lock_mode() and asserted by tests/lua/test_lock_granularity.lua:
+ * the lock must come from the interpreter core when it was built with the hook,
+ * and from luafan's resume wrapper otherwise. */
+enum {
+    FAN_LUA_LOCK_MODE_NONE = 0,      /* no lock implementation linked at all */
+    FAN_LUA_LOCK_MODE_SINGLE = 1,    /* linked, no workers: locking disabled by design */
+    FAN_LUA_LOCK_MODE_CORE_HOOK = 2, /* hooked interpreter serialises every resume */
+    FAN_LUA_LOCK_MODE_WRAPPER = 3    /* luafan wraps FAN_RESUME (stock core) */
+};
+
+int event_mgr_lua_lock_mode(void);
+
+/* Recursive depth of the global Lua lock on the CALLING thread (0 when the lock
+ * is not in use). Read-only diagnostics; the setter is only used by the
+ * FAN_LOCK_PROBE timing lever in luafan.c. */
+int event_mgr_lua_lock_depth(void);
+void event_mgr_lua_lock_depth_set(int depth);
+
 #endif

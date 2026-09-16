@@ -42,24 +42,11 @@ git clone https://github.com/luafan/luafan.git /opt/luafan
 
 # --- Lua interpreter from source WITH the global lua_lock hook ---
 # apk lua5.3 bakes lua_lock as a no-op, unsafe once luafan runs worker threads
-# sharing one lua_State. Build Lua ourselves, force-including
-# luafan/src/fan_lua_lock.h and linking fan_lua_lock.c into CORE_O so the lock
-# symbols are exported (-Wl,-E) and resolvable by fan.so at dlopen.
-wget https://www.lua.org/ftp/lua-$LUA_VERSION.tar.gz
-tar xzf lua-$LUA_VERSION.tar.gz
-(
-    cd lua-$LUA_VERSION
-    cp /opt/luafan/src/fan_lua_lock.c src/fan_lua_lock.c
-    cp /opt/luafan/src/fan_lua_lock.h src/fan_lua_lock.h
-    sed -i 's/^CORE_O=/CORE_O= fan_lua_lock.o /' src/Makefile
-    # Strip readline from the linux target and from luaconf.h auto-defines.
-    sed -i 's/ -lreadline//' src/Makefile
-    sed -i 's|^#define LUA_USE_READLINE|/* readline disabled */|' src/luaconf.h
-    make linux MYCFLAGS="-fPIC -include fan_lua_lock.h -pthread" MYLIBS="-pthread"
-    make install INSTALL_TOP=/usr/local
-    cp src/luaconf.h /usr/local/include/
-)
-rm -rf lua-$LUA_VERSION*
+# sharing one lua_State. tests/build_hooked_lua.sh is the single source of truth
+# for that layout (CI uses the same script): lock implementation in the core
+# objects, force-included header, FAN_LUA_LOCK_CORE=1 and -Wl,-E so the lock
+# symbols are exported and resolvable by fan.so at dlopen.
+sh /opt/luafan/tests/build_hooked_lua.sh "$LUA_VERSION" /opt/luafan/src /usr/local
 ln -sf /usr/local/bin/lua /usr/bin/lua
 
 # --- luarocks (kept until end so we can 'make uninstall' during cleanup) ---
