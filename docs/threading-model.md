@@ -89,9 +89,9 @@ All worker threads and the main thread share **one** `lua_State`
 (main thread of the embedder). Lua itself is therefore never executed
 in parallel:
 
-- A process-wide **recursive** mutex (`fan_lua_lock.c`,
-  `LockMainState`/`UnLockMainState`, thread-local depth mirror) is
-  enabled exactly once, inside `event_mgr_workers_init()` **before**
+- A process-wide **recursive** mutex (`fan_lua_lock.c` on Linux/Alpine,
+  `luauser.c` on Apple; `LockMainState`/`UnLockMainState`, thread-local depth
+  mirror) is enabled exactly once, inside `event_mgr_workers_init()` **before**
   the first worker thread is spawned.
 - Every event callback that touches Lua takes this lock
   (`lua_lock`/`lua_unlock` are real, recursive operations; nested
@@ -99,11 +99,60 @@ in parallel:
 - The main thread releases all lock levels before parking inside
   `event_mgr_loop()` (`LuaLockSuspendForLoop`) and re-acquires them
   afterwards, so worker threads can run Lua callbacks while the main
-  loop is idle.
+  loop is idle. This hand-off is **not** shape-specific: what it releases is the
+  extra level `event_mgr_workers_init()` takes on the calling thread when the
+  pool is started from the main script (`src/event_mgr.c`), so a hooked
+  interpreter needs it exactly as much as a stock core does — parking the loop
+  while still holding that level leaves every worker callback blocked in
+  `LockMainState` forever. Measured on both shapes with
+  `fan.diag_lock_depth()`: depth 1 before `fan.loop()`, restored to 1 after it
+  (and 0 in the loop on a hooked core, only because `luaD_precall` drops the
+  core's layer around the C call that reads the depth). It degenerates into a
+  real no-op only when nothing is held — a script that never starts a worker
+  pool (mode `single`, locking disabled by design).
+- That worker-pool hold is an **ordering** guarantee, not a second mutual
+  exclusion: the mutex already serialises the VM, but nothing else decides *when*
+  a callback may first enter. `luaD_precall` drops the core's level around every
+  C call the script makes, so without the hold a callback dispatched in the
+  startup window runs while `mapping`/`config`/pools are still half built — i.e.
+  after `bind()` is live but before the script finished initialising. Measured
+  with a worker-pinned echo round trip (both shapes): callbacks land at +0.000 s
+  of the window and read `ready=false` when the level is dropped, versus
+  +1.000 s and `ready=true` when it is kept. Without the level the VM is still
+  safe, the script's own ordering assumption is not.
 - Request/connection handler code runs as coroutines created by
-  `fan_cb_setup()`; `FAN_RESUME` (provided by the embedder, see
-  LuanMac `LuaBridge.m`) owns/releases the lock around
-  `lua_resume`.
+  `fan_cb_setup()`; the resume layer (`FAN_RESUME`, see §2.2) owns the lock
+  around `lua_resume`.
+
+### 2.2 Who owns the lock: the two build shapes
+
+The lock must come from somewhere, and *where* it comes from decides how much is
+serialised. `fan.diag_lock_mode()` reports the answer at runtime:
+
+| mode | when | serialisation |
+| --- | --- | --- |
+| `core-hook` | the **interpreter** was compiled with the hook — Linux/Alpine images (`tests/build_hooked_lua.sh`: `fan_lua_lock.c` in `CORE_O`, `-include fan_lua_lock.h`, `-Wl,-E`), Apple (`-DLUA_USER_H="<luauser.h>"`) | `lua_resume()` holds the mutex. Inside one resume the core hands it over only at its cooperative yield points (`luai_threadyield` in `checkGC`, `lua53/llimits.h`) and around C-function calls (`ldo.c`) |
+| `wrapper` | stock interpreter, where `lua_lock` is compiled to nothing (CMake dev build, distro `/usr/bin/lua`) | `event_mgr_workers_init()` installs `locking_resume` as the **outermost** resume layer (`utlua_set_outer_resume`), taking one level around the whole resume. That level is *outside* `lua_resume`, so the core cannot release it at its yield points: everything a coroutine does until its next real yield is one indivisible critical section |
+| `single` | lock implementation linked, no workers started | locking off by design (one relaxed atomic load plus a branch) |
+| `none` | no lock implementation linked at all | `workers_init()` refuses to start workers |
+
+`LuaCoreLockHooked()` — exported by whichever copy of the lock implementation is
+compiled into the **interpreter** (`fan_lua_lock.c` with
+`-DFAN_LUA_LOCK_CORE=1`, Apple `luauser.c`) — is what tells fan.so which shape it
+runs in, so only a stock core gets the wrapper. Three rules follow:
+
+- A hooked interpreter must **not** also carry a module-side lock copy: that
+  would mean two mutexes and two thread-local depth counters. CMake enforces it
+  (`LUAFAN_CORE_LOCK_HOOK=ON` drops `fan_lua_lock.c` from fan.so, and
+  `fan_lua_lock.c` refuses to compile when both roles are requested).
+- The resume layer owns the lock for the whole coroutine, so callback sites
+  build their arguments under `lua_lock`, release it, and only then call
+  `FAN_RESUME` (e.g. `tcpd_server.c`, `httpd_websocket.c`, `http.c`). Holding a
+  level across the resume would defeat the core's yield points in exactly the
+  same way the wrapper does.
+- `utlua_set_resume()` installs the embedder's resume as the *inner* layer and
+  `utlua_set_outer_resume()` keeps a guard outermost, so an embedder that
+  installs its own resume after `workers_init()` cannot silently drop it.
 
 Practical consequence:
 
@@ -118,6 +167,18 @@ Practical consequence:
   needs Lua, and every event loop that is blocked acquiring the Lua
   lock stops processing events entirely. Blocking waits inside Lua
   (see §7 risks) must never depend on another loop making progress.
+- **Where the two shapes differ, in one line:** `luaD_precall` releases the
+  lock around every C-function call and re-acquires it on return (`ldo.c`).
+  On a hooked core a callback that blocks in C (`fan.diag_lock_sleep`,
+  `mariadb_query`, a connector wait) therefore runs unlocked, so two workers
+  blocking in C overlap (~1× the wait) while two workers running Lua cannot
+  (~N×). On a stock core the wrapper's level sits *outside* `lua_resume`, so
+  the core cannot drop it around the C call: blocking, non-Lua work must
+  release it explicitly (`fan.diag_lock_sleep(sec,false)`) or every other worker
+  waits. The `fan.loop()` hand-off (`LuaLockSuspendForLoop`) is a different
+  case: it is required on both shapes (see §2) because it releases the
+  worker-pool hold, not the wrapper's level.
+  `tests/lua/test_lock_granularity.lua` asserts both, per shape.
 
 ### 2.1 Lock contract for C API entry points (longjmp safety)
 
@@ -374,7 +435,7 @@ Fix status and detailed designs live in
 | R12 | WebSocket frame queue and `ws_state`/`is_websocket` were read/written without a lock from mixed threads (owner `ws_readcb` push vs any-thread `websocket_receive` pop; accept-path writes vs cross-thread readers) | fixed — queue push/pop/clear and all `ws_state`/`is_websocket` writers/readers take `ws_mutex` (helpers `ws_state_set`/`ws_state_is_open`); `websocket_state`/`receive`/`close`/`send` read under the mutex |
 | R13 | mariadb `conn_gc`/`cur_gc`/`st_gc` could enter the async close/free state machine from a `__gc` finalizer; the yield inside a finalizer throws (swallowed by GC), leaving an event bag pointing at the soon-collected userdata → UAF | fixed — finalizers close/free synchronously (`mysql_close`, `mysql_free_result`, `mysql_stmt_close`); buffered results make this cheap |
 | R14 | a coroutine resumed on a different thread than its request's owner (fan.sleep on the main base, a mariadb conn pinned to another worker, …) called `request:reply()` directly on the owner's bufferevent → cross-thread heap corruption | fixed — reply-family ops from a non-owner thread are marshaled to the owner loop through a per-request FIFO (`httpd_reply_op`, drained by `httpd_reply_drain_cb`); body/read APIs fail loudly instead. Regression: `tests/lua/test_httpd_reply_marshal.lua` (reply after sleep parks on the main base) and `tests/lua/test_httpd_reply_from_other_worker.lua` (a fan.fifo read event pinned to `worker=B` makes `resp:reply` run on a genuine different worker thread) |
-| R15 | builds that link a stock Lua core (CMake on a dev box, distro `/usr/bin/lua`) compiled every module `lua_lock` as a no-op while still allowing `workers_init` — workers executed the shared VM completely unlocked | fixed — `event_mgr_workers_init` installs a locking `FAN_RESUME` wrapper (`locking_resume`, chains `_utlua_resume`), holds one lock level until `fan.loop()` suspends it, and refuses workers when no lock implementation is linked at all |
+| R15 | builds that link a stock Lua core (CMake on a dev box, distro `/usr/bin/lua`) compiled every module `lua_lock` as a no-op while still allowing `workers_init` — workers executed the shared VM completely unlocked | fixed — `event_mgr_workers_init` refuses workers when no lock implementation is linked at all, and on a stock core installs a locking `FAN_RESUME` wrapper (`locking_resume`, kept outermost by `utlua_set_outer_resume`). On a hooked interpreter (Apple, Linux/Alpine images built by `tests/build_hooked_lua.sh`) the core owns the lock and **no** wrapper is installed, so the core's cooperative yield points survive. The `fan.loop()` hand-off stays mandatory on **both** shapes: it releases the extra level `event_mgr_workers_init()` takes on the calling thread, and a parked loop still holding it would block every worker callback in `LockMainState` forever (see §2). Which shape is active is reported by `fan.diag_lock_mode()` and asserted by `tests/lua/test_lock_granularity.lua` |
 
 Implementation status is tracked in
 [threading-fix-plan.md](threading-fix-plan.md). Runtime regression on qa

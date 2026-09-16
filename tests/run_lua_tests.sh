@@ -18,8 +18,17 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 echo -e "${YELLOW}LuaFan Lua Test Runner${NC}"
 echo "=================================="
 
-# Check if LuaJIT is available
-if command -v luajit >/dev/null 2>&1; then
+# Interpreter selection.
+#   LUAFAN_LUA_BIN            explicit interpreter (e.g. /usr/local/bin/lua from
+#                             tests/build_hooked_lua.sh -- the "hooked" build)
+#   luajit / lua              whatever PATH offers otherwise
+# A hooked interpreter owns the global Lua lock itself; a stock one makes luafan
+# fall back to its resume wrapper. Either way the lock mode is printed below so a
+# test log always says which shape was exercised (see docs/threading-model.md).
+if [ -n "${LUAFAN_LUA_BIN:-}" ]; then
+    LUA_CMD="$LUAFAN_LUA_BIN"
+    echo "Using LUAFAN_LUA_BIN=$LUA_CMD"
+elif command -v luajit >/dev/null 2>&1; then
     LUA_CMD="luajit"
     echo "Using LuaJIT"
 elif command -v lua >/dev/null 2>&1; then
@@ -37,11 +46,14 @@ cd "$SCRIPT_DIR"
 export LUA_PATH="$PROJECT_ROOT/modules/?.lua;$PROJECT_ROOT/modules/?/init.lua;$SCRIPT_DIR/lua/framework/?.lua;$SCRIPT_DIR/lua/?.lua;;"
 export LUA_CPATH="$SCRIPT_DIR/build/?.so;$PROJECT_ROOT/?.so;;"
 
-# Check if LuaFan is available
+# Check if LuaFan is available and report the lock mode of this run
 echo "Checking LuaFan availability..."
 if ! $LUA_CMD -e "require('fan')" >/dev/null 2>&1; then
     echo -e "${YELLOW}Warning: LuaFan module not available. Some tests may be skipped.${NC}"
 fi
+
+LOCK_MODE=$($LUA_CMD -e "local ok, fan = pcall(require, 'fan'); if ok and fan.diag_lock_mode then io.write(fan.diag_lock_mode()) else io.write('unavailable') end" 2>/dev/null || echo "unavailable")
+echo "Lua lock mode: $LOCK_MODE (core-hook = hooked interpreter, wrapper = stock interpreter + luafan guard)"
 
 # Find all test files
 TEST_FILES=($(find "$SCRIPT_DIR/lua" -name "test_*.lua" -type f | sort))
@@ -81,6 +93,36 @@ else
     echo -e "${RED}Error: run_all_lua_tests.lua not found${NC}"
     TOTAL_FAILURES=1
     TESTS_RUN=1
+fi
+
+# Worker/lock granularity suite, run as its own process -- the same step CI runs.
+# It is deliberately NOT in the curated list inside run_all_lua_tests.lua: that
+# runner executes each test file inside pcall() inside fan.loop(), and the tests
+# which park their own fan.loop() make its os.exit sentinel escape and end the
+# whole run. Needs a lock build that carries the diagnostics (LUAFAN_TESTING=ON)
+# and >= 4 event workers; it exits 77 (SKIP) otherwise, so on a default dev build
+# this step is just a skip line.
+LOCK_TEST="$SCRIPT_DIR/lua/test_lock_granularity.lua"
+if [ -f "$LOCK_TEST" ]; then
+    echo
+    echo -e "${YELLOW}Running worker lock granularity tests...${NC}"
+    if timeout 180s $LUA_CMD "$LOCK_TEST"; then
+        echo -e "${GREEN}✓ Lock granularity test passed${NC}"
+        TESTS_RUN=$((TESTS_RUN + 1))
+    else
+        lock_exit=$?
+        if [ "$lock_exit" -eq 77 ]; then
+            echo -e "${YELLOW}⊝ Lock granularity test skipped (needs LUAFAN_TESTING build and >= 4 workers)${NC}"
+        else
+            if [ "$lock_exit" -eq 124 ]; then
+                echo -e "${RED}✗ Lock granularity test timed out${NC}"
+            else
+                echo -e "${RED}✗ Lock granularity test failed${NC}"
+            fi
+            TESTS_RUN=$((TESTS_RUN + 1))
+            TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
+        fi
+    fi
 fi
 
 # Summary

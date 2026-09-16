@@ -34,6 +34,43 @@ tests/
 └── performance_regression_report.json  # Regression analysis report
 ```
 
+## Build shapes and the global Lua lock
+
+`fan.workers_init(n)` shares one `lua_State` between all threads, so something
+must serialise Lua. Which mechanism does is decided by how the **interpreter**
+was built, and every test run prints it (`Lua lock mode: …` from
+`run_lua_tests.sh`, or `fan.diag_lock_mode()`):
+
+| mode | interpreter | consequence |
+| --- | --- | --- |
+| `core-hook` | built with the lock hook: `tests/build_hooked_lua.sh` (Linux/Alpine), `-DLUA_USER_H="<luauser.h>"` (Apple) | `lua_resume()` owns the lock; the core's cooperative yield points survive |
+| `wrapper` | stock interpreter (`lua_lock` compiled to nothing) | luafan wraps `FAN_RESUME`, so one resume segment is indivisible |
+
+See `docs/threading-model.md` §2.2 for the full picture and R15 for the history.
+
+The shape decides *how much* is serialised. On a hooked core the core releases the
+lock around every C-function call (`luaD_precall`), so a worker blocking in C lets
+the others run while two workers running Lua still cannot overlap; with the wrapper
+the whole resume is one critical section, so blocking C work must drop the lock
+itself. `tests/lua/test_lock_granularity.lua` asserts both, per shape.
+
+```bash
+# Hooked interpreter (what the release images and LuanMac use) + a module built
+# for it: fan.so must not carry its own lock copy.
+sudo sh build_hooked_lua.sh 5.3.3 src /usr/local
+LUAFAN_CORE_LOCK_HOOK=ON LUAFAN_TESTING=ON ./run_all_tests.sh --lua-only
+
+# Assert the lock mode and its granularity. Needs the pool before fan.loop(), so
+# it runs as its own process: run_lua_tests.sh includes it as a step (and with it
+# run_all_tests.sh --lua-only), skipping when the build has no diagnostics.
+# exit 77 = prerequisites missing or probe not built.
+cd tests
+LUAN_TEST_WORKERS=4 LUAN_LOCK_MODE_EXPECT=core-hook \
+  LUA_PATH="$PWD/../modules/?.lua;$PWD/../modules/?/init.lua;$PWD/lua/framework/?.lua;$PWD/lua/?.lua;;" \
+  LUA_CPATH="$PWD/build/?.so;$PWD/../?.so;;" \
+  lua lua/test_lock_granularity.lua
+```
+
 ## Quick Start
 
 ### Basic Testing

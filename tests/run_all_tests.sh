@@ -206,6 +206,22 @@ if [ "$BUILD_TESTS" = true ]; then
     if [ -n "${MYSQL_CLIENT_LIBRARY:-}" ]; then
         CMAKE_ARGS+=("-DMYSQL_CLIENT_LIBRARY=${MYSQL_CLIENT_LIBRARY}")
     fi
+    # Build-mode knobs (see CMakeLists.txt and docs/threading-model.md):
+    #   LUAFAN_CORE_LOCK_HOOK=ON  interpreter owns the Lua lock; set it whenever
+    #                             tests/build_hooked_lua.sh built the interpreter
+    #   LUAFAN_TESTING=ON         adds FAN_LOCK_PROBE (fan.diag_lock_sleep),
+    #                             required by tests/lua/test_lock_granularity.lua
+    if [ -n "${LUAFAN_CORE_LOCK_HOOK:-}" ]; then
+        CMAKE_ARGS+=("-DLUAFAN_CORE_LOCK_HOOK=${LUAFAN_CORE_LOCK_HOOK}")
+    fi
+    if [ -n "${LUAFAN_TESTING:-}" ]; then
+        CMAKE_ARGS+=("-DLUAFAN_TESTING=${LUAFAN_TESTING}")
+    fi
+    if [ -n "${LUAFAN_CMAKE_ARGS:-}" ]; then
+        # Extra raw -D... arguments for local experiments.
+        # shellcheck disable=SC2206
+        CMAKE_ARGS+=(${LUAFAN_CMAKE_ARGS})
+    fi
     if [ "$VERBOSE" = true ]; then
         cmake "${CMAKE_ARGS[@]}"
     else

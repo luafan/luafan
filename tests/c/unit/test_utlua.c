@@ -200,25 +200,44 @@ TEST_CASE(test_utlua_resume_error) {
     lua_close(L);
 }
 
-/* Test resume function pointer setting */
+/* Test resume function pointer setting and its layering */
+static int resume_probe_calls = 0;
+static int resume_probe(lua_State *co, lua_State *from, int count) {
+    (void)co;
+    (void)from;
+    (void)count;
+    resume_probe_calls++;
+    return LUA_OK;
+}
+
 TEST_CASE(test_utlua_resume_function_pointer) {
-    /* The default resume is _utlua_resume, but event_mgr_workers_init()
-     * legitimately swaps in a locking wrapper around it (event_mgr.c:
-     * install_locking_resume, needed so worker threads never run Lua in
-     * parallel on a core whose lua_lock is a no-op). Suites earlier in this
-     * binary may already have started workers, so the pointer is not required
-     * to be the default -- only to be valid and to round-trip through
-     * utlua_set_resume(). */
+    /* utlua_set_resume() installs the EMBEDDER's resume. A guard installed by
+     * event_mgr_workers_init() (install_locking_resume, for cores whose lua_lock
+     * is a no-op) must always stay OUTERMOST, so FAN_RESUME may legitimately
+     * differ from the pointer just passed in. Suites earlier in this binary may
+     * already have started workers, so assert the contract rather than the raw
+     * pointer: installing a resume must be visible, and the installed resume must
+     * be reached through FAN_RESUME -- both before and after the guard exists. */
     FAN_RESUME_TYPE original = FAN_RESUME;
     TEST_ASSERT_NOT_NULL(original);
 
-    /* Test setting a resume function: a plain default install must be visible. */
-    utlua_set_resume(&_utlua_resume);
-    TEST_ASSERT_EQUAL(&_utlua_resume, FAN_RESUME);
+    resume_probe_calls = 0;
+    utlua_set_resume(resume_probe);
+    FAN_RESUME(NULL, NULL, 0);
+    TEST_ASSERT_EQUAL(1, resume_probe_calls);
+
+    /* Re-installing over a possibly-installed guard must keep reaching it. */
+    utlua_set_resume(original);
+    TEST_ASSERT_NOT_NULL(FAN_RESUME);
+
+    resume_probe_calls = 0;
+    utlua_set_resume(resume_probe);
+    FAN_RESUME(NULL, NULL, 0);
+    TEST_ASSERT_EQUAL(1, resume_probe_calls);
 
     /* Restore whatever was installed before this test. */
     utlua_set_resume(original);
-    TEST_ASSERT_EQUAL(original, FAN_RESUME);
+    TEST_ASSERT_NOT_NULL(FAN_RESUME);
 }
 
 /* Test OpenSSL functions (if available) */
