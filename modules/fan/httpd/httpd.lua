@@ -127,6 +127,19 @@ local function validate_state_transition(current, new_state)
     return false
 end
 
+-- RFC 7230: Content-Length = 1*DIGIT, and leading zeros are not allowed
+-- ("0" on its own is valid).
+-- NOTE: Lua patterns have no alternation. The previous
+-- `value:match("^(0|[1-9][0-9]*)$")` matched the literal text
+-- "0|[1-9][0-9]*", so it was nil for every real value and the header parser
+-- rejected every request carrying a Content-Length with 400 Bad Request.
+local function is_valid_content_length(value)
+    if type(value) ~= "string" then
+        return false
+    end
+    return value == "0" or value:match("^[1-9][0-9]*$") ~= nil
+end
+
 local function readheader(ctx, input)
     while not ctx.header_complete do
         local line, breakflag = input:readline()
@@ -158,7 +171,7 @@ local function readheader(ctx, input)
                     ctx._http_error = {code = 400, message = "Bad Request", details = "Duplicate Content-Length"}
                     ctx._close_after_error = true
                 elseif ctx.headers["content-length"] and
-                    not ctx.headers["content-length"]:match("^(0|[1-9][0-9]*)$") then
+                    not is_valid_content_length(ctx.headers["content-length"]) then
                     ctx._http_error = {code = 400, message = "Bad Request", details = "Invalid Content-Length"}
                     ctx._close_after_error = true
                 elseif ctx.headers["content-length"] and
@@ -200,7 +213,11 @@ local function readheader(ctx, input)
                     end
                 else
                     -- RFC 7230: Request-Line = Method SP Request-URI SP HTTP-Version CRLF
-                    ctx.method, ctx.path, ctx.version = string.match(line, "^([!#$%%&'*+%-%.0-9A-Z^_`a-z|~]+) ([^ \\t]+) HTTP/([0-9]+%.[0-9]+)$")
+                    -- NOTE: the "not SP, not HTAB" class must use a real \t escape
+                    -- (single backslash in source). With "[^ \\t]" the class is
+                    -- "not space, not backslash, not the letter t", which rejected
+                    -- every URI containing a 't' (e.g. "/path", "/test") with 400.
+                    ctx.method, ctx.path, ctx.version = string.match(line, "^([!#$%%&'*+%-%.0-9A-Z^_`a-z|~]+) ([^ \t]+) HTTP/([0-9]+%.[0-9]+)$")
                     if not ctx.method or not ctx.path or not ctx.version then
                         -- RFC 7230: Invalid request line should result in 400 Bad Request.
                         return false, -1
@@ -250,7 +267,10 @@ local function connection_has_token(value, token)
         return false
     end
     for item in value:gmatch("[^,]+") do
-        if item:gsub("^[ \\t]+", ""):gsub("[ \\t]+$", ""):lower() == token then
+        -- Trim leading/trailing OWS. These classes must use a real \t escape
+        -- (single backslash in the source): "[ \\t]" is a class of space,
+        -- backslash and the letter 't'.
+        if item:gsub("^[ \t]+", ""):gsub("[ \t]+$", ""):lower() == token then
             return true
         end
     end
@@ -433,7 +453,12 @@ function context_mt:reply(code, message, body)
 end
 
 function context_mt:addheader(k, v)
-    if type(k) ~= "string" or type(v) ~= "string" or k:find("[\\r\\n]") or v:find("[\\r\\n]") then
+    -- Reject CR/LF in either field to block response-splitting. NOTE the pattern
+    -- must be the two characters \r and \n: "[\\r\\n]" (escaped backslashes)
+    -- is a class of {\, r, n} and rejected every header containing an 'r' or
+    -- 'n' (e.g. "charset"), which broke every response built through this path.
+    if type(k) ~= "string" or type(v) ~= "string"
+        or k:find("[\r\n]") or v:find("[\r\n]") then
         error("invalid response header")
     end
     local lk = k:lower()
@@ -449,6 +474,13 @@ end
 
 -- Keep-Alive Support
 function context_mt:should_keep_alive()
+    -- Framing-level errors (unsupported Transfer-Encoding, duplicate or invalid
+    -- Content-Length, oversized headers, bad request line) end the connection:
+    -- the peer cannot safely frame anything after this response, so say so on
+    -- the wire (RFC 7230 3.3.3 / 6.6). The caller closes right after.
+    if self._close_after_error then
+        return false
+    end
     -- HTTP/1.1 defaults to keep-alive, unless the Connection token says close.
     if tonumber(self.version) >= 1.1 then
         return not connection_has_token(self.headers["connection"], "close")
@@ -779,7 +811,7 @@ local function context_index_content_length(ctx)
     if content_length and type(content_length) == "string" then
         -- RFC 7230: Content-Length = 1*DIGIT
         -- Must be exactly digits, no leading zeros except "0" itself
-        local num = content_length:match("^(0|[1-9][0-9]*)$")
+        local num = is_valid_content_length(content_length) and content_length or nil
         if num then
             local len = tonumber(num)
             if len >= 0 then
