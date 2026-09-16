@@ -218,6 +218,15 @@ keys in the `arg`:
 	If `callback_self_first=false` is set explicitly, signature becomes:
 	`function(accept:`[accept_connection](#acceptconnection)`)`.
 
+	The arity is the same when the kernel hands over a connection that cannot be
+	set up locally (bufferevent creation failure, e.g. allocation failure): the
+	callback then runs with a **nil** connection argument, i.e.
+	`function(self, accept)` with `accept == nil` (or `function(accept)` with
+	`accept == nil` when `callback_self_first=false`). Detect it with
+	`if not accept then ... return end`; do not call `accept:bind{...}` before the
+	check. The failed socket is closed by luafan, so the client observes a
+	connection reset.
+
 * `ssl: boolean?`
 
 	listening as ssl server, default false.

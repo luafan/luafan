@@ -8,6 +8,17 @@
 #include <linux/netfilter_ipv4.h>
 #endif
 
+/* Failed-accept fault injection for regression tests (0 = disabled, the normal
+ * build). See the injection site in tcpd_server_listener_cb() and
+ * docs/api/tcpd.md "onaccept"; validated by tests/lua/test_async_tcpd.lua
+ * case "onaccept_arity_contract" against a scratch build. */
+#ifndef TCPD_ACCEPT_FAIL_INJECT_EVERY
+#define TCPD_ACCEPT_FAIL_INJECT_EVERY 0
+#endif
+#if TCPD_ACCEPT_FAIL_INJECT_EVERY > 0
+#include <stdatomic.h>
+#endif
+
 #define LUA_TCPD_SERVER_TYPE "<tcpd.bind %s %d>"
 #define LUA_TCPD_ACCEPT_TYPE "<tcpd.accept %s %d>"
 
@@ -55,6 +66,12 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     luaL_getmetatable(cbs.co, LUA_TCPD_ACCEPT_TYPE);
     lua_setmetatable(cbs.co, -2);
 
+    // Keep the accepted connection alive until its bufferevent cleanup path
+    // releases the registry reference. The listener callback may yield after
+    // handing the userdata to Lua, so the stack slot alone is not sufficient.
+    lua_pushvalue(cbs.co, -1);
+    accept->base.self_ref = luaL_ref(cbs.co, LUA_REGISTRYINDEX);
+
     // The accepted socket's fd is ALREADY connected when the listener fires.
     // Unlike tcpd.connect (which creates its bufferevent with fd=-1 and only
     // acquires an fd later via bufferevent_socket_connect), an accepted fd is
@@ -80,6 +97,20 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     // Create bufferevent (SSL or regular). No BEV_OPT_THREADSAFE /
     // BEV_OPT_UNLOCK_CALLBACKS: the accept handshake stays on the listener
     // thread (see above), so the extra bev locking is unnecessary.
+#if TCPD_ACCEPT_FAIL_INJECT_EVERY > 0
+    /* Test-only fault injection (default off): skip bufferevent creation for
+     * every Nth accepted connection so the failed-accept contract documented in
+     * docs/api/tcpd.md stays verifiable with a scratch build:
+     *   cmake -S . -B /tmp/inject -DCMAKE_C_FLAGS=-DTCPD_ACCEPT_FAIL_INJECT_EVERY=1
+     * Mirrors EVENT_MGR_DRAIN_MAX_MS (see tests/lua/test_httpd_async_teardown.lua
+     * scenario E). N=1 fails every accept, N=2 the 2nd/4th/... The fd is never
+     * wrapped in a bufferevent, so the failure path closes it exactly once. */
+    static _Atomic unsigned long accept_inject_seq = 0;
+    unsigned long accept_seq = atomic_fetch_add(&accept_inject_seq, 1) + 1;
+    if ((accept_seq % (unsigned long)TCPD_ACCEPT_FAIL_INJECT_EVERY) == 0) {
+        bev = NULL;
+    } else
+#endif
     if (server->ssl_ctx) {
         bev = tcpd_ssl_create_server_bufferevent(accept_base, fd, server->ssl_ctx, 0);
     } else {
@@ -88,10 +119,31 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     }
 
     if (!bev) {
-        // Handle error
-        lua_pushnil(cbs.co);
+        /* No bufferevent owns fd on this path, so close it explicitly and
+         * release the accept userdata's registry pin and callback refs. */
+        evutil_closesocket(fd);
+        tcpd_accept_cleanup_on_disconnect(accept);
+        /* Accept-failure contract: the callback is invoked with a nil
+         * connection, keeping the arity of the success path (see
+         * docs/api/tcpd.md "onaccept"): (server, nil), or (nil) when
+         * callback_self_first is off. Callers detect it with
+         * `if not accept then ... end`.
+         *
+         * lua_resume() takes the callee from the slot directly BELOW the
+         * nargs block, so nothing may sit between the callee and the
+         * arguments. The accept userdata pushed above must therefore be
+         * dropped -- leaving it in place makes Lua call the userdata itself
+         * ("attempt to call a <tcpd.accept ...> value"). */
+        lua_settop(cbs.co, 1);   /* [callee]; the accept userdata stays alive
+                                  * through its registry ref until cleanup. */
+        int argc = 1;
+        if (server->config.callback_self_first) {
+            utlua_push_self_from_weak_table(cbs.co, server);
+            argc = 2;            /* (server, nil); (nil, nil) if lookup failed */
+        }
+        lua_pushnil(cbs.co);     /* the failed connection */
         lua_unlock(mainthread);
-        FAN_RESUME(cbs.co, mainthread, 1);
+        FAN_RESUME(cbs.co, mainthread, argc);
         FAN_CB_CLEANUP(mainthread, cbs);
         return;
     }
