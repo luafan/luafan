@@ -98,9 +98,10 @@ jobs:
 
     - name: Build hooked Lua interpreter
       run: |
-        # /usr/local is a system prefix: the install step needs root (the
-        # runner has passwordless sudo), both for bin/lua and include/luaconf.h.
-        sudo bash tests/build_hooked_lua.sh 5.3.3 src /usr/local
+        # This job runs inside a root container, so installing into /usr/local
+        # (bin/lua and include/luaconf.h) needs no privilege escalation -- and
+        # the image has no sudo(8).
+        bash tests/build_hooked_lua.sh 5.3.3 src /usr/local
 
     - name: Run comprehensive tests
       env:
