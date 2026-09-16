@@ -659,12 +659,12 @@ static void websocket_frame_free(websocket_frame_t *frame) {
 // Frame queue
 // ============================================================
 
+/* The queue is written by the owner thread (ws_readcb) and can be read from
+ * any thread's Lua (websocket_receive) or cleared by cleanup, so every list
+ * operation runs under ws_mutex. Lua calls never happen while the mutex is
+ * held (see the lock-order note in httpd_request.c). */
+
 static void ws_frame_queue_push(Request *request, websocket_frame_t *frame) {
-    if (request->frame_queue_len >= WS_MAX_QUEUED_FRAMES) {
-        LOG_WARN_FMT("WebSocket frame queue full, dropping frame");
-        websocket_frame_free(frame);
-        return;
-    }
     ws_frame_node_t *node = malloc(sizeof(ws_frame_node_t));
     if (!node) {
         websocket_frame_free(frame);
@@ -672,6 +672,15 @@ static void ws_frame_queue_push(Request *request, websocket_frame_t *frame) {
     }
     node->frame = *frame;
     node->next = NULL;
+
+    pthread_mutex_lock(&request->ws_mutex);
+    if (request->frame_queue_len >= WS_MAX_QUEUED_FRAMES) {
+        pthread_mutex_unlock(&request->ws_mutex);
+        LOG_WARN_FMT("WebSocket frame queue full, dropping frame");
+        websocket_frame_free(&node->frame);
+        free(node);
+        return;
+    }
     if (request->frame_queue_tail) {
         request->frame_queue_tail->next = node;
     } else {
@@ -679,32 +688,56 @@ static void ws_frame_queue_push(Request *request, websocket_frame_t *frame) {
     }
     request->frame_queue_tail = node;
     request->frame_queue_len++;
+    pthread_mutex_unlock(&request->ws_mutex);
 }
 
 static int ws_frame_queue_pop(Request *request, websocket_frame_t *frame) {
+    pthread_mutex_lock(&request->ws_mutex);
     ws_frame_node_t *node = request->frame_queue_head;
-    if (!node) return 0;
+    if (!node) {
+        pthread_mutex_unlock(&request->ws_mutex);
+        return 0;
+    }
     *frame = node->frame;
     request->frame_queue_head = node->next;
     if (!request->frame_queue_head) {
         request->frame_queue_tail = NULL;
     }
     request->frame_queue_len--;
+    pthread_mutex_unlock(&request->ws_mutex);
     free(node);
     return 1;
 }
 
 static void ws_frame_queue_clear(Request *request) {
+    pthread_mutex_lock(&request->ws_mutex);
     ws_frame_node_t *node = request->frame_queue_head;
+    request->frame_queue_head = NULL;
+    request->frame_queue_tail = NULL;
+    request->frame_queue_len = 0;
+    pthread_mutex_unlock(&request->ws_mutex);
     while (node) {
         ws_frame_node_t *next = node->next;
         if (node->frame.payload) free(node->frame.payload);
         free(node);
         node = next;
     }
-    request->frame_queue_head = NULL;
-    request->frame_queue_tail = NULL;
-    request->frame_queue_len = 0;
+}
+
+/* Cross-thread readers (websocket_send/state/receive on any thread) read
+ * ws_state under ws_mutex; every writer must use this helper so the field is
+ * never written unlocked. */
+static void ws_state_set(Request *request, websocket_state_t state) {
+    pthread_mutex_lock(&request->ws_mutex);
+    request->ws_state = state;
+    pthread_mutex_unlock(&request->ws_mutex);
+}
+
+static int ws_state_is_open(Request *request) {
+    pthread_mutex_lock(&request->ws_mutex);
+    int open = request->ws_state == WS_STATE_OPEN;
+    pthread_mutex_unlock(&request->ws_mutex);
+    return open;
 }
 
 // ============================================================
@@ -898,7 +931,7 @@ void ws_readcb(struct bufferevent *bev, void *ctx) {
         int rc = websocket_parse_frame(input, &frame);
         if (rc == 0) break;
         if (rc < 0) {
-            request->ws_state = WS_STATE_CLOSED;
+            ws_state_set(request, WS_STATE_CLOSED);
             if (request->_ref_ != LUA_NOREF) {
                 ws_resume_with_error(request, "frame parse error");
             } else {
@@ -915,7 +948,7 @@ void ws_readcb(struct bufferevent *bev, void *ctx) {
                                || frame.opcode == WS_OPCODE_CONTINUATION));
         if (rsv_bad) {
             websocket_frame_free(&frame);
-            request->ws_state = WS_STATE_CLOSED;
+            ws_state_set(request, WS_STATE_CLOSED);
             if (request->_ref_ != LUA_NOREF) {
                 ws_resume_with_error(request, "protocol error: unexpected RSV");
             } else {
@@ -926,7 +959,7 @@ void ws_readcb(struct bufferevent *bev, void *ctx) {
 
         switch (frame.opcode) {
             case WS_OPCODE_PING:
-                if (request->ws_bev && request->ws_state == WS_STATE_OPEN) {
+                if (request->ws_bev && ws_state_is_open(request)) {
                     struct evbuffer *pong = websocket_create_frame(
                         WS_OPCODE_PONG, frame.payload, frame.payload_len, 1, 0);
                     if (pong) {
@@ -942,7 +975,7 @@ void ws_readcb(struct bufferevent *bev, void *ctx) {
                 continue;
 
             case WS_OPCODE_CLOSE:
-                request->ws_state = WS_STATE_CLOSED;
+                ws_state_set(request, WS_STATE_CLOSED);
                 if (request->ws_bev) {
                     struct evbuffer *close_resp = websocket_create_frame(
                         WS_OPCODE_CLOSE, frame.payload, frame.payload_len, 1, 0);
@@ -964,7 +997,7 @@ void ws_readcb(struct bufferevent *bev, void *ctx) {
                 if (frame.rsv1) {
                     if (ws_pmd_inflate_frame(request, &frame) != 0) {
                         websocket_frame_free(&frame);
-                        request->ws_state = WS_STATE_CLOSED;
+                        ws_state_set(request, WS_STATE_CLOSED);
                         if (request->_ref_ != LUA_NOREF) {
                             ws_resume_with_error(request, "permessage-deflate inflate failed");
                         } else {
@@ -993,7 +1026,7 @@ void ws_eventcb(struct bufferevent *bev, short what, void *ctx) {
     (void)bev;
 
     if (what & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
-        request->ws_state = WS_STATE_CLOSED;
+        ws_state_set(request, WS_STATE_CLOSED);
 
         if (request->_ref_ != LUA_NOREF) {
             const char *msg = (what & BEV_EVENT_EOF) ? "connection closed" : "connection error";
@@ -1114,9 +1147,14 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
     if (bev) {
         bufferevent_write_buffer(bev, response);
 
+        /* Cross-thread senders/readers (websocket_send/state/receive) touch
+         * is_websocket/ws_state/ws_bev under ws_mutex, so the accept-side
+         * writers take it too (see the R12 lock-order note). */
+        pthread_mutex_lock(&request->ws_mutex);
         request->is_websocket = 1;
         request->ws_state = WS_STATE_OPEN;
         request->ws_bev = bev;
+        pthread_mutex_unlock(&request->ws_mutex);
         request->response_code = 101;
         request->reply_status = REPLY_STATUS_REPLYED;
         request->mainthread = utlua_mainthread(L);
@@ -1127,10 +1165,19 @@ LUA_API int lua_evhttp_request_websocket_accept(lua_State *L) {
         bufferevent_setcb(bev, ws_readcb, NULL, ws_eventcb, request);
         bufferevent_enable(bev, EV_READ | EV_WRITE);
 
+        /* Pin the request before draining any pipelined WebSocket frame. */
         lua_lock(L);
         lua_pushvalue(L, 1);
         request->self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
         lua_unlock(L);
+
+        /* The client may have sent the first frame with the upgrade request;
+         * re-enabling EV_READ does not reliably redispatch buffered bytes on
+         * every event backend, so drain them explicitly. */
+        struct evbuffer *pending = bufferevent_get_input(bev);
+        if (pending && evbuffer_get_length(pending) > 0) {
+            ws_readcb(bev, request);
+        }
     } else {
         ws_pmd_end_streams(request);
         httpd_server_ws_detach(request);
@@ -1306,7 +1353,10 @@ LUA_API int lua_evhttp_request_websocket_pong(lua_State *L) {
 
 LUA_API int lua_evhttp_request_websocket_close(lua_State *L) {
     Request *request = request_from_table(L, 1);
-    if (!request->is_websocket) {
+    pthread_mutex_lock(&request->ws_mutex);
+    int is_ws = request->is_websocket;
+    pthread_mutex_unlock(&request->ws_mutex);
+    if (!is_ws) {
         return luaL_error(L, "Not a WebSocket connection");
     }
 
@@ -1355,13 +1405,18 @@ LUA_API int lua_evhttp_request_websocket_close(lua_State *L) {
 LUA_API int lua_evhttp_request_websocket_state(lua_State *L) {
     Request *request = request_from_table(L, 1);
 
-    if (!request->is_websocket) {
+    pthread_mutex_lock(&request->ws_mutex);
+    int is_ws = request->is_websocket;
+    websocket_state_t state = request->ws_state;
+    pthread_mutex_unlock(&request->ws_mutex);
+
+    if (!is_ws) {
         lua_pushstring(L, "not_websocket");
         return 1;
     }
 
     const char *state_names[] = {"connecting", "open", "closing", "closed"};
-    lua_pushstring(L, state_names[request->ws_state]);
+    lua_pushstring(L, state_names[state]);
     return 1;
 }
 
@@ -1372,17 +1427,23 @@ LUA_API int lua_evhttp_request_websocket_state(lua_State *L) {
 LUA_API int lua_evhttp_request_websocket_receive(lua_State *L) {
     Request *request = request_from_table(L, 1);
 
-    if (!request->is_websocket) {
+    pthread_mutex_lock(&request->ws_mutex);
+    int is_ws = request->is_websocket;
+    websocket_state_t state = request->ws_state;
+    int waiting = request->_ref_ != LUA_NOREF;
+    pthread_mutex_unlock(&request->ws_mutex);
+
+    if (!is_ws) {
         return luaL_error(L, "Not a WebSocket connection");
     }
 
-    if (request->ws_state == WS_STATE_CLOSED) {
+    if (state == WS_STATE_CLOSED) {
         lua_pushnil(L);
         lua_pushliteral(L, "closed");
         return 2;
     }
 
-    if (request->ws_state != WS_STATE_OPEN) {
+    if (state != WS_STATE_OPEN) {
         lua_pushnil(L);
         lua_pushliteral(L, "not open");
         return 2;
@@ -1400,7 +1461,7 @@ LUA_API int lua_evhttp_request_websocket_receive(lua_State *L) {
         return 2;
     }
 
-    if (request->_ref_ != LUA_NOREF) {
+    if (waiting) {
         return luaL_error(L, "Another coroutine is already waiting on this WebSocket");
     }
 

@@ -35,10 +35,15 @@ const MethodMap methodMap[] = {
 void httpd_log(log_level_t level, const char* format, ...) {
     const char* level_names[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
     time_t now = time(NULL);
-    struct tm* tm_info = localtime(&now);
+    struct tm tm_buf;
+    struct tm* tm_info = localtime_r(&now, &tm_buf);
 
     char timestamp[64];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+    if (tm_info) {
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+    } else {
+        snprintf(timestamp, sizeof(timestamp), "unknown-time");
+    }
 
     char message[1024];
     va_list args;
@@ -119,6 +124,11 @@ void newtable_from_req(lua_State *L, struct evhttp_request *req, LuaServer *serv
     request->_ref_ = LUA_NOREF;
     request->self_ref = LUA_NOREF;
     request->prevent_gc_ref = LUA_NOREF;
+    request->reply_head = NULL;
+    request->reply_tail = NULL;
+    request->reply_queued = 0;
+    request->reply_pending_status = REPLY_STATUS_NONE;
+    request->reply_chain_ref = LUA_NOREF;
     request->frame_queue_head = NULL;
     request->frame_queue_tail = NULL;
     request->frame_queue_len = 0;
@@ -768,9 +778,17 @@ LUA_API int lua_evhttp_server_close(lua_State *L) {
 /* Request data userdata finalizer (fix-plan Phase 3): destroy ws_mutex once
  * the WebSocket connection is fully detached. The deferred-cleanup path
  * guarantees ws_bev == NULL and the self/pin refs dropped before GC can run;
- * a request collected with a live ws_bev would be a leak (log + retain). */
+ * a request collected with a live ws_bev would be a leak (log + retain).
+ *
+ * A queued marshaled reply batch pins this userdata in the registry
+ * (reply_chain_ref), so the finalizer cannot run while ops are pending: seeing
+ * a non-empty queue here means the pin protocol broke. Report it instead of
+ * touching the queue — the owner loop may still be running the drain job. */
 static int lua_evhttp_request_data_gc(lua_State *L) {
     Request *request = (Request *)luaL_checkudata(L, 1, LUA_EVHTTP_REQUEST_DATA_TYPE);
+    if (request->reply_head || request->reply_chain_ref != LUA_NOREF) {
+        LOG_WARN_FMT("Request collected with marshaled reply ops pending (leak path)");
+    }
     if (request->ws_mutex_initialized) {
         pthread_mutex_lock(&request->ws_mutex);
         struct bufferevent *bev = request->ws_bev;
@@ -1309,7 +1327,7 @@ LUA_API int utd_bind(lua_State *L) {
      * has one slot for main or the selected worker. */
     size_t ws_count = 1;
     if (server->distribute_connections) {
-        ws_count = (size_t)server->worker_count;
+        ws_count = (size_t)server->worker_count + 1;
     } else if (server->worker_specified && server->worker_id >= 0) {
         ws_count = (size_t)server->worker_id + 2;
     }

@@ -40,6 +40,12 @@
 #ifndef FAN_LUA_LOCK_H
 #define FAN_LUA_LOCK_H
 
+/* Marker for build wiring checks: defined when this header is force-included
+ * (-include fan_lua_lock.h), i.e. when the build followed the wiring described
+ * below. event_mgr.c uses it to decide whether the state-less lock functions
+ * need weak fallback declarations. */
+#define FAN_LUA_LOCK_WIRED 1
+
 /* Tell luafan's utlua.c that a user lock header is present, so it uses the real
  * LuaLockDepthGet/Set below instead of its no-op fallback. We self-declare this
  * (rather than requiring -DLUA_USER_H on the command line) because passing a

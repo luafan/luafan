@@ -54,12 +54,18 @@ static void fifo_read_cb(evutil_socket_t fd, short event, void *arg) {
     FIFO *fifo = (FIFO *)arg;
 
     char buf[READ_BUFF_LEN];
-    size_t len = read(fd, buf, READ_BUFF_LEN);
+    ssize_t len = read(fd, buf, READ_BUFF_LEN);
 
     if (len <= 0) {
         if (len < 0 && (errno == EAGAIN || errno == EINTR)) {
             LOGE("fifo_read_cb: %s\n", strerror(errno));
             return;
+        }
+        /* EOF and permanent read errors remain readable on a persistent
+         * event. Disable it before notifying Lua so the disconnect callback
+         * runs once; close/GC still owns event_free(read_ev). */
+        if (fifo->read_ev) {
+            event_del(fifo->read_ev);
         }
         if (fifo->onDisconnectedRef != LUA_NOREF) {
             lua_State *mainthread = fifo->mainthread;
@@ -199,6 +205,8 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
         fifo->onReadRef = LUA_NOREF;
     }
 
+    SET_FUNC_REF_FROM_TABLE(L, fifo->onDisconnectedRef, 1, "ondisconnected")
+
     if (strstr(rwmode, "w")) {
         if (rwmodei == O_RDONLY) {
             rwmodei = O_RDWR;
@@ -207,10 +215,8 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
         }
 
         SET_FUNC_REF_FROM_TABLE(L, fifo->onSendReadyRef, 1, "onsendready")
-        SET_FUNC_REF_FROM_TABLE(L, fifo->onDisconnectedRef, 1, "ondisconnected")
     } else {
         fifo->onSendReadyRef = LUA_NOREF;
-        fifo->onDisconnectedRef = LUA_NOREF;
     }
 
     int socket = open(fifoname, rwmodei | O_NONBLOCK, 0);
@@ -289,7 +295,7 @@ LUA_API int luafan_fifo_send(lua_State *L) {
     size_t data_len;
     const char *data = luaL_optlstring(L, 2, NULL, &data_len);
     if (data && data_len > 0) {
-        size_t len = write(fifo->socket, data, data_len);
+        ssize_t len = write(fifo->socket, data, data_len);
         if (len <= 0) {
             if (len < 0 && (errno == EAGAIN || errno == EINTR)) {
                 printf("luafan_fifo_send: %s\n", strerror(errno));

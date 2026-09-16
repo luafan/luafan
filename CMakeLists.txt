@@ -38,6 +38,12 @@ endif()
 
 add_library(${MODULE_NAME} MODULE ${MODULE_SOURCE})
 
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_include_directories(${MODULE_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(${MODULE_NAME} PRIVATE
+        "-include${CMAKE_CURRENT_SOURCE_DIR}/src/fan_lua_lock.h")
+endif()
+
 # Platform-specific compile definitions (target-scoped)
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     target_compile_definitions(${MODULE_NAME} PRIVATE LUA_WIN)
@@ -61,13 +67,15 @@ target_include_directories(${MODULE_NAME} PRIVATE
     "/usr/local/include/luajit-2.0"
     "/usr/include/luajit-2.0"
     "/opt/homebrew/opt/luajit/include/luajit-2.1"
-    ${MYSQL_INCLUDE_DIR}
     "/usr/local/Cellar/mariadb/5.5.30/include/mysql"
     "/usr/local/Cellar/openssl/1.0.2g/include/"
     "/usr/local/include"
     "/opt/homebrew/include"
     "/opt/homebrew/opt/libevent/include"
 )
+if(MYSQL_INCLUDE_DIR)
+    target_include_directories(${MODULE_NAME} PRIVATE ${MYSQL_INCLUDE_DIR})
+endif()
 
 # Link directories (target-scoped)
 target_link_directories(${MODULE_NAME} PRIVATE
@@ -114,6 +122,10 @@ file(GLOB C_TEST_SOURCES
     "tests/c/unit/*.c"
 )
 add_executable(run_c_tests ${C_TEST_SOURCES} ${MODULE_SOURCE})
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(run_c_tests PRIVATE
+        "-include${CMAKE_CURRENT_SOURCE_DIR}/src/fan_lua_lock.h")
+endif()
 target_include_directories(run_c_tests PRIVATE
     "tests/c/framework"
     "src"
@@ -122,11 +134,13 @@ target_include_directories(run_c_tests PRIVATE
     "/usr/local/include/luajit-2.0"
     "/usr/include/luajit-2.0"
     "/opt/homebrew/opt/luajit/include/luajit-2.1"
-    ${MYSQL_INCLUDE_DIR}
     "/usr/local/include"
     "/opt/homebrew/include"
     "/opt/homebrew/opt/libevent/include"
 )
+if(MYSQL_INCLUDE_DIR)
+    target_include_directories(run_c_tests PRIVATE ${MYSQL_INCLUDE_DIR})
+endif()
 target_compile_definitions(run_c_tests PRIVATE
     $<$<PLATFORM_ID:Linux>:LUA_USE_LINUX _GNU_SOURCE>
     $<$<PLATFORM_ID:Darwin>:LUA_USE_MACOSX>

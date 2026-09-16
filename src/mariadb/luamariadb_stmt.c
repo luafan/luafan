@@ -131,7 +131,13 @@ LUA_API int st_gc(lua_State *L)
   STMT_CTX *st = (STMT_CTX *)luaL_checkudata(L, 1, MARIADB_STATEMENT_METATABLE);
   if (st != NULL && !st->closed)
   {
-    return stmt_close_start(L, st);
+    /* A finalizer must not yield into the asynchronous close state machine. */
+    st->closed = 1;
+    if (st->my_stmt) {
+      mysql_stmt_close(st->my_stmt);
+      st->my_stmt = NULL;
+    }
+    CLEAR_REF(L, st->table);
   }
 
   return 0;

@@ -146,6 +146,10 @@ lua_State *utlua_mainthread(lua_State *L);
 
 typedef int (*FAN_RESUME_TYPE)(lua_State *co, lua_State *from, int count);
 
+/* Default resume implementation (no embedder hook). Defined in utlua.c so
+ * event_mgr's locking_resume wrapper can chain it. */
+int _utlua_resume(lua_State *co, lua_State *from, int count);
+
 void utlua_set_resume(FAN_RESUME_TYPE resume);
 
 extern FAN_RESUME_TYPE FAN_RESUME;

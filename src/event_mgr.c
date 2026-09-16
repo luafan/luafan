@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 static struct event_base *base = NULL;
 static struct evdns_base *dnsbase = NULL;
@@ -55,9 +56,26 @@ static int main_owner_thread_valid = 0;
 
 static _Thread_local int g_current_worker_id = -1;
 
-// Provided by the embedder's lua53 user lock hook (luauser.c).
-// Weak linkage keeps standalone luafan builds valid without the hook.
-__attribute__((weak)) void LuaLockEnable(void);
+// Provided by the embedder's lua53 user lock hook (luauser.c) or the portable
+// fan_lua_lock.c. Weak linkage keeps standalone luafan builds valid without the
+// hook.
+//
+// On Mach-O a checkable possibly-null extern needs weak_import (a plain weak
+// declaration would make the reference strong and fail dlopen instead of
+// yielding NULL); on ELF a plain weak declaration behaves the same and gcc does
+// not know weak_import at all.
+#ifndef FAN_LUA_LOCK_WIRED
+#if defined(__clang__)
+#define FAN_LUA_LOCK_WEAK_IMPORT __attribute__((weak_import))
+#else
+#define FAN_LUA_LOCK_WEAK_IMPORT __attribute__((weak))
+#endif
+FAN_LUA_LOCK_WEAK_IMPORT void LuaLockEnable(void);
+
+/* State-less lock variants (luauser.c / fan_lua_lock.c). Same weak linkage. */
+FAN_LUA_LOCK_WEAK_IMPORT void LuaGlobalLock(void);
+FAN_LUA_LOCK_WEAK_IMPORT void LuaGlobalUnlock(void);
+#endif
 
 static pthread_once_t event_threads_once = PTHREAD_ONCE_INIT;
 
@@ -192,6 +210,42 @@ static void event_mgr_worker_set_state(struct event_worker *worker, int state) {
     pthread_mutex_unlock(&worker->state_mutex);
 }
 
+/* ---- locking resume wrapper ----------------------------------------------
+ *
+ * lua_resume holds the global Lua lock for the whole coroutine run only when
+ * the Lua CORE itself was compiled with the lua_lock user hook
+ * (DLUA_USER_H=luauser.h on Apple / fan_lua_lock.h on Linux docker builds).
+ * Those builds hook the core so every FAN_RESUME site is already serialized.
+ * But a build that links a stock Lua core (e.g. CMake on a dev box, or a distro
+ * /usr/bin/lua whose lua_lock is a no-op) must still be safe when workers are
+ * started: otherwise two worker threads could execute Lua in parallel and
+ * corrupt the shared lua_State.
+ *
+ * Wrapping whichever resume function is currently installed (the default
+ * _utlua_resume or an embedder-provided one) closes that gap with a single code
+ * path: on hooked cores the extra acquisition just nests into the recursive
+ * mutex, on hooked-module-only builds it provides the missing serialization.
+ * Installed once, inside workers_init, before the first worker thread can run a
+ * callback. */
+static FAN_RESUME_TYPE previous_resume = NULL;
+
+static int locking_resume(lua_State *co, lua_State *from, int count) {
+    int status;
+    if (LuaGlobalLock) LuaGlobalLock();
+    status = previous_resume(co, from, count);
+    if (LuaGlobalUnlock) LuaGlobalUnlock();
+    return status;
+}
+
+static void install_locking_resume(void) {
+    static _Atomic int installed = 0;
+    int expected = 0;
+    if (atomic_compare_exchange_strong(&installed, &expected, 1)) {
+        previous_resume = FAN_RESUME;
+        utlua_set_resume(locking_resume);
+    }
+}
+
 static void event_mgr_worker_stop_cb(evutil_socket_t fd, short what, void *arg) {
     struct event_worker *worker = (struct event_worker *)arg;
     (void)fd;
@@ -243,6 +297,10 @@ int event_mgr_workers_init(int count) {
     if (num_workers > 0) {
         return -1;
     }
+    if (event_mgr_is_loop_running()) {
+        fprintf(stderr, "event_mgr: workers_init refused while event loop is running\n");
+        return -1;
+    }
     // count <= 0 means "no workers": stay single-threaded, do NOT spawn any
     // thread and do NOT enable the Lua lock. (Previously this silently became
     // EVENT_MGR_DEFAULT_WORKERS, which was surprising.)
@@ -254,9 +312,25 @@ int event_mgr_workers_init(int count) {
         count = EVENT_MGR_MAX_WORKERS;
     }
 
+    if (!LuaLockEnable && !LuaGlobalLock) {
+        /* No lock implementation is linked at all: the worker threads would
+         * share the lua_State completely unprotected. Refuse loudly instead of
+         * corrupting the VM (see src/fan_lua_lock.h / luauser.c wiring). */
+        fprintf(stderr, "event_mgr: workers_init(%d) refused: no Lua lock hook is "
+                        "linked (LuaLockEnable/LuaGlobalLock missing); multi-worker "
+                        "mode would corrupt the shared lua_State.\n", count);
+        return -1;
+    }
+
     if (LuaLockEnable) {
         LuaLockEnable();
     }
+
+    // Serialize every FAN_RESUME with the global lock before any worker can run
+    // a callback. Mandatory for cores whose lua_lock is a no-op (stock / distro
+    // Lua); on hooked cores the wrapper nests harmlessly into the recursive
+    // mutex.
+    install_locking_resume();
 
     event_mgr_enable_thread_support();
 
@@ -320,6 +394,18 @@ int event_mgr_workers_init(int count) {
         }
     }
     workers_accepting_dispatch = 1;
+    /* Hold one extra lock level on the calling thread when workers are started
+     * from the main script (loop not yet parked): everything the script does
+     * before fan.loop() cannot then interleave with worker callbacks. Skip the
+     * hold when workers_init is called from inside a running loop — the caller's
+     * own resume already holds the lock, and an extra unreleased level here
+     * would block every worker callback forever. LuaLockSuspendForLoop() in
+     * luafan_start() releases the level around the blocking loop; a script that
+     * starts workers but never parks in fan.loop() keeps it until exit — the
+     * deliberate leak-not-race outcome for that unsupported shape. */
+    if (!event_mgr_is_loop_running() && LuaGlobalLock) {
+        LuaGlobalLock();
+    }
     return 0;
 }
 
@@ -364,7 +450,7 @@ void event_mgr_workers_shutdown(void) {
             worker->stop_event = NULL;
         }
         if (worker->dnsbase) {
-            evdns_base_free(worker->dnsbase, 1);
+            evdns_base_free(worker->dnsbase, 0);
             worker->dnsbase = NULL;
         }
         if (worker->base) {
@@ -404,8 +490,8 @@ void event_mgr_workers_free_bases(void) {
             worker->stop_event = NULL;
         }
         if (worker->dnsbase) {
-            // fail_requests=1 — see cleanup_dnsbase().
-            evdns_base_free(worker->dnsbase, 1);
+            // Worker bases may outlive the Lua state during final cleanup.
+            evdns_base_free(worker->dnsbase, 0);
             worker->dnsbase = NULL;
         }
         if (worker->base) {
@@ -505,21 +591,22 @@ struct evdns_base *event_mgr_dnsbase() {
 }
 
 static void signal_handler(int sig) {
-    printf("%s: got signal %d\n", __func__, sig);
+    static const char force_exit[] = "signal_handler: force exit\n";
     switch (sig) {
         case SIGINT:
             signal_count++;
             if (signal_count > 1) {
-                printf("force exit.\n");
+                (void)write(STDERR_FILENO, force_exit, sizeof(force_exit) - 1);
                 _exit(0);
             }
+            event_mgr_break();
+            break;
         case SIGTERM:
         case SIGHUP:
         case SIGQUIT:
             event_mgr_break();
             break;
         case SIGPIPE:
-            printf("ignore SIGPIPE.\n");
             break;
     }
 }
@@ -635,6 +722,7 @@ static void reset_state() {
 static void full_cleanup() {
     cleanup_signals();
     cleanup_signal_events();
+    event_mgr_workers_stop_threads();
     cleanup_curl_clients();
     cleanup_openssl();
     cleanup_dnsbase();
@@ -711,10 +799,10 @@ int event_mgr_loop() {
         // not outlive the base across stop/restart.
         cleanup_signals();
         cleanup_signal_events();
+        event_mgr_workers_stop_threads();
         cleanup_curl_clients();
         cleanup_openssl();
         cleanup_dnsbase();
-        event_mgr_workers_stop_threads();
         // The workers are gone; hand-offs they armed on the main base (the
         // HTTPD finalize job) still need one pass so server resources are
         // released instead of being pinned until process exit.
@@ -747,10 +835,10 @@ int event_mgr_loop_later_cleanup() {
         // curlimp static multi/timers must not outlive the base.
         cleanup_signals();
         cleanup_signal_events();
+        event_mgr_workers_stop_threads();
         cleanup_curl_clients();
         cleanup_openssl();
         cleanup_dnsbase();
-        event_mgr_workers_stop_threads();
         // The workers are gone; hand-offs they armed on the main base (the
         // HTTPD finalize job) still need one pass so server resources are
         // released instead of being pinned until process exit.

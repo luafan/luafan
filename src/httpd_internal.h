@@ -103,6 +103,24 @@ typedef struct ws_frame_node {
     struct ws_frame_node *next;
 } ws_frame_node_t;
 
+/* One marshaled plain-HTTP reply operation (see httpd_request.c). Lua running
+ * on a non-owner thread cannot touch the connection's bufferevent/evhttp
+ * state directly; the operation is queued per request and applied in FIFO
+ * order on the thread that owns the connection's event base. */
+typedef struct httpd_reply_op {
+    int kind; /* HTTPD_REPLY_OP_* */
+    int code;
+    char *a; size_t a_len; /* message / header key / chunk payload */
+    char *b; size_t b_len; /* body / header value */
+    struct httpd_reply_op *next;
+} httpd_reply_op_t;
+
+#define HTTPD_REPLY_OP_REPLY 1
+#define HTTPD_REPLY_OP_REPLY_START 2
+#define HTTPD_REPLY_OP_REPLY_CHUNK 3
+#define HTTPD_REPLY_OP_REPLY_END 4
+#define HTTPD_REPLY_OP_ADDHEADER 5
+
 typedef struct httpd_worker_instance {
     struct evhttp *httpd;
     struct evhttp_bound_socket *boundsocket;
@@ -166,6 +184,23 @@ struct Request {
     int _ref_;
     int self_ref;
     int prevent_gc_ref;
+    /* Cross-thread reply marshaling, guarded by ws_mutex (the per-request
+     * mutex is shared with the WebSocket cross-thread operations): reply ops
+     * enqueued by a non-owner Lua thread are applied in order on the owner
+     * thread by httpd_reply_drain_cb(). reply_chain_ref pins the request
+     * userdata in the registry while a batch is queued/armed. */
+    httpd_reply_op_t *reply_head;
+    httpd_reply_op_t *reply_tail;
+    int reply_queued;
+    /* Caller-visible reply status while ops are queued: the owner thread
+     * advances it when an op is applied and a foreign thread advances it when
+     * an op is enqueued (start -> REPLY_START, end/full reply -> REPLYED); the
+     * drain resyncs it to the applied reply_status once its queue is empty.
+     * Without it a marshaled reply_start followed by reply_chunk on the same
+     * foreign thread would still observe the stale applied status. Guarded by
+     * ws_mutex. */
+    int reply_pending_status;
+    int reply_chain_ref;
     ws_frame_node_t *frame_queue_head;
     ws_frame_node_t *frame_queue_tail;
     int frame_queue_len;

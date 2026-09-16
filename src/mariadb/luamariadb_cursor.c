@@ -282,15 +282,14 @@ LUA_API int cur_gc(lua_State *L)
   CURSOR_CTX *cur = (CURSOR_CTX *)luaL_checkudata(L, 1, MARIADB_CURSOR_METATABLE);
   if (cur != NULL && !(cur->closed))
   {
-    if (free_result_start(L, cur) == CONTINUE_YIELD)
-    {
-      REF_CO(cur);
-      return lua_yield(L, 0);
-    }
-    else
-    {
-      lua_pushboolean(L, true);
-      return 1;
+    /* Buffered result rows can be released synchronously; a finalizer must
+     * never yield or leave an event bag pointing at this userdata. */
+    cur->closed = 1;
+    CLEAR_REF(L, cur->colnames);
+    CLEAR_REF(L, cur->coltypes);
+    if (cur->my_res) {
+      mysql_free_result(cur->my_res);
+      cur->my_res = NULL;
     }
   }
   return 0;

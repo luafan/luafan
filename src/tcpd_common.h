@@ -74,6 +74,9 @@ typedef struct tcpd_base_conn {
     int onSendReadyRef;
     int onDisconnectedRef;
     int onConnectedRef;  // For client connections
+    /* Strong pin for accepted connections, which are only passed to onaccept
+     * and otherwise have no Lua owner while the socket remains live. */
+    int self_ref;
 
     // Configuration
     tcpd_config_t config;

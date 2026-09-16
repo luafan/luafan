@@ -444,11 +444,11 @@ void tcpd_shutdown_bufferevent(struct bufferevent *bev) {
 int tcpd_base_conn_set_callbacks(tcpd_base_conn_t *conn, lua_State *L, int table_index) {
     if (!conn || !L) return -1;
 
-    // Initialize callback references
-    conn->onReadRef = LUA_NOREF;
-    conn->onSendReadyRef = LUA_NOREF;
-    conn->onDisconnectedRef = LUA_NOREF;
-    conn->onConnectedRef = LUA_NOREF;
+    // Replace callback references without leaking the previous registry refs.
+    CLEAR_REF(L, conn->onReadRef);
+    CLEAR_REF(L, conn->onSendReadyRef);
+    CLEAR_REF(L, conn->onDisconnectedRef);
+    CLEAR_REF(L, conn->onConnectedRef);
 
     // Set callbacks from table
     SET_FUNC_REF_FROM_TABLE(L, conn->onReadRef, table_index, "onread");
@@ -489,6 +489,7 @@ int tcpd_base_conn_init(tcpd_base_conn_t *conn, tcpd_conn_type_t type, lua_State
     conn->onSendReadyRef = LUA_NOREF;
     conn->onDisconnectedRef = LUA_NOREF;
     conn->onConnectedRef = LUA_NOREF;
+    conn->self_ref = LUA_NOREF;
 
     memset(conn->ip, 0, INET6_ADDRSTRLEN);
 
@@ -527,6 +528,7 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
         CLEAR_REF(mt, conn->onSendReadyRef);
         CLEAR_REF(mt, conn->onDisconnectedRef);
         CLEAR_REF(mt, conn->onConnectedRef);
+        CLEAR_REF(mt, conn->self_ref);
     }
 
     // Free host string

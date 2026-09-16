@@ -135,7 +135,10 @@ LUA_API int conn_gc(lua_State *L)
 
   if (ctx != NULL && !(ctx->closed))
   {
-    return conn_close_start(L);
+    /* A finalizer cannot yield. Close synchronously so no async event keeps
+     * a pointer to this userdata after GC has started reclaiming it. */
+    ctx->closed = 1;
+    mysql_close(&ctx->my_conn);
   }
 
   return 0;
