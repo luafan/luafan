@@ -202,17 +202,23 @@ TEST_CASE(test_utlua_resume_error) {
 
 /* Test resume function pointer setting */
 TEST_CASE(test_utlua_resume_function_pointer) {
-    // Test that we can get the current resume function
-    FAN_RESUME_TYPE current_resume = FAN_RESUME;
-    TEST_ASSERT_NOT_NULL(current_resume);
-    TEST_ASSERT_EQUAL(&_utlua_resume, current_resume);
+    /* The default resume is _utlua_resume, but event_mgr_workers_init()
+     * legitimately swaps in a locking wrapper around it (event_mgr.c:
+     * install_locking_resume, needed so worker threads never run Lua in
+     * parallel on a core whose lua_lock is a no-op). Suites earlier in this
+     * binary may already have started workers, so the pointer is not required
+     * to be the default -- only to be valid and to round-trip through
+     * utlua_set_resume(). */
+    FAN_RESUME_TYPE original = FAN_RESUME;
+    TEST_ASSERT_NOT_NULL(original);
 
-    // Test setting a custom resume function (we'll use the same one)
+    /* Test setting a resume function: a plain default install must be visible. */
     utlua_set_resume(&_utlua_resume);
     TEST_ASSERT_EQUAL(&_utlua_resume, FAN_RESUME);
 
-    // Restore original
-    utlua_set_resume(&_utlua_resume);
+    /* Restore whatever was installed before this test. */
+    utlua_set_resume(original);
+    TEST_ASSERT_EQUAL(original, FAN_RESUME);
 }
 
 /* Test OpenSSL functions (if available) */
