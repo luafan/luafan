@@ -114,12 +114,7 @@ suite:test("subprocess_websocket_double_cleanup_crash", function()
     f:write(script)
     f:close()
 
-    local cmd = string.format(
-        "LUA_PATH='../modules/?.lua;../modules/?/init.lua;./lua/framework/?.lua;./lua/?.lua;;' " ..
-        "LUA_CPATH='./build/?.so;../?.so;;' " ..
-        "timeout 20s lua %s 2>&1; echo $?",
-        tmpfile
-    )
+    local cmd = TestFramework.child_lua_command(tmpfile, 20) .. "; echo $?"
     local handle = io.popen(cmd)
     local output = handle:read("*a")
     local success, exit_type, code = handle:close()

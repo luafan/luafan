@@ -438,4 +438,53 @@ TestFramework.assert_error = assert_error
 -- Export results for external access
 TestFramework.results = TestResults
 
+-- Shell command that runs `script_file` in a child process with the SAME Lua
+-- interpreter and the SAME search paths as this process (stderr merged, hard
+-- timeout). Crash/race tests used to hardcode `lua` plus literal
+-- LUA_PATH/LUA_CPATH values, so a run driven by an out-of-tree build dir
+-- spawned a child that could not load the same fan.so and died with
+-- "module 'fan' not found" -- reported as a bogus test failure instead of the
+-- crash/race the child was supposed to provoke. Callers append their own exit
+-- sentinel, e.g. `TestFramework.child_lua_command(f, 15) .. "; echo $?"`.
+function TestFramework.child_lua_command(script_file, timeout_secs)
+    local timeout = timeout_secs or 60
+    local function shq(s)
+        return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+    end
+    -- Prefer the paths this process was actually started with; fall back to the
+    -- resolved search paths so a run without LUA_PATH/LUA_CPATH still works.
+    local child_path = os.getenv("LUA_PATH")
+    if not child_path or #child_path == 0 then child_path = package.path end
+    local child_cpath = os.getenv("LUA_CPATH")
+    if not child_cpath or #child_cpath == 0 then child_cpath = package.cpath end
+    local interp = (arg and arg[-1]) or "lua"
+    return "LUA_PATH=" .. shq(child_path)
+        .. " LUA_CPATH=" .. shq(child_cpath)
+        .. " timeout " .. tostring(timeout) .. "s "
+        .. shq(interp) .. " " .. shq(script_file) .. " 2>&1"
+end
+
+-- Optional event-worker pool for suites that assert worker affinity.
+-- MUST run before fan.loop(): event_mgr refuses workers_init() while the loop
+-- is running. LUAN_TEST_WORKERS=N (N >= 1) enables the pool; unset/0 keeps the
+-- suite single-threaded, in which case worker-only cases skip themselves.
+function TestFramework.init_workers_from_env()
+    local ok_fan, fan = pcall(require, 'fan')
+    if not ok_fan or type(fan) ~= 'table' then
+        return 0
+    end
+    local n = tonumber(os.getenv and os.getenv("LUAN_TEST_WORKERS") or "") or 0
+    if n <= 0 then
+        return 0
+    end
+    local have = (fan.worker_count and fan.worker_count()) or 0
+    if have < n and fan.workers_init then
+        local ok, ret = pcall(fan.workers_init, n)
+        if not ok or (ret ~= nil and ret ~= 0) then
+            return have
+        end
+    end
+    return (fan.worker_count and fan.worker_count()) or 0
+end
+
 return TestFramework

@@ -75,12 +75,7 @@ suite:test("subprocess_crash_on_worker_base_premature_free", function()
     f:close()
 
     -- Run subprocess
-    local cmd = string.format(
-        "LUA_PATH='../modules/?.lua;../modules/?/init.lua;./lua/framework/?.lua;./lua/?.lua;;' " ..
-        "LUA_CPATH='./build/?.so;../?.so;;' " ..
-        "timeout 10s lua %s; echo $?",
-        tmpfile
-    )
+    local cmd = TestFramework.child_lua_command(tmpfile, 10) .. "; echo $?"
     local handle = io.popen(cmd .. " 2>&1")
     local output = handle:read("*a")
     local success, exit_type, code = handle:close()

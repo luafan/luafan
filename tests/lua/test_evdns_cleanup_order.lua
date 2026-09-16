@@ -55,12 +55,7 @@ suite:test("subprocess_dns_base_free_with_pending_requests", function()
     f:write(CRASH_SCRIPT)
     f:close()
 
-    local cmd = string.format(
-        "LUA_PATH='../modules/?.lua;../modules/?/init.lua;./lua/framework/?.lua;./lua/?.lua;;' " ..
-        "LUA_CPATH='./build/?.so;../?.so;;' " ..
-        "timeout 15s lua %s; echo $?",
-        tmpfile
-    )
+    local cmd = TestFramework.child_lua_command(tmpfile, 15) .. "; echo $?"
     local handle = io.popen(cmd .. " 2>&1")
     local output = handle:read("*a")
     local success, exit_type, code = handle:close()

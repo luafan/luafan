@@ -91,12 +91,7 @@ suite:test("subprocess_tcpd_concurrent_tostring_close_race", function()
     f:write(script)
     f:close()
 
-    local cmd = string.format(
-        "LUA_PATH='../modules/?.lua;../modules/?/init.lua;./lua/framework/?.lua;./lua/?.lua;;' " ..
-        "LUA_CPATH='./build/?.so;../?.so;;' " ..
-        "timeout 15s lua %s 2>&1; echo $?",
-        tmpfile
-    )
+    local cmd = TestFramework.child_lua_command(tmpfile, 15) .. "; echo $?"
     local handle = io.popen(cmd)
     local output = handle:read("*a")
     local success, exit_type, code = handle:close()

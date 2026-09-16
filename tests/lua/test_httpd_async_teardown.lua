@@ -41,11 +41,7 @@ local function run_sub(lua_body, port, workers)
     if not f then return {ok=false, output="cannot create tmp"} end
     f:write(lua_body)
     f:close()
-    local cmd = string.format(
-        "LUA_PATH='./lua/framework/?.lua;./tests/lua/?.lua;;' " ..
-        "LUA_CPATH='./build/?.so;../?.so;;' " ..
-        "timeout 20s lua %s 2>&1; echo __DONE__$?",
-        tmp)
+    local cmd = TestFramework.child_lua_command(tmp, 20) .. "; echo __DONE__$?"
     local h = io.popen(cmd)
     local out = h:read("*a")
     local okk, etype, code = h:close()
