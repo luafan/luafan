@@ -144,6 +144,7 @@ test_udpd_send_ready_race.lua
 test_httpd_websocket_lifecycle.lua
 test_mariadb_pending_event.lua
 test_mariadb_workers.lua
+test_mariadb_pending_owner.lua
 test_evdns_integration.lua
 test_luafan_mainevent_lifetime.lua
 test_httpd_lifecycle_regressions.lua

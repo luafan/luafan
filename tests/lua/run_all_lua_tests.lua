@@ -165,6 +165,7 @@ local test_files = {
     -- test_httpd_websocket_lifecycle.lua -> standalone step (see the note below the list)
     -- test_mariadb_pending_event.lua -> standalone step (see the note below the list)
     -- test_mariadb_workers.lua -> standalone step (own worker pool, see the note below)
+    -- test_mariadb_pending_owner.lua -> standalone step (own worker pool, see the note below)
     "test_event_mgr_loop_cleanup.lua",     -- Regression tests for event_mgr_loop cleanup order
     -- test_luafan_mainevent_lifetime.lua -> standalone step (see the note below the list)
     "test_evdns_cleanup_order.lua",        -- Regression tests for DNS base release order
@@ -205,8 +206,9 @@ local test_files = {
 --       pool must be built before the first fan.loop() and the runner already
 --       owns one, so the call would be refused and the file would report a skip
 --       instead of exercising the worker pool it exists for
---       (test_mariadb_workers.lua, which additionally skips with 77 when no
---       MariaDB is reachable, so client-only runners stay green).
+--       (test_mariadb_workers.lua and test_mariadb_pending_owner.lua, which
+--       additionally skip with 77 when no MariaDB is reachable, so client-only
+--       runners stay green).
 -- run_lua_tests.sh runs all of them as separate processes, in the same lock shape
 -- as the rest of the suite:
 --   test_tcpd_concurrent_lifecycle.lua   test_udpd_event_lifecycle.lua
@@ -215,7 +217,8 @@ local test_files = {
 --   test_luafan_mainevent_lifetime.lua   test_httpd_lifecycle_regressions.lua
 --   test_httpd_rfc_regressions.lua       test_http_client.lua
 --   test_mariadb_workers.lua             test_httpd_compliance.lua
---   test_httpd_security.lua              test_httpd_performance.lua
+--   test_mariadb_pending_owner.lua       test_httpd_security.lua
+--   test_httpd_performance.lua
 -- (test_lock_granularity.lua is standalone too and never appears in this list.)
 -- ---------------------------------------------------------------------------
 

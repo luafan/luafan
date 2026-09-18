@@ -26,9 +26,6 @@ static void real_connect_cont(int fd, short event, void *_userdata)
   }
   else if (ret == conn)
   {
-    char value = 1;
-    mysql_options(conn, MYSQL_OPT_RECONNECT, &value);
-
     lua_lock(L);
     lua_rawgeti(L, LUA_REGISTRYINDEX, bag->extra);
     lua_unlock(L);
@@ -110,7 +107,12 @@ LUA_API int real_connect_start(lua_State *L)
                              "mariadb: client library without a non-blocking "
                              "API (mysql_options(MYSQL_OPT_NONBLOCK) failed)");
   }
-  mysql_options(&ctx->my_conn, MYSQL_OPT_RECONNECT, &value);
+  if (mysql_options(&ctx->my_conn, MYSQL_OPT_RECONNECT, &value) != 0)
+  {
+    /* Do not enter the async state machine with an option the client rejected. */
+    return luaL_error(L, LUASQL_PREFIX
+                             "mariadb: MYSQL_OPT_RECONNECT failed");
+  }
 
   /* fill in structure */
   ctx->closed = 0;
@@ -135,7 +137,8 @@ LUA_API int real_connect_start(lua_State *L)
   }
   else if (ret == &ctx->my_conn)
   {
-    mysql_options(&ctx->my_conn, MYSQL_OPT_RECONNECT, &value);
+    /* MYSQL_OPT_RECONNECT was set (and its error checked) before the connect
+     * started; the connect completing synchronously changes nothing about it. */
     return 1;
   }
   else
