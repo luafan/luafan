@@ -997,10 +997,19 @@ void event_mgr_cleanup() {
 }
 
 void event_mgr_loop_cleanup() {
-    int expected = EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP;
-    if (!atomic_compare_exchange_strong(&lifecycle_state, &expected,
-                                        EVENT_MGR_LIFECYCLE_FINALIZING)) {
-        return;
+    int expected = atomic_load(&lifecycle_state);
+    for (;;) {
+        /* A standalone C test may create a base without entering the loop.
+         * Preserve that historical cleanup contract while still rejecting a
+         * running or already-finalizing lifecycle. */
+        if (expected != EVENT_MGR_LIFECYCLE_IDLE &&
+            expected != EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP) {
+            return;
+        }
+        if (atomic_compare_exchange_weak(&lifecycle_state, &expected,
+                                         EVENT_MGR_LIFECYCLE_FINALIZING)) {
+            break;
+        }
     }
 
     // Signal events borrow the main base and event_del() reads ev_base before
