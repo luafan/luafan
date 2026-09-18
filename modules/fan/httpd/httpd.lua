@@ -144,7 +144,15 @@ local function readheader(ctx, input)
     while not ctx.header_complete do
         local line, breakflag = input:readline()
         if not line then
-            break
+            -- Incomplete line: the rest of the request is still in flight.
+            -- readline() resets to its mark, so the buffered bytes stay
+            -- readable; report how many bytes the caller must wait for so it
+            -- blocks in apt:receive(expect) instead of re-parsing the same
+            -- buffer in a busy loop. Without this, a header line split across
+            -- TCP segments (e.g. a header value larger than one read) spins the
+            -- server at 100% CPU and never lets the loop read the remainder of
+            -- the request, so the peer waits forever for its response.
+            return false, input:available() + 1
         elseif not breakflag then
             return false, #line + 2
         elseif breakflag ~= "\r\n" then
@@ -225,12 +233,24 @@ local function readheader(ctx, input)
 
                     -- Validate HTTP version (only 1.0 and 1.1 supported)
                     if ctx.version ~= "1.0" and ctx.version ~= "1.1" then
+                        -- NOTE: header_complete/_close_after_error must be set
+                        -- here, like the other framing errors below. Returning
+                        -- true without them left the parser looping: the
+                        -- remaining header lines were re-parsed as a new request
+                        -- line, the connection got a bare 400 and the intended
+                        -- 505 never reached the client.
+                        ctx.header_complete = true
+                        ctx._close_after_error = true
                         ctx._http_error = {code = 505, message = "HTTP Version Not Supported"}
                         return true -- Continue to process error
                     end
 
                     -- RFC 7230: URI length validation (reasonable limit)
                     if #ctx.path > 2048 then
+                        -- Same as the version check above: without
+                        -- header_complete the intended 414 was never sent.
+                        ctx.header_complete = true
+                        ctx._close_after_error = true
                         ctx._http_error = {code = 414, message = "URI Too Long"}
                         return true -- Continue to process error
                     end
@@ -587,7 +607,16 @@ function context_mt:check_rate_limit()
 
     cleanup_rate_limit_storage()
 
-    local client_ip = self:remoteip()
+    -- `remoteip` is a property (context_mt_index_map caches the string in the
+    -- context table), so it must not be called with method syntax: the lookup
+    -- returns the cached string and the call raised "attempt to call a string
+    -- value (method 'remoteip')".
+    local client_ip = self.remoteip
+    if not client_ip then
+        -- No peer address (e.g. a unix-domain transport): the client cannot be
+        -- bucketed, so skip limiting instead of indexing the table with nil.
+        return true
+    end
     local now = os.time()
     local max_requests = config.rate_limit_requests or 100
     local window_seconds = config.rate_limit_window or 60
@@ -758,16 +787,36 @@ local function context_index_body(ctx)
     return table.concat(t)
 end
 
+-- NOTE: the tcpd accept connection exposes `getpeername()` (returning `ip,
+-- port`) but has no `remoteinfo()` method. The previous implementation called
+-- the non-existent method, so every request that read ctx.remoteinfo /
+-- ctx.remoteip / ctx.remoteport raised "attempt to call a nil value (method
+-- 'remoteinfo')" and the client got a 500 (the rate limiter read ctx.remoteip
+-- on every request, which made enabling it fail every request). Build the table
+-- from getpeername and return nil when the peer address is unavailable (e.g. a
+-- unix-domain peer) so callers can cope instead of crashing.
 local function context_index_remoteinfo(ctx)
-    return ctx.apt.conn:remoteinfo()
+    local conn = ctx.apt and ctx.apt.conn
+    if not conn or type(conn.getpeername) ~= "function" then
+        return nil
+    end
+
+    local ip, port = conn:getpeername()
+    if not ip then
+        return nil
+    end
+
+    return { ip = ip, port = port }
 end
 
 local function context_index_remoteip(ctx)
-    return context_index_remoteinfo(ctx).ip
+    local info = context_index_remoteinfo(ctx)
+    return info and info.ip
 end
 
 local function context_index_remoteport(ctx)
-    return context_index_remoteinfo(ctx).port
+    local info = context_index_remoteinfo(ctx)
+    return info and info.port
 end
 
 local function context_index_params_unpack_kv(t, kv)
