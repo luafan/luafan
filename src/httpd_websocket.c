@@ -875,11 +875,36 @@ void ws_connection_cleanup(Request *request) {
 // Resume helpers
 // ============================================================
 
+/* Drop the registry slot that anchored the coroutine across a resume.
+ *
+ * The resume itself must run while that slot is still held: it is the only
+ * strong reference to the coroutine (the Lua handler's `coroutine.wrap(f)()`
+ * result is a temporary, and websocket_receive() parks by taking this slot),
+ * and an unanchored thread object is collectable. A GC run in that window —
+ * by this worker, or by another one when several share the state — frees the
+ * coroutine, and lua_resume then writes into freed memory (lua_resume's
+ * `L->status`). Every other resume site in luafan already clears its reference
+ * *after* FAN_RESUME (luafan_sleep, udpd_dns, …); these two helpers were the
+ * exception, which is why the websocket echo lifecycle crashed under the
+ * core-hook build. See docs/threading-model.md.
+ *
+ * `ref_before` is the slot in force during the resume. If the coroutine parked
+ * again it took a fresh slot (REF_STATE_SET) while running, so the slot we
+ * held is the stale one and must be the one released. */
+static void ws_resume_release_ref(Request *request, int ref_before) {
+    if (ref_before == LUA_NOREF || !request->mainthread) return;
+    if (request->_ref_ == ref_before) {
+        CLEAR_REF(request->mainthread, request->_ref_);
+    } else {
+        CLEAR_REF(request->mainthread, ref_before);
+    }
+}
+
 static void ws_resume_with_error(Request *request, const char *errmsg) {
     lua_State *L = NULL;
+    int ref_before = request->_ref_;
     REF_STATE_GET(request, L);
     if (!L) return;
-    REF_STATE_CLEAR(request);
 
     lua_lock(L);
     lua_pushnil(L);
@@ -887,6 +912,7 @@ static void ws_resume_with_error(Request *request, const char *errmsg) {
     lua_unlock(L);
 
     int status = FAN_RESUME(L, NULL, 2);
+    ws_resume_release_ref(request, ref_before);
     if (status == LUA_OK || status > LUA_YIELD) {
         ws_connection_cleanup(request);
     }
@@ -894,12 +920,12 @@ static void ws_resume_with_error(Request *request, const char *errmsg) {
 
 static void ws_resume_with_frame(Request *request, websocket_frame_t *frame) {
     lua_State *L = NULL;
+    int ref_before = request->_ref_;
     REF_STATE_GET(request, L);
     if (!L) {
         websocket_frame_free(frame);
         return;
     }
-    REF_STATE_CLEAR(request);
 
     lua_lock(L);
     if (frame->payload && frame->payload_len > 0) {
@@ -912,6 +938,7 @@ static void ws_resume_with_frame(Request *request, websocket_frame_t *frame) {
     websocket_frame_free(frame);
 
     int status = FAN_RESUME(L, NULL, 2);
+    ws_resume_release_ref(request, ref_before);
     if (status == LUA_OK || status > LUA_YIELD) {
         ws_connection_cleanup(request);
     }
