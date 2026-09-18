@@ -12,11 +12,12 @@
 #include <time.h>
 #include <unistd.h>
 
-// Global Lua lock suspend/resume around the blocking main-thread event loop, and
-// the lock/unlock pair used by the FAN_LOCK_PROBE diagnostics below. Weak symbols
-// keep luafan usable by embedders without the optional lock hook.
-__attribute__((weak)) int LuaLockSuspendForLoop(void);
-__attribute__((weak)) void LuaLockResumeAfterLoop(int depth);
+// Lock/unlock pair used by the FAN_LOCK_PROBE diagnostics below. The hand-off
+// that releases the caller's lock levels around the blocking event loop lives
+// in event_mgr_loop() itself (see the note there), so every way an embedder
+// reaches the loop gets it — including a host that enters the loop directly
+// when the entry chunk yields before fan.loop(). Weak symbols keep luafan
+// usable by embedders without the optional lock hook.
 __attribute__((weak)) void LuaGlobalLock(void);
 __attribute__((weak)) void LuaGlobalUnlock(void);
 
@@ -101,33 +102,16 @@ LUA_API int luafan_start(lua_State *L) {
         }
     }
 
-    // Start the actual event loop.
+    // Start the actual event loop. It blocks until the service stops.
     //
-    // The calling thread still owns at least one lock level here:
-    // event_mgr_workers_init() takes one when the pool is started from the main
-    // script (on a hooked core the resume-level layer is already dropped at this
-    // C-call boundary, so that hold is typically the only level left).
-    // event_mgr_loop() blocks until the service stops; if we kept the level,
-    // worker-thread callbacks that need to enter Lua (tcpd/udpd read/connect on
-    // a worker event_base) would deadlock forever in LockMainState waiting for a
-    // mutex the parked main thread never releases. Suspend the lock across the
-    // loop so workers can acquire it; the main thread still serializes its own
-    // callbacks through the normal lock/unlock pairs inside each resume. Restore
-    // on exit so the enclosing resume's trailing unlock stays balanced.
-    //
-    // Not a no-op on a hooked (core-hook) interpreter: the level released here
-    // is the worker-pool hold, not the resume. Only a run with no worker pool
-    // (locking disabled) degenerates to nothing to release.
-    //
-    // Weak symbols: embedders without the lock hook resolve them to NULL.
-    int __lua_lock_depth = 0;
-    if (LuaLockSuspendForLoop) {
-        __lua_lock_depth = LuaLockSuspendForLoop();
-    }
+    // The caller's lock levels (typically event_mgr_workers_init()'s hold when
+    // the pool was started from the main script) are released for the duration
+    // of the loop by event_mgr_loop() itself — see the hand-off note there. That
+    // placement matters: fan.loop() is only one way to reach the loop, and an
+    // embedded host that enters it directly (e.g. when the entry chunk yields
+    // first, LuanMac/LuaBridge.m) would otherwise leave the hold in place and
+    // starve every worker callback.
     event_mgr_loop();
-    if (LuaLockResumeAfterLoop) {
-        LuaLockResumeAfterLoop(__lua_lock_depth);
-    }
     return 0;
 }
 

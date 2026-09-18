@@ -76,6 +76,12 @@ FAN_LUA_LOCK_WEAK_IMPORT void LuaLockEnable(void);
 FAN_LUA_LOCK_WEAK_IMPORT void LuaGlobalLock(void);
 FAN_LUA_LOCK_WEAK_IMPORT void LuaGlobalUnlock(void);
 
+/* Depth-symmetric hand-off pair used to release/re-acquire the calling thread's
+ * lock levels around the blocking main-base loop (event_mgr_loop() and
+ * event_mgr_loop_later_cleanup()). Weak for the same reason. */
+FAN_LUA_LOCK_WEAK_IMPORT int LuaLockSuspendForLoop(void);
+FAN_LUA_LOCK_WEAK_IMPORT void LuaLockResumeAfterLoop(int depth);
+
 /* Whether the RUNNING INTERPRETER owns the lock (hooked core). Deliberately not
  * declared by the wiring headers so this file stays the single declaration
  * point; absent_import => NULL => "assume stock core" => keep the wrapper. */
@@ -94,10 +100,14 @@ FAN_LUA_LOCK_WEAK_IMPORT void LuaLockDepthSet(int depth);
 #define FAN_CORE_LOCK_HOOKED() (LuaCoreLockHooked() != 0)
 #define FAN_LOCK_DEPTH_GET()   (LuaLockDepthGet())
 #define FAN_LOCK_DEPTH_SET(d)  (LuaLockDepthSet(d))
+#define FAN_LOCK_SUSPEND_FOR_LOOP()   (LuaLockSuspendForLoop())
+#define FAN_LOCK_RESUME_AFTER_LOOP(d) LuaLockResumeAfterLoop(d)
 #else
 #define FAN_CORE_LOCK_HOOKED() (LuaCoreLockHooked && LuaCoreLockHooked() != 0)
 #define FAN_LOCK_DEPTH_GET()   (LuaLockDepthGet ? LuaLockDepthGet() : 0)
 #define FAN_LOCK_DEPTH_SET(d)  do { if (LuaLockDepthSet) LuaLockDepthSet(d); } while (0)
+#define FAN_LOCK_SUSPEND_FOR_LOOP()   (LuaLockSuspendForLoop ? LuaLockSuspendForLoop() : 0)
+#define FAN_LOCK_RESUME_AFTER_LOOP(d) do { if (LuaLockResumeAfterLoop) LuaLockResumeAfterLoop(d); } while (0)
 #endif
 
 static pthread_once_t event_threads_once = PTHREAD_ONCE_INIT;
@@ -280,11 +290,11 @@ void event_mgr_lua_lock_depth_set(int depth) {
  * release, so an entire resume -- however many yield points it passes -- becomes
  * one indivisible critical section.
  *
- * Note: this is unrelated to the fan.loop() hand-off. That hand-off
- * (LuaLockSuspendForLoop in luafan_start) is mandatory on BOTH shapes, because
- * the level it releases is the extra one event_mgr_workers_init() takes on the
- * calling thread -- not the wrapper's level, which exists only for the duration
- * of a resume.
+ * Note: this is unrelated to the loop hand-off. That hand-off (around
+ * event_mgr_loop()/event_mgr_loop_later_cleanup(), see below) is mandatory on
+ * BOTH shapes, because the level it releases is the extra one
+ * event_mgr_workers_init() takes on the calling thread -- not the wrapper's
+ * level, which exists only for the duration of a resume.
  *
  * The wrapper always stays the OUTERMOST resume layer (utlua_set_outer_resume),
  * so an embedder that installs its own resume later cannot silently drop it. */
@@ -464,13 +474,15 @@ int event_mgr_workers_init(int count) {
     workers_accepting_dispatch = 1;
     /* Hold one extra lock level on the calling thread when workers are started
      * from the main script (loop not yet parked): everything the script does
-     * before fan.loop() cannot then interleave with worker callbacks. Skip the
-     * hold when workers_init is called from inside a running loop — the caller's
-     * own resume already holds the lock, and an extra unreleased level here
-     * would block every worker callback forever. LuaLockSuspendForLoop() in
-     * luafan_start() releases the level around the blocking loop; a script that
-     * starts workers but never parks in fan.loop() keeps it until exit — the
-     * deliberate leak-not-race outcome for that unsupported shape. */
+     * before entering the loop cannot then interleave with worker callbacks.
+     * Skip the hold when workers_init is called from inside a running loop —
+     * the caller's own resume already holds the lock, and an extra unreleased
+     * level here would block every worker callback forever. The loop entry
+     * itself releases the level around the blocking loop (see the hand-off note
+     * above event_mgr_loop()), whichever way the embedder reaches it; a script
+     * that starts workers and then blocks without ever entering the loop keeps
+     * it until exit — the deliberate leak-not-race outcome for that unsupported
+     * shape. */
     if (!event_mgr_is_loop_running() && LuaGlobalLock) {
         LuaGlobalLock();
     }
@@ -834,90 +846,117 @@ int event_mgr_init() {
     return -1;
 }
 
-int event_mgr_loop() {
-    if (!looping) {
-        event_mgr_init();
+/* Body of the blocking main-base loop, shared by the two public entry points
+ * below (their only differences are the owner claim and the call-site notes).
+ * `claim_main_owner` is 1 for event_mgr_loop() — the canonical entry, whose
+ * caller becomes the main base's owner thread — and 0 for
+ * event_mgr_loop_later_cleanup(), called by an embedder that already owns it.
+ *
+ * The caller must have checked that no loop is running, and must run this under
+ * the hand-off pair below: the calling thread still owns every lock level it
+ * holds, and parked in here it would never release them. */
+static void event_mgr_loop_run(int claim_main_owner) {
+    event_mgr_init();
+    if (claim_main_owner) {
         main_owner_thread = pthread_self();
         main_owner_thread_valid = 1;
-
-        looping = 1;
-
-        event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
-
-        // Symmetric with event_mgr_loop_later_cleanup(): we cannot run
-        // full_cleanup() here because the caller still holds Lua state
-        // whose __gc finalisers are about to run (lua_close happens later
-        // in the embedder, e.g. when the Lua module is unloaded). Those
-        // finalisers may bufferevent_free() into worker bases — freeing
-        // those bases here triggers libevent's "evcb_pri < nactivequeues"
-        // assertion and use-after-free in __gc.
-        //
-        // Stop worker threads (no callbacks can fire any more) and clean
-        // signal handlers / dns / openssl. The worker bases and the main
-        // base are freed by the matching event_mgr_loop_cleanup() call,
-        // which the embedder invokes after lua_close. If the embedder
-        // never calls it, the bases leak at process exit — that is far
-        // preferable to a crash.
-        //
-        // cleanup_curl_clients() must run here, while BOTH the base and the
-        // Lua state are alive: curl_multi_cleanup drives multi_done →
-        // Curl_pgrsDone → onprogress, which dereferences L via clientp.
-        // Running it later (after lua_close) crashes in lua_rawgeti.
-        // Also tears down curlimp (if linked) so its static multi/timers do
-        // not outlive the base across stop/restart.
-        cleanup_signals();
-        cleanup_signal_events();
-        event_mgr_workers_stop_threads();
-        cleanup_curl_clients();
-        cleanup_openssl();
-        cleanup_dnsbase();
-        // The workers are gone; hand-offs they armed on the main base (the
-        // HTTPD finalize job) still need one pass so server resources are
-        // released instead of being pinned until process exit.
-        event_mgr_drain_internal_jobs(base, -1, EVENT_MGR_DRAIN_MAX_MS);
-
-        looping = 0;
-        initialized = 0;
-        return 0;
     }
 
-    return -1;
+    looping = 1;
+
+    event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
+
+    // Symmetric with event_mgr_loop_later_cleanup(): we cannot run
+    // full_cleanup() here because the caller still holds Lua state
+    // whose __gc finalisers are about to run (lua_close happens later
+    // in the embedder, e.g. when the Lua module is unloaded). Those
+    // finalisers may bufferevent_free() into worker bases — freeing
+    // those bases here triggers libevent's "evcb_pri < nactivequeues"
+    // assertion and use-after-free in __gc.
+    //
+    // Stop worker threads (no callbacks can fire any more) and clean
+    // signal handlers / dns / openssl. The worker bases and the main
+    // base are freed by the matching event_mgr_loop_cleanup() call,
+    // which the embedder invokes after lua_close. If the embedder
+    // never calls it, the bases leak at process exit — that is far
+    // preferable to a crash.
+    //
+    // cleanup_curl_clients() must run here, while BOTH the base and the
+    // Lua state are alive: curl_multi_cleanup drives multi_done →
+    // Curl_pgrsDone → onprogress, which dereferences L via clientp.
+    // Running it later (after lua_close) crashes in lua_rawgeti.
+    // Also tears down curlimp (if linked) so its static multi/timers do
+    // not outlive the base across stop/restart.
+    cleanup_signals();
+    cleanup_signal_events();
+    event_mgr_workers_stop_threads();
+    cleanup_curl_clients();
+    cleanup_openssl();
+    cleanup_dnsbase();
+    // The workers are gone; hand-offs they armed on the main base (the
+    // HTTPD finalize job) still need one pass so server resources are
+    // released instead of being pinned until process exit.
+    event_mgr_drain_internal_jobs(base, -1, EVENT_MGR_DRAIN_MAX_MS);
+
+    looping = 0;
+    initialized = 0;
 }
 
-int event_mgr_loop_later_cleanup() {
-    if (!looping) {
-        event_mgr_init();
-
-        looping = 1;
-
-        event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
-
-        // Partial cleanup - keep event base for later cleanup.
-        // Stop worker threads but keep their bases alive: Lua finalisers
-        // run after this returns (lua_close → __gc → bufferevent_free) and
-        // must be able to remove themselves from their owning worker base.
-        // The worker bases are freed in event_mgr_loop_cleanup().
-        //
-        // cleanup_curl_clients() must run here (not in event_mgr_loop_cleanup):
-        // curl_multi_cleanup → multi_done → onprogress dereferences L;
-        // curlimp static multi/timers must not outlive the base.
-        cleanup_signals();
-        cleanup_signal_events();
-        event_mgr_workers_stop_threads();
-        cleanup_curl_clients();
-        cleanup_openssl();
-        cleanup_dnsbase();
-        // The workers are gone; hand-offs they armed on the main base (the
-        // HTTPD finalize job) still need one pass so server resources are
-        // released instead of being pinned until process exit.
-        event_mgr_drain_internal_jobs(base, -1, EVENT_MGR_DRAIN_MAX_MS);
-
-        looping = 0;
-        initialized = 0;
-        return 0;
+/* ---- Lua-lock hand-off around the blocking loop --------------------------
+ *
+ * The calling thread still owns every lock level it took before entering the
+ * loop — typically the extra level event_mgr_workers_init() takes when the pool
+ * is started from the main script (see there). Parking the loop while holding
+ * it leaves every worker callback blocked in LockMainState forever, so release
+ * all levels first and restore exactly the same depth afterwards (which keeps
+ * the enclosing resume's trailing unlock balanced). It is not shape-specific:
+ * on a hooked core the level released here is that worker-pool hold, not a
+ * resume layer (luaD_precall already dropped those at the C-call boundary).
+ *
+ * It lives here, in the loop entry itself, rather than in one particular
+ * caller, because fan.loop() (luafan_start) is only one way a script reaches
+ * the loop: an embedded host also enters it directly when the entry chunk
+ * yields before fan.loop() (e.g. LuanMac/LuaBridge.m), and such a host cannot
+ * know about the pool hold. With the hand-off in luafan_start only, that entry
+ * kept the hold and starved every worker callback. Releasing at the entry point
+ * covers all of them; a run without a worker pool releases nothing (depth 0),
+ * so this degenerates into a no-op.
+ *
+ * Weak symbols: embedders without any lock implementation get a no-op. */
+int event_mgr_loop() {
+    if (looping) {
+        return -1;
     }
 
-    return -1;
+    int lock_depth = FAN_LOCK_SUSPEND_FOR_LOOP();
+    event_mgr_loop_run(1);
+    FAN_LOCK_RESUME_AFTER_LOOP(lock_depth);
+    return 0;
+}
+
+/* Partial cleanup — keep the event bases for the later
+ * event_mgr_loop_cleanup(). Stop the worker threads but keep their bases alive:
+ * Lua finalisers still run after this returns (lua_close → __gc →
+ * bufferevent_free) and must be able to remove themselves from their owning
+ * worker base, so only event_mgr_loop_cleanup() frees them. The cleanup
+ * sequence itself is shared with event_mgr_loop() (see event_mgr_loop_run());
+ * it includes cleanup_curl_clients(), which must run here while the Lua state
+ * is still alive — curl_multi_cleanup → multi_done → onprogress dereferences L
+ * — and curlimp's static multi/timers must not outlive the base.
+ *
+ * Runs the loop under the same Lua-lock hand-off as event_mgr_loop(): this is
+ * the other way the main base's loop is run, so it must not leave the
+ * worker-pool lock hold on the calling thread either (docs/threading-model.md
+ * §2). */
+int event_mgr_loop_later_cleanup() {
+    if (looping) {
+        return -1;
+    }
+
+    int lock_depth = FAN_LOCK_SUSPEND_FOR_LOOP();
+    event_mgr_loop_run(0);
+    FAN_LOCK_RESUME_AFTER_LOOP(lock_depth);
+    return 0;
 }
 
 void event_mgr_cleanup() {
