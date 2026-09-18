@@ -67,6 +67,68 @@
 #define lua_unlock(L)  UnLockMainState(L)
 #endif
 
+/* ---- R18: close the checkGC() yield window -------------------------------- *
+ *
+ * Routing lua_lock/lua_unlock to a real mutex (above) turns one core yield point
+ * into a genuine window:
+ *
+ *     #define checkGC(L,c) \
+ *         { luaC_condGC(L, L->top = (c), Protect(L->top = ci->top)); \
+ *            luai_threadyield(L); }
+ *
+ * Protect() re-derives the interpreter's local frame base after luaC_step(), but
+ * the luai_threadyield() that follows it is NOT wrapped in Protect. In stock Lua
+ * that gap is harmless -- nothing else can run inside it -- while on a hooked
+ * core another worker can take the lock there and run a whole GC whose mark
+ * phase traverses this very coroutine (lgc.c: traversethread() ->
+ * luaD_shrinkstack()) and reallocates, i.e. moves, its stack block.
+ * correctstack() fixes L->top / ci->func / ci->u.l.base, but the interpreter's
+ * *local* `base` (and every `ra` derived from it) keeps pointing into the freed
+ * block, so the next instruction that touches a register reads or writes freed
+ * memory (ASan: heap-use-after-free in luaV_execute/luaD_precall). The window is
+ * reachable only on a hooked core: with the wrapper shape the mutex is held
+ * across a whole resume segment, which makes luai_threadyield a pair of no-ops.
+ *
+ * Re-deriving `base` after re-locking closes the window without giving up the
+ * yield point: the unlock stays real, so the property that
+ * tests/lua/test_lock_granularity.lua asserts (a worker in an allocating loop
+ * must not freeze the main thread) is preserved. The macro expands in exactly
+ * one place -- checkGC() inside luaV_execute(), where `base` and `ci` are
+ * locals, the same invariant Protect() relies on -- and llimits.h defines its
+ * own version only `#if !defined(luai_threadyield)`, so this one wins. If a
+ * future version used luai_threadyield elsewhere, this would be a loud compile
+ * error rather than silent corruption.
+ *
+ * The expression that recomputes the base differs per Lua version, and this
+ * header is force-included BEFORE lua.h (so LUA_VERSION_NUM does not exist yet,
+ * and including lua.h from here would freeze luaconf.h's LUA_CORE-only
+ * definitions), so the build selects it:
+ *
+ *     5.3.x   (default; every build today)   base = ci->u.l.base
+ *     5.4.6+  -DFAN_LUA_STACK_BASE_54=1      base = ci->func.p + 1
+ *     other   -DFAN_LUA_BASE_EXPR='...'      explicit expression (quote it)
+ *
+ * A mismatch is a compile error (the field does not exist in the other version),
+ * never silent corruption. tests/build_hooked_lua.sh derives the flag from the
+ * Lua version it builds. -DFAN_LUA_THREADYIELD_FIX=0 disables the override, to
+ * reproduce R18. See docs/threading-model.md (R18). */
+#if !defined(FAN_LUA_THREADYIELD_FIX)
+#define FAN_LUA_THREADYIELD_FIX 1
+#endif
+
+#if FAN_LUA_THREADYIELD_FIX && !defined(luai_threadyield)
+#  if defined(FAN_LUA_BASE_EXPR)
+#    define luai_threadyield(L)  { lua_unlock(L); lua_lock(L); \
+                                   base = FAN_LUA_BASE_EXPR; }
+#  elif defined(FAN_LUA_STACK_BASE_54)
+#    define luai_threadyield(L)  { lua_unlock(L); lua_lock(L); \
+                                   base = (ci)->func.p + 1; }
+#  else
+#    define luai_threadyield(L)  { lua_unlock(L); lua_lock(L); \
+                                   base = (ci)->u.l.base; }
+#  endif
+#endif
+
 struct lua_State;
 
 /* Core lock/unlock, keyed on a lua_State (as Lua core calls them). */

@@ -47,6 +47,11 @@ was built, and every test run prints it (`Lua lock mode: …` from
 | `wrapper` | stock interpreter (`lua_lock` compiled to nothing) | luafan wraps `FAN_RESUME`, so one resume segment is indivisible |
 
 See `docs/threading-model.md` §2.2 for the full picture and R15 for the history.
+`tests/build_hooked_lua.sh` also carries the R18 fix (`src/fan_lua_lock.h`
+overrides `luai_threadyield` so the frame base is re-derived after the yield
+point re-locks) and selects the per-version base expression itself; on a stock
+`core-hook` build made by some other recipe, that override has to be arranged by
+hand — see R18 in `docs/threading-model.md`.
 
 The shape decides *how much* is serialised. On a hooked core the core releases the
 lock around every C-function call (`luaD_precall`), so a worker blocking in C lets

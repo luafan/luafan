@@ -39,6 +39,16 @@ LUA_VERSION="${1:-${LUA_VERSION:-5.3.3}}"
 LUAFAN_SRC="${2:-${LUAFAN_SRC:-$(dirname "$here")/src}}"
 PREFIX="${3:-${PREFIX:-/usr/local}}"
 
+# The R18 threadyield override (see src/fan_lua_lock.h) must recompute the
+# interpreter's local frame base, and that expression differs per Lua version.
+# This header is force-included before lua.h, so the version cannot be probed
+# from LUA_VERSION_NUM -- the build has to select it.
+case "$LUA_VERSION" in
+    5.4*) STACK_BASE_FLAG="-DFAN_LUA_STACK_BASE_54=1" ;;
+    *)    STACK_BASE_FLAG="" ;;
+esac
+echo "build_hooked_lua: lua-$LUA_VERSION stack-base flag: '$STACK_BASE_FLAG'"
+
 for f in fan_lua_lock.c fan_lua_lock.h; do
     if [ ! -f "$LUAFAN_SRC/$f" ]; then
         echo "build_hooked_lua: $LUAFAN_SRC/$f not found" >&2
@@ -63,7 +73,7 @@ sed -i 's/ -lreadline//' src/Makefile
 sed -i 's|^#define LUA_USE_READLINE|/* readline disabled */|' src/luaconf.h
 
 make linux \
-    MYCFLAGS="-fPIC -pthread -DFAN_LUA_LOCK_CORE=1 -include fan_lua_lock.h" \
+    MYCFLAGS="-fPIC -pthread -DFAN_LUA_LOCK_CORE=1 $STACK_BASE_FLAG -include fan_lua_lock.h" \
     MYLDFLAGS="-Wl,-E" \
     MYLIBS="-pthread"
 make install INSTALL_TOP="$PREFIX"
