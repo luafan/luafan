@@ -1,5 +1,9 @@
 FROM ubuntu:22.04
 
 WORKDIR /root/
-COPY build_docker_ubuntu.sh /root/
-RUN bash build_docker_ubuntu.sh && rm build_docker_ubuntu.sh && rm -rf /tmp/*
+# Build the local checkout, not a network clone. The bind mount is read-only and
+# is never written to a layer, and build_docker_ubuntu.sh deletes its /opt/luafan
+# staging copy inside the same RUN, so the image carries no luafan sources.
+# Requires BuildKit (docker >= 23 enables it by default).
+RUN --mount=type=bind,source=.,target=/src,ro \
+    LUAFAN_SRC=/src bash /src/build_docker_ubuntu.sh && rm -rf /tmp/*

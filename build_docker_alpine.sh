@@ -16,6 +16,11 @@ OPENSSL_VERSION=1.1.1w
 LUA_VERSION=5.3.6
 LIBEVENT_VERSION=2.1.12-stable
 
+# luafan sources come from the local checkout, never from the network.
+# Docker passes the build context in as a read-only bind mount (LUAFAN_SRC=/src);
+# a plain CI/host run falls back to the directory this script lives in.
+LUAFAN_SRC="${LUAFAN_SRC:-$(cd "$(dirname "$0")" && pwd)}"
+
 # --- packages ---
 # NOTE: no readline-dev -- we build Lua without readline (container has no REPL
 # use case). Matches the ubuntu build; avoids libreadline runtime dep.
@@ -37,8 +42,26 @@ update-ca-certificates
 # Normalize cwd so every download/extract below lives under /opt.
 cd /opt
 
-# --- luafan sources (cloned early: fan_lua_lock.{h,c} needed to build lua) ---
-git clone https://github.com/luafan/luafan.git /opt/luafan
+# --- luafan sources (staged early: fan_lua_lock.{h,c} needed to build lua) ---
+# Copy the local checkout instead of cloning it. This works offline, builds
+# exactly the revision under test (the old 'git clone' had no ref, so it always
+# built remote master -- a pull_request CI run built the wrong tree), and the
+# copy is deleted in this same RUN, so it never becomes an image layer.
+# Excluded: .git and object/lib outputs -- but NOT a broad pattern like 'build*':
+# busybox tar matches --exclude against the basename, so 'build*' also drops
+# tests/build_hooked_lua.sh (GNU tar would not), which breaks the build.
+rm -rf /opt/luafan
+mkdir -p /opt/luafan
+tar -C "$LUAFAN_SRC" --exclude=.git \
+    --exclude='*.o' --exclude='*.so' --exclude='*.a' -cf - . | tar -C /opt/luafan -xf -
+test -f /opt/luafan/src/fan_lua_lock.h || {
+    echo "FATAL: no luafan sources at LUAFAN_SRC=$LUAFAN_SRC" >&2
+    exit 1
+}
+test -f /opt/luafan/tests/build_hooked_lua.sh || {
+    echo "FATAL: incomplete luafan sources at LUAFAN_SRC=$LUAFAN_SRC" >&2
+    exit 1
+}
 
 # --- Lua interpreter from source WITH the global lua_lock hook ---
 # apk lua5.3 bakes lua_lock as a no-op, unsafe once luafan runs worker threads
