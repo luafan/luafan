@@ -54,6 +54,15 @@ the others run while two workers running Lua still cannot overlap; with the wrap
 the whole resume is one critical section, so blocking C work must drop the lock
 itself. `tests/lua/test_lock_granularity.lua` asserts both, per shape.
 
+The hand-off that releases the worker-pool level while the loop is parked is
+performed by the loop entry itself (`event_mgr_loop()`,
+`event_mgr_loop_later_cleanup()` — `luafan_start()` left it to them), so it also
+covers an embedder that reaches the loop *without* calling `fan.loop()`: the
+Apple/CLI host parks the loop directly when the entry chunk yields first
+(`LuanMac/LuaBridge.m`). `luan/tests/test_luafan_httpd_workers.lua` never calls
+`fan.loop()`, so it only passes on that implicit-entry path — it is the host-side
+regression test for this hand-off.
+
 ```bash
 # Hooked interpreter (what the release images and LuanMac use) + a module built
 # for it: fan.so must not carry its own lock copy.
@@ -70,6 +79,103 @@ LUAN_TEST_WORKERS=4 LUAN_LOCK_MODE_EXPECT=core-hook \
   LUA_CPATH="$PWD/build/?.so;$PWD/../?.so;;" \
   lua lua/test_lock_granularity.lua
 ```
+
+Both shapes side by side for a CMake build: `build` for a hooked interpreter
+(`-DLUAFAN_CORE_LOCK_HOOK=ON`) and `build-normal` for a stock one (the option's
+default `OFF`, so the module carries `fan_lua_lock.c`). `run_lua_tests.sh` always
+loads `tests/build/fan.so`, so copy the module of the shape under test over it and
+let the printed `Lua lock mode:` line confirm which one actually ran.
+
+```bash
+cd tests
+cmake -S .. -B build        -DCMAKE_BUILD_TYPE=Debug -DLUAFAN_TESTING=ON -DLUAFAN_CORE_LOCK_HOOK=ON
+cmake -S .. -B build-normal -DCMAKE_BUILD_TYPE=Debug -DLUAFAN_TESTING=ON
+
+LUAN_TEST_WORKERS=4 LUAFAN_LUA_BIN=<hooked lua> bash run_lua_tests.sh  # → core-hook
+cp build-normal/fan.so build/fan.so
+LUAN_TEST_WORKERS=4 LUAFAN_LUA_BIN=<stock lua>  bash run_lua_tests.sh  # → wrapper
+```
+
+
+### Suites that need their own process
+
+`run_lua_tests.sh` runs the curated list in `run_all_lua_tests.lua` in *one* process
+(`loadfile()` + `pcall()` inside a single `fan.loop()`), then runs a second group in
+separate processes, like `test_lock_granularity.lua`:
+
+```bash
+cd tests
+LUAFAN_LUA_BIN=/usr/local/bin/lua ./run_lua_tests.sh   # hooked interpreter
+LUAFAN_LUA_BIN=/usr/bin/lua5.3   ./run_lua_tests.sh    # stock interpreter
+```
+
+A file belongs to the second group when it cannot work inside the shared loop:
+
+* **(a)** it starts a file-scope `fan.loop()` and ends it with `fan.loopbreak()`
+  and/or `os.exit()`. Inside the runner that loop is *nested*, and a break (or an
+  escaping `os.exit()`) there also ends the runner's loop: the run stops without a
+  summary, every file after it is silently skipped, and the process still exits 0 —
+  which is how the curated list used to stop after 30 of 54 files.
+* **(b)** it drives the loop itself with a bare `fan.loop()`. Nested inside the
+  runner that degrades to a synchronous `pcall()` that advances no events, so its
+  helpers return `nil`; the same file passes in a fresh process.
+
+The three httpd suites that were migrated out of the old library-style files are
+group (b): `test_httpd_compliance.lua`, `test_httpd_security.lua` and
+`test_httpd_performance.lua` each bind an ephemeral `port = 0` server and drive
+their own `fan.loop()` per case. The old entry points
+(`lua/test_fan_httpd_loop.lua`, `run_httpd_tests.lua`) are gone.
+
+`test_httpd_performance.lua` only *prints* its latency/throughput numbers by
+default: wall-clock budgets are machine dependent and would make CI flaky. Set
+`LUAN_TEST_PERF_ASSERT=1` to also enforce them (the optional benchmark flow):
+
+```bash
+LUAN_TEST_PERF_ASSERT=1 lua tests/lua/test_httpd_performance.lua
+```
+
+Its deterministic properties (every request completes, every response is 200, gzip
+shrinks the body, stats count requests) are asserted unconditionally.
+
+Keep the two lists in sync: the excluded names appear in the note below the curated
+list in `lua/run_all_lua_tests.lua` and in `STANDALONE_TESTS` in `run_lua_tests.sh`.
+
+### Suites that provoke a crash (crash = failure)
+
+Thirteen suites provoke a defect by running a child `lua` through the shell
+(`"; echo $?"`) to capture its status, so a crash arrives as `128 + signal` in the
+parsed exit code (139 = SIGSEGV, 134 = SIGABRT) instead of as an `exit_type` of
+`"signal"`; an ASan build aborts with exit code 1 instead, so the captured output
+is also scanned for the `AddressSanitizer` markers.
+
+They used to accept *either* outcome — a signal printed `BUG CONFIRMED` and passed,
+and exit code 0 passed as well — so a regression in the code they document could
+never fail the suite. Twelve of them now delegate to
+`TestFramework.assert_child_no_crash(output, success, exit_type, code, what)` in
+`lua/framework/test_framework.lua`, which **fails** on any signal (including the
+shell's `128 + signal` form), on `AddressSanitizer` output, on `timeout(1)`'s exit
+124 and on a non-zero or unparseable exit code; only a clean `os.exit(0)` passes.
+`test_event_mgr_loop_cleanup.lua` keeps its exit code 77 = "workers not
+initialized" skip in front of that check.
+
+Those twelve are `test_tcpd_concurrent_lifecycle.lua`, `test_udpd_event_lifecycle.lua`,
+`test_udpd_send_ready_race.lua`, `test_httpd_websocket_lifecycle.lua`,
+`test_tcpd_cleanup_mainthread.lua`, `test_httpd_websocket_req_access.lua`,
+`test_ssl_retain_count.lua`, `test_thread_tracker_overflow.lua`,
+`test_evdns_cleanup_order.lua`, `test_http_client_timer_linger.lua`,
+`test_luafan_mainevent_lifetime.lua` and `test_event_mgr_loop_cleanup.lua`.
+
+`test_mariadb_pending_event.lua` (the thirteenth) keeps its own, stricter guard: a
+signal prints `✗ REGRESSION` and fails the suite, and a clean run additionally
+asserts that the suspended `execute()` came back with `(nil, error)` while
+`close()` ran — i.e. that `mariadb_cancel_pending_waits()` (in `src/luamariadb.c` /
+`src/mariadb/luamariadb_close.c`) really aborted the pending wait instead of the
+event never having been armed.
+
+Run them in a fresh process (they are in `STANDALONE_TESTS` in `run_lua_tests.sh`)
+when converting a fix into a guard: a suite that passes without the fix and fails
+with a deliberately reintroduced defect is the only evidence that it guards
+anything.
 
 ## Quick Start
 

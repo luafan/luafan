@@ -54,22 +54,10 @@ suite:test("subprocess_http_timer_after_loop_exit", function()
     local success, exit_type, code = handle:close()
     os.remove(tmpfile)
 
-    local exit_code = tonumber(output:match("(%d+)%s*$"))
-
-    if not success and exit_type == "signal" then
-        print(string.format("Subprocess killed by signal %d", code))
-        if code == 11 or code == 6 then
-            print("BUG CONFIRMED: HTTP timer fired after Lua state closed")
-            TestFramework.assert_true(true)
-        else
-            error(string.format("Unexpected signal %d", code))
-        end
-    elseif exit_code == 0 then
-        print("Subprocess exited cleanly")
-        TestFramework.assert_true(true)
-    else
-        error(string.format("Unexpected exit code %s, output:\n%s", tostring(exit_code), output))
-    end
+    -- A crash is a FAILURE: the previous "signal => pass" form made this suite
+    -- unable to fail no matter what the child did.
+    TestFramework.assert_child_no_crash(output, success, exit_type, code,
+        "HTTP client timer-linger child")
 end)
 
 -- In-process: verify http module loads and creates static events

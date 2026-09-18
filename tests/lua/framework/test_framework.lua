@@ -464,6 +464,74 @@ function TestFramework.child_lua_command(script_file, timeout_secs)
         .. shq(interp) .. " " .. shq(script_file) .. " 2>&1"
 end
 
+-- Classify the result of a child process spawned through the shell wrapper
+-- above (i.e. `child_lua_command(f, n) .. "; echo $?"`), returning a failure
+-- description when the child did NOT exit cleanly, or nil when it did.
+--
+-- Crash inducers used to accept BOTH a signal death ("BUG CONFIRMED" +
+-- assert_true(true)) and exit code 0, so the suite could never fail and a
+-- regression in the code it documents stayed green. A signal, an
+-- AddressSanitizer report, a timeout, a non-zero or unparseable exit code are
+-- all failures now; only a normal `os.exit(0)` passes.
+--
+-- Because the child is wrapped in `sh -c`, a signalled child is reported as
+-- 128 + signal in exit_code (139 = SIGSEGV, 134 = SIGABRT) rather than through
+-- exit_type == "signal"; both forms are classified here.
+local function child_result_error(output, success, exit_type, code, what)
+    what = what or "child process"
+    output = output or ""
+
+    local exit_code = tonumber(string.match(output, "(%d+)%s*$"))
+
+    local signal
+    if not success and exit_type == "signal" then
+        signal = code
+    elseif exit_code and exit_code >= 128 then
+        signal = exit_code - 128
+    elseif exit_code == 11 or exit_code == 6 then
+        signal = exit_code
+    end
+
+    if signal then
+        local names = { [6] = "SIGABRT", [9] = "SIGKILL", [11] = "SIGSEGV", [15] = "SIGTERM" }
+        local msg = string.format("%s crashed (%s = %d)",
+            what, names[signal] or "signal", signal)
+        if string.find(output, "AddressSanitizer", 1, true) then
+            msg = msg .. " - AddressSanitizer reported a memory error"
+        end
+        return msg
+    end
+
+    if exit_code == nil then
+        return string.format("%s produced no parseable exit code; output:\n%s", what, output)
+    end
+
+    if string.find(output, "AddressSanitizer", 1, true) then
+        return string.format("%s exited with code %d but AddressSanitizer reported a memory error:\n%s",
+            what, exit_code, output)
+    end
+
+    if exit_code == 124 then
+        return string.format("%s timed out (timeout(1) exit 124); output:\n%s", what, output)
+    end
+
+    if exit_code ~= 0 then
+        return string.format("%s exited with code %d; output:\n%s", what, exit_code, output)
+    end
+
+    return nil
+end
+
+-- Assert that the child spawned by `child_lua_command` finished with a clean
+-- `os.exit(0)`. Any crash/timeout/other exit becomes a test failure.
+function TestFramework.assert_child_no_crash(output, success, exit_type, code, what)
+    local failure = child_result_error(output, success, exit_type, code, what)
+    if failure then
+        error(failure, 0)
+    end
+    print("Subprocess exited cleanly (no crash)")
+end
+
 -- Optional event-worker pool for suites that assert worker affinity.
 -- MUST run before fan.loop(): event_mgr refuses workers_init() while the loop
 -- is running. LUAN_TEST_WORKERS=N (N >= 1) enables the pool; unset/0 keeps the

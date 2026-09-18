@@ -1,13 +1,15 @@
 #!/usr/bin/env lua
 
--- DETERMINISTIC crash reproducer for luafan_start mainevent double-free.
--- The bug: main_handler frees mainevent but doesn't set it to NULL.
--- If the event fires abnormally or nested call detection fails, double-free occurs.
+-- Regression guard for luafan_start mainevent double-free.
+-- The bug: main_handler frees mainevent but doesn't set it to NULL, so an event
+-- that fires abnormally (or a failed nested-call detection) double-frees it.
+-- The child below provokes that path; a crash there is a FAILURE (only a clean
+-- exit passes).
 
 local TestFramework = require('test_framework')
 local fan = require "fan"
 
-local suite = TestFramework.create_suite("luafan_start mainevent lifetime - double free detector")
+local suite = TestFramework.create_suite("luafan_start mainevent lifetime - double-free guard")
 
 -- Subprocess that attempts to trigger mainevent double-free
 local CRASH_SCRIPT = [[
@@ -47,22 +49,10 @@ suite:test("subprocess_double_free_mainevent_on_rapid_loops", function()
     local success, exit_type, code = handle:close()
     os.remove(tmpfile)
 
-    local exit_code = tonumber(output:match("(%d+)%s*$"))
-
-    if not success and exit_type == "signal" then
-        print(string.format("Subprocess killed by signal %d", code))
-        if code == 11 or code == 6 then
-            print("✓ BUG CONFIRMED: double-free in mainevent detected (signal SIGSEGV/SIGABRT)")
-            TestFramework.assert_true(true)
-        else
-            error(string.format("Unexpected signal %d", code))
-        end
-    elseif exit_code == 0 then
-        print("Subprocess exited cleanly (bug is FIXED or not triggered)")
-        TestFramework.assert_true(true)
-    else
-        error(string.format("Unexpected exit code %s, output:\n%s", tostring(exit_code), output))
-    end
+    -- A crash is a FAILURE: the previous "signal => pass" form made this suite
+    -- unable to fail no matter what the child did.
+    TestFramework.assert_child_no_crash(output, success, exit_type, code,
+        "luafan_start mainevent child")
 end)
 
 -- In-process tests (non-crash scenarios)

@@ -1,13 +1,14 @@
 #!/usr/bin/env lua
 
--- DETERMINISTIC race reproducer for UDP event lifecycle.
--- Bug: read_ev/write_ev not atomically protected; cleanup races with
--- udpd_base_conn_request_send_ready calling event_add on freed events.
+-- Regression guard for UDP event lifecycle. The bug: read_ev/write_ev are not
+-- atomically protected, so cleanup races with udpd_base_conn_request_send_ready
+-- calling event_add on freed events. The child below provokes that race; a crash
+-- there is a FAILURE (only a clean exit passes).
 
 local TestFramework = require('test_framework')
 local fan = require "fan"
 
-local suite = TestFramework.create_suite("UDPD event lifecycle - race inducer")
+local suite = TestFramework.create_suite("UDPD event lifecycle - race guard")
 
 -- Check udpd availability
 local udpd
@@ -101,23 +102,11 @@ suite:test("subprocess_udpd_event_add_after_free", function()
     local success, exit_type, code = handle:close()
     os.remove(tmpfile)
 
-    local exit_code = tonumber(output:match("(%d+)%s*$"))
-
-    if not success and exit_type == "signal" then
-        print(string.format("Subprocess killed by signal %d", code))
-        if code == 11 or code == 6 then
-            print("✓ BUG CONFIRMED: UDP event use-after-free detected (SIGSEGV/SIGABRT)")
-            print("  Likely: udpd_base_conn_request_send_ready accessed freed read_ev/write_ev")
-            TestFramework.assert_true(true)
-        else
-            error(string.format("Unexpected signal %d", code))
-        end
-    elseif exit_code == 0 then
-        print("Subprocess completed without crash (bug is FIXED or not triggered)")
-        TestFramework.assert_true(true)
-    else
-        error(string.format("Unexpected exit: code=%s, output:\n%s", tostring(exit_code), output))
-    end
+    -- A crash is a FAILURE: the previous "signal => BUG CONFIRMED, pass" form
+    -- made this suite unable to fail no matter what the child did. The helper
+    -- also classifies the 128+signal exit codes the shell wrapper produces.
+    TestFramework.assert_child_no_crash(output, success, exit_type, code,
+        "UDP event lifecycle child (read_ev/write_ev UAF)")
 end)
 
 -- In-process light test

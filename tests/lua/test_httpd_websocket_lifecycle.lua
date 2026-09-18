@@ -1,16 +1,16 @@
 #!/usr/bin/env lua
 
--- DETERMINISTIC crash reproducer for WebSocket cleanup double-free / use-after-free.
--- Bug: ws_connection_cleanup can be called multiple times, or ws_deferred_free_cb
--- fires after mainthread is closed, causing use-after-free on request->self_ref.
---
--- Strategy: spawn server, accept many WebSocket connections, immediately close
--- some while sending large payloads on others, then force GC.
+-- Regression guard for WebSocket cleanup double-free / use-after-free.
+-- The bug: ws_connection_cleanup can be called multiple times, or
+-- ws_deferred_free_cb fires after mainthread is closed, causing use-after-free
+-- on request->self_ref. Strategy: the child below opens a server, accepts many
+-- WebSocket connections, closes some while sending large payloads on others and
+-- forces GC; a crash there is a FAILURE (only a clean exit passes).
 
 local TestFramework = require('test_framework')
 local fan = require "fan"
 
-local suite = TestFramework.create_suite("httpd WebSocket cleanup lifecycle - crash inducer")
+local suite = TestFramework.create_suite("httpd WebSocket cleanup lifecycle - double-free/UAF guard")
 
 -- Check for httpd.core availability
 local httpd_core
@@ -120,23 +120,10 @@ suite:test("subprocess_websocket_double_cleanup_crash", function()
     local success, exit_type, code = handle:close()
     os.remove(tmpfile)
 
-    local exit_code = tonumber(output:match("(%d+)%s*$"))
-
-    if not success and exit_type == "signal" then
-        print(string.format("Subprocess killed by signal %d", code))
-        if code == 11 or code == 6 then
-            print("✓ BUG CONFIRMED: WebSocket cleanup race/double-free detected (SIGSEGV/SIGABRT)")
-            print("  Likely: ws_connection_cleanup or ws_deferred_free_cb use-after-free")
-            TestFramework.assert_true(true)
-        else
-            error(string.format("Unexpected signal %d", code))
-        end
-    elseif exit_code == 0 then
-        print("Subprocess completed without crash (bug is FIXED or not triggered)")
-        TestFramework.assert_true(true)
-    else
-        error(string.format("Unexpected exit: code=%s, output:\n%s", tostring(exit_code), output))
-    end
+    -- A crash is a FAILURE: the previous "signal => BUG CONFIRMED, pass" form
+    -- made this suite unable to fail no matter what the child did.
+    TestFramework.assert_child_no_crash(output, success, exit_type, code,
+        "WebSocket cleanup lifecycle child (double-free/UAF)")
 end)
 
 fan.loop(function()

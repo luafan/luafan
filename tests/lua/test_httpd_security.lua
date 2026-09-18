@@ -1,262 +1,260 @@
 #!/usr/bin/env lua
--- HTTP Security Test for LuaFan HTTPD
--- Tests security features and vulnerability resistance
 
+-- HTTP security / hardening tests for the Lua fan.httpd implementation
+-- (framing rejection, request limits, rate limiting, error hygiene).
+--
+-- Migrated from the old library-style tests/lua/test_httpd_security.lua, which
+-- only exported functions for tests/run_httpd_tests.lua and therefore never ran
+-- in the curated suite nor in CI. Fixed by the migration:
+--   * fixed port 9998 replaced by an ephemeral bind (port 0) per case;
+--   * the global `config` keys the suite mutates (max_content_length, rate
+--     limiting) are saved and restored in a suite teardown, and the rate-limit
+--     test is the last one so no later case inherits a tripped limiter;
+--   * "if response then assert(...)" guards removed: every case now fails when
+--     the expected response is missing. Several old expectations were wrong
+--     (an unknown method falls through the router to 404, not 400) and are
+--     asserted against the behaviour the server actually implements.
+--
+-- Each case drives its own fan.loop(), so this file must run as its own process
+-- (see tests/run_lua_tests.sh).
+
+local TestFramework = require("test_framework")
 local fan = require "fan"
-local httpd = require "fan.httpd.httpd"
 local http = require "fan.http"
+local connector = require "fan.connector"
+local httpd = require "fan.httpd.httpd"
+local config = require "config"
 
--- Test configuration
-local TEST_HOST = "127.0.0.1"
-local TEST_PORT = 9998
-local test_results = {}
-local test_count = 0
-local passed_count = 0
+local suite = TestFramework.create_suite("Lua HTTPD Security Tests")
 
--- Test utility functions
-local function test_assert(condition, message)
-    test_count = test_count + 1
-    if condition then
-        passed_count = passed_count + 1
-        print(string.format("✓ PASS: %s", message))
-        return true
-    else
-        print(string.format("✗ FAIL: %s", message))
-        return false
-    end
+local CONFIG_KEYS = {
+    "max_content_length",
+    "enable_rate_limiting",
+    "rate_limit_requests",
+    "rate_limit_window",
+}
+local saved_config = {}
+for _, key in ipairs(CONFIG_KEYS) do
+    saved_config[key] = config[key]
 end
 
-local function start_security_test_server()
-    -- Configure with security features
-    local config = require "config"
-    config.enable_rate_limiting = true
-    config.rate_limit_requests = 5  -- Low limit for testing
-    config.rate_limit_window = 10   -- 10 second window
-    config.max_content_length = 1024 -- 1KB limit for testing
+suite:set_teardown(function()
+    for _, key in ipairs(CONFIG_KEYS) do
+        config[key] = saved_config[key]
+    end
+end)
 
-    local server = httpd.bind({host = TEST_HOST, port = TEST_PORT})
+-- Read a raw response until the header terminator (or the peer closes).
+-- fan.gettime() is the event loop's cached clock: it only advances when the
+-- loop iterates, so the loop must yield. A non-yielding busy loop would never
+-- reach the deadline nor observe the peer's disconnect and would spin forever.
+local function read_response(client, timeout)
+    timeout = (timeout or 2) * 1000
+    local chunks = {}
+    local deadline = fan.gettime() + timeout
+    local attempts = 0
+    while fan.gettime() < deadline and attempts < 500 do
+        attempts = attempts + 1
+        local input = client:receive(1)
+        if not input then
+            break
+        end
+        local data = input:GetBytes()
+        if data and #data > 0 then
+            table.insert(chunks, data)
+            if table.concat(chunks):find("\r\n\r\n", 1, true) then
+                break
+            end
+        end
+        fan.sleep(0.001)
+    end
+    return table.concat(chunks)
+end
 
+-- Bind an ephemeral server, send one raw request, return the raw response text.
+local function raw_request(request, configure)
+    local server = httpd.bind({ host = "127.0.0.1", port = 0 })
+    TestFramework.assert_not_nil(server)
+    TestFramework.assert_true(server.port > 0, "ephemeral bind must report a real port")
+    if configure then
+        configure(server)
+    end
+
+    local result
+    local done = false
+    coroutine.wrap(function()
+        fan.sleep(5)
+        if not done then
+            done = true
+            fan.loopbreak()
+        end
+    end)()
+    coroutine.wrap(function()
+        local ok, value = pcall(function()
+            local client = connector.connect("tcp://127.0.0.1:" .. server.port)
+            client:send(request)
+            local response = read_response(client)
+            client:close()
+            return response
+        end)
+        result = { ok = ok, value = value }
+        done = true
+        fan.loopbreak()
+    end)()
+    fan.loop()
+
+    if server.serv and server.serv.close then
+        pcall(function() server.serv:close() end)
+    end
+
+    TestFramework.assert_true(result and result.ok,
+        result and tostring(result.value) or "client never ran")
+    return result.value
+end
+
+-- Bind an ephemeral server, run `client(server)` inside the event loop.
+local function with_server(configure, client)
+    local server = httpd.bind({ host = "127.0.0.1", port = 0 })
+    TestFramework.assert_not_nil(server)
+    TestFramework.assert_true(server.port > 0, "ephemeral bind must report a real port")
+    if configure then
+        configure(server)
+    end
+
+    local result
+    local done = false
+    coroutine.wrap(function()
+        fan.sleep(5)
+        if not done then
+            done = true
+            fan.loopbreak()
+        end
+    end)()
+    coroutine.wrap(function()
+        local ok, value = pcall(client, server)
+        result = { ok = ok, value = value }
+        done = true
+        fan.loopbreak()
+    end)()
+    fan.loop()
+
+    if server.serv and server.serv.close then
+        pcall(function() server.serv:close() end)
+    end
+
+    TestFramework.assert_true(result and result.ok,
+        result and tostring(result.value) or "client never ran")
+    return result.value
+end
+
+local function url(server, path)
+    return "http://127.0.0.1:" .. server.port .. path
+end
+
+local function base_routes(server)
     server:get("/", function(ctx)
         ctx:reply(200, "OK", "Test endpoint")
     end)
-
     server:post("/upload", function(ctx)
         ctx:reply(200, "OK", "Upload received: " .. #(ctx.body or ""))
     end)
-
-    return server
 end
 
--- Test invalid HTTP headers
-local function test_malformed_headers()
-    print("\n--- Testing Malformed Headers Handling ---")
+suite:test("malformed_header_line_returns_400", function()
+    local raw = raw_request(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nInvalid-Header-No-Colon\r\n\r\n",
+        base_routes)
+    TestFramework.assert_match(raw, "400 Bad Request")
+end)
 
-    -- Test with various malformed headers using raw socket
-    local tcpd = require "fan.tcpd"
-    local conn = tcpd.connect({host = TEST_HOST, port = TEST_PORT})
+suite:test("invalid_content_length_returns_400", function()
+    local raw = raw_request(
+        "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: abc\r\n\r\n",
+        base_routes)
+    TestFramework.assert_match(raw, "400 Bad Request")
+end)
 
-    if conn then
-        -- Send request with invalid header (missing colon)
-        local malformed_request = "GET / HTTP/1.1\r\n" ..
-                                 "Host: " .. TEST_HOST .. "\r\n" ..
-                                 "Invalid-Header-No-Colon\r\n" ..
-                                 "\r\n"
+suite:test("oversized_header_value_returns_431", function()
+    local raw = raw_request(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Big: " .. string.rep("a", 9000) .. "\r\n\r\n",
+        base_routes)
+    TestFramework.assert_match(raw, "431 Request Header Fields Too Large")
+end)
 
-        conn:send(malformed_request)
-        local response, err = conn:receive()
+suite:test("oversized_content_length_returns_413", function()
+    config.max_content_length = 1024
+    -- The framing check runs while the headers are parsed, so the 413 is sent
+    -- without the client ever transmitting the body.
+    local raw = raw_request(
+        "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2048\r\n\r\n",
+        base_routes)
+    TestFramework.assert_match(raw, "413 Content Too Large")
+end)
 
-        if response then
-            local response_str = response:GetBytes()
-            -- Should still get a valid response (server handles invalid headers gracefully)
-            test_assert(response_str:find("HTTP/1.1"), "Server handles malformed headers gracefully")
+suite:test("oversized_uri_returns_414", function()
+    local raw = raw_request(
+        "GET /" .. string.rep("a", 2100) .. " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        base_routes)
+    TestFramework.assert_match(raw, "414 URI Too Long")
+end)
+
+suite:test("unsupported_http_version_returns_505", function()
+    local raw = raw_request(
+        "GET / HTTP/2.0\r\nHost: 127.0.0.1\r\n\r\n",
+        base_routes)
+    TestFramework.assert_match(raw, "505 HTTP Version Not Supported")
+end)
+
+suite:test("unknown_method_is_not_routed", function()
+    -- The request-line token grammar accepts any method, so an unknown verb is
+    -- parsed and then falls through the router to its not-found handler.
+    local raw = raw_request(
+        "INVALID / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        base_routes)
+    TestFramework.assert_match(raw, "404 Not Found")
+    TestFramework.assert_true(raw:find("200 OK", 1, true) == nil,
+        "unknown method must not be served")
+end)
+
+suite:test("path_traversal_returns_404_without_leaking_paths", function()
+    local response = with_server(base_routes, function(server)
+        return http.get(url(server, "/../../etc/passwd"))
+    end)
+    TestFramework.assert_equal(response.responseCode, 404)
+    local body = (response.body or ""):lower()
+    TestFramework.assert_true(body:find("/etc/", 1, true) == nil, "body must not expose filesystem paths")
+    TestFramework.assert_true(body:find("lua", 1, true) == nil, "body must not expose implementation details")
+end)
+
+suite:test("rate_limit_exceeded_returns_429", function()
+    -- Keep this case last: the limiter counter is process-global per client IP.
+    config.enable_rate_limiting = true
+    config.rate_limit_requests = 5
+    config.rate_limit_window = 10
+
+    local ok, err = pcall(function()
+        local responses = with_server(base_routes, function(server)
+            local out = {}
+            for _ = 1, 6 do
+                table.insert(out, http.get(url(server, "/")))
+            end
+            return out
+        end)
+
+        TestFramework.assert_equal(#responses, 6)
+        for i = 1, 5 do
+            TestFramework.assert_equal(responses[i].responseCode, 200,
+                string.format("request %d is inside the limit", i))
         end
+        TestFramework.assert_equal(responses[6].responseCode, 429)
+        TestFramework.assert_match(responses[6].body or "", "Rate limit exceeded")
+    end)
 
-        conn:close()
+    config.enable_rate_limiting = false
+    if not ok then
+        error(err, 0)
     end
-end
+end)
 
--- Test oversized requests
-local function test_oversized_requests()
-    print("\n--- Testing Oversized Request Handling ---")
-
-    -- Test oversized content
-    local large_content = string.rep("X", 2048) -- 2KB, exceeds our 1KB test limit
-
-    local response = http.post("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/upload", large_content)
-
-    -- Should get 413 Content Too Large
-    test_assert(response and response.status == 413, "Oversized content returns 413 status")
-end
-
--- Test rate limiting
-local function test_rate_limiting()
-    print("\n--- Testing Rate Limiting ---")
-
-    local responses = {}
-
-    -- Make requests up to the limit
-    for i = 1, 6 do -- One more than the limit
-        local response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/")
-        table.insert(responses, response)
-        fan.sleep(0.1)
-    end
-
-    -- Check that early requests succeed
-    test_assert(responses[1] and responses[1].status == 200, "First request within limit succeeds")
-    test_assert(responses[5] and responses[5].status == 200, "Fifth request (at limit) succeeds")
-
-    -- Check that request exceeding limit gets 429
-    test_assert(responses[6] and responses[6].status == 429, "Request exceeding limit returns 429")
-end
-
--- Test URI length limits
-local function test_uri_length_limits()
-    print("\n--- Testing URI Length Limits ---")
-
-    -- Create a very long URI (over 2KB)
-    local long_path = "/test/" .. string.rep("a", 2100)
-    local response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. long_path)
-
-    -- Should get 414 URI Too Long
-    test_assert(response and response.status == 414, "Oversized URI returns 414 status")
-end
-
--- Test HTTP version validation
-local function test_http_version_validation()
-    print("\n--- Testing HTTP Version Validation ---")
-
-    local tcpd = require "fan.tcpd"
-    local conn = tcpd.connect({host = TEST_HOST, port = TEST_PORT})
-
-    if conn then
-        -- Send request with unsupported HTTP version
-        local invalid_version_request = "GET / HTTP/2.0\r\n" ..
-                                       "Host: " .. TEST_HOST .. "\r\n" ..
-                                       "\r\n"
-
-        conn:send(invalid_version_request)
-        local response, err = conn:receive()
-
-        if response then
-            local response_str = response:GetBytes()
-            -- Should get 505 HTTP Version Not Supported
-            test_assert(response_str:find("505"), "Unsupported HTTP version returns 505")
-        end
-
-        conn:close()
-    end
-end
-
--- Test security headers presence
-local function test_security_headers_comprehensive()
-    print("\n--- Testing Comprehensive Security Headers ---")
-
-    local response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/")
-
-    if response and response.headers then
-        local security_headers = {
-            ["x-content-type-options"] = "nosniff",
-            ["x-frame-options"] = "DENY",
-            ["x-xss-protection"] = "1; mode=block"
-        }
-
-        for header, expected_value in pairs(security_headers) do
-            local actual_value = response.headers[header]
-            test_assert(actual_value == expected_value,
-                       string.format("Security header %s has correct value", header))
-        end
-    end
-end
-
--- Test error message sanitization
-local function test_error_message_sanitization()
-    print("\n--- Testing Error Message Sanitization ---")
-
-    -- Test 404 error doesn't expose system information
-    local response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/../../etc/passwd")
-
-    test_assert(response and response.status == 404, "Path traversal attempt returns 404")
-
-    if response and response.body then
-        -- Error message should not contain system paths or internal details
-        test_assert(not response.body:find("/etc/"), "Error message doesn't expose system paths")
-        test_assert(not response.body:find("lua"), "Error message doesn't expose implementation details")
-    end
-end
-
--- Test HTTP method validation
-local function test_http_method_validation()
-    print("\n--- Testing HTTP Method Validation ---")
-
-    local tcpd = require "fan.tcpd"
-    local conn = tcpd.connect({host = TEST_HOST, port = TEST_PORT})
-
-    if conn then
-        -- Send request with invalid HTTP method
-        local invalid_method_request = "INVALID / HTTP/1.1\r\n" ..
-                                      "Host: " .. TEST_HOST .. "\r\n" ..
-                                      "\r\n"
-
-        conn:send(invalid_method_request)
-        local response, err = conn:receive()
-
-        if response then
-            local response_str = response:GetBytes()
-            -- Should get 400 Bad Request for invalid method
-            test_assert(response_str:find("400"), "Invalid HTTP method returns 400")
-        end
-
-        conn:close()
-    end
-end
-
--- Main security test runner
-local function run_security_tests()
-    print("Starting LuaFan HTTPD Security Tests...")
-    print("=" .. string.rep("=", 50))
-
-    local server = start_security_test_server()
-
-    -- Give server time to start
-    fan.sleep(0.2)
-
-    -- Run security test suites
-    test_malformed_headers()
-    test_oversized_requests()
-    test_rate_limiting()
-    test_uri_length_limits()
-    test_http_version_validation()
-    test_security_headers_comprehensive()
-    test_error_message_sanitization()
-    test_http_method_validation()
-
-    -- Test summary
-    print("\n" .. string.rep("=", 50))
-    print(string.format("Security Test Results: %d/%d tests passed (%.1f%%)",
-          passed_count, test_count, (passed_count / test_count) * 100))
-
-    if passed_count == test_count then
-        print("🔒 All security tests passed! HTTPD is secure.")
-        return true
-    else
-        print("⚠️  Some security tests failed. Please review security implementation.")
-        return false
-    end
-end
-
--- Main function
-local function main()
-    local success, result = pcall(run_security_tests)
-    if not success then
-        print("Security test execution failed:", result)
-        return false
-    end
-    return result
-end
-
--- Export for use in other test files
-return {
-    run_security_tests = run_security_tests,
-    test_assert = test_assert,
-    main = main
-}
+local failures = TestFramework.run_suite(suite)
+os.exit(failures > 0 and 1 or 0)

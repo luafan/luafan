@@ -109,22 +109,10 @@ suite:test("subprocess_send_ready_vs_cleanup_race", function()
     local success, exit_type, code = handle:close()
     os.remove(tmpfile)
 
-    local exit_code = tonumber(output:match("(%d+)%s*$"))
-
-    if not success and exit_type == "signal" then
-        print(string.format("Subprocess killed by signal %d", code))
-        if code == 11 or code == 6 then
-            print("BUG CONFIRMED: UDP send_ready race with cleanup (SIGSEGV/SIGABRT)")
-            TestFramework.assert_true(true)
-        else
-            error(string.format("Unexpected signal %d", code))
-        end
-    elseif exit_code == 0 then
-        print("Subprocess exited cleanly")
-        TestFramework.assert_true(true)
-    else
-        error(string.format("Unexpected exit: code=%s, output:\n%s", tostring(exit_code), output))
-    end
+    -- A crash is a FAILURE: the previous "signal => pass" form made this suite
+    -- unable to fail no matter what the child did.
+    TestFramework.assert_child_no_crash(output, success, exit_type, code,
+        "UDP send_ready/cleanup race child")
 end)
 
 -- In-process: verify send_req + close sequence

@@ -1,20 +1,21 @@
 #!/usr/bin/env lua
 
--- DETERMINISTIC crash reproducer for event_mgr_loop cleanup ordering bug.
+-- Regression guard for event_mgr_loop cleanup ordering.
 -- This script spawns a subprocess that:
 --   1. Initializes worker threads via event_mgr_workers_init(1)
 --   2. Creates worker-mode tcpd connections
 --   3. Exits fan.loop WITHOUT closing connections
 --   4. Lua GC triggers tcpd __gc -> bufferevent_free on FREED worker base -> SEGFAULT
 --
--- Parent process checks exit signal; SIGSEGV (signal 11) proves the bug.
+-- The child's exit status is classified: on the fixed runtime it exits cleanly,
+-- and a signal (SIGSEGV = 11) is a FAILURE because the bug is fixed.
 
 local TestFramework = require('test_framework')
 local fan = require "fan"
 
-local suite = TestFramework.create_suite("event_mgr_loop cleanup ordering - subprocess crash test")
+local suite = TestFramework.create_suite("event_mgr_loop cleanup ordering - subprocess guard")
 
--- Subprocess script that WILL crash if bug exists
+-- Subprocess script that would crash if the cleanup ordering regressed
 local CRASH_SCRIPT = [[
 local fan = require "fan"
 local tcpd = require "fan.tcpd"
@@ -90,20 +91,10 @@ suite:test("subprocess_crash_on_worker_base_premature_free", function()
         return
     end
 
-    -- If exit_code is nil or process was killed by signal, check signal
-    if not success and exit_type == "signal" then
-        -- Process was killed by signal (likely SIGSEGV = 11 or SIGABRT = 6)
-        print(string.format("Subprocess killed by signal %d (expected if bug exists)", code))
-        TestFramework.assert_true(code == 11 or code == 6,
-            string.format("Process should crash with SIGSEGV(11) or SIGABRT(6), got signal %d", code))
-        print("✓ BUG CONFIRMED: subprocess crashed as expected (event_mgr_loop freed worker base too early)")
-    elseif exit_code == 0 then
-        print("Subprocess exited cleanly (bug is FIXED or workers not used)")
-        -- This is OK if the bug is already fixed
-        TestFramework.assert_true(true)
-    else
-        error(string.format("Unexpected exit code %s, output:\n%s", tostring(exit_code), output))
-    end
+    -- A crash is a FAILURE: the previous "crash => BUG CONFIRMED, pass" form
+    -- made this suite unable to fail no matter what the child did.
+    TestFramework.assert_child_no_crash(output, success, exit_type, code,
+        "event_mgr_loop cleanup-order child (worker base freed too early)")
 end)
 
 -- Run suite in main process (no fan.loop needed)

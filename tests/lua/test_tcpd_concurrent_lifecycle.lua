@@ -1,16 +1,16 @@
 #!/usr/bin/env lua
 
--- DETERMINISTIC race reproducer for TCPD concurrent buf access.
--- Bug: tcpd_format_connection_info (tostring) and callbacks access conn->buf
+-- Regression guard for TCPD concurrent buf access.
+-- The bug: tcpd_format_connection_info (tostring) and callbacks access conn->buf
 -- without holding buf_mutex, racing with cleanup that sets conn->buf=NULL.
---
--- Strategy: spawn many coroutines hammering tostring/send while another closes.
+-- Strategy: the child below spawns coroutines that hammer tostring/send while
+-- another closes; a crash there is a FAILURE (only a clean exit passes).
 
 local TestFramework = require('test_framework')
 local fan = require "fan"
 local tcpd = require "fan.tcpd"
 
-local suite = TestFramework.create_suite("TCPD concurrent lifecycle - race inducer")
+local suite = TestFramework.create_suite("TCPD concurrent lifecycle - race guard")
 
 local function alloc_port()
     return 22000 + (fan.getpid() % 1000) + math.random(1, 500)
@@ -97,23 +97,11 @@ suite:test("subprocess_tcpd_concurrent_tostring_close_race", function()
     local success, exit_type, code = handle:close()
     os.remove(tmpfile)
 
-    local exit_code = tonumber(output:match("(%d+)%s*$"))
-
-    if not success and exit_type == "signal" then
-        print(string.format("Subprocess killed by signal %d", code))
-        if code == 11 or code == 6 then
-            print("✓ BUG CONFIRMED: tcpd race detected (SIGSEGV/SIGABRT)")
-            print("  Likely: tcpd_format_connection_info or callback accessed freed conn->buf")
-            TestFramework.assert_true(true)
-        else
-            error(string.format("Unexpected signal %d", code))
-        end
-    elseif exit_code == 0 then
-        print("Subprocess completed without crash (bug is FIXED or not triggered)")
-        TestFramework.assert_true(true)
-    else
-        error(string.format("Unexpected exit: code=%s, output:\n%s", tostring(exit_code), output))
-    end
+    -- A crash is a FAILURE: the previous "signal => BUG CONFIRMED, pass" form
+    -- made this suite unable to fail no matter what the child did. The helper
+    -- also classifies the 128+signal exit codes the shell wrapper produces.
+    TestFramework.assert_child_no_crash(output, success, exit_type, code,
+        "TCPD concurrent lifecycle child (tostring/close race)")
 end)
 
 -- In-process light test

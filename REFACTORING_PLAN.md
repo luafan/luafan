@@ -20,7 +20,6 @@ All tests run with ASan (`LD_PRELOAD=libasan.so.8`) to catch memory issues.
 | test_fan_http_enhanced | 4 | 0 | 0 | |
 | test_fan_httpd | 10 | 0 | 0 | |
 | test_fan_httpd_core | 11 | 0 | 0 | |
-| test_fan_httpd_loop | 5 | 0 | 0 | |
 | test_fan_httpd_lua | 9 | 0 | 0 | |
 | test_fan_objectbuf | 11 | 0 | 0 | |
 | test_fan_pool | 12 | 0 | 0 | |

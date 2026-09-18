@@ -97,9 +97,10 @@ fi
 
 # Worker/lock granularity suite, run as its own process -- the same step CI runs.
 # It is deliberately NOT in the curated list inside run_all_lua_tests.lua: that
-# runner executes each test file inside pcall() inside fan.loop(), and the tests
-# which park their own fan.loop() make its os.exit sentinel escape and end the
-# whole run. Needs a lock build that carries the diagnostics (LUAFAN_TESTING=ON)
+# runner executes each test file inside pcall() inside fan.loop(), and a test that
+# drives its own file-scope fan.loop() ends that nested loop with fan.loopbreak()/
+# os.exit(), which also ends the runner's loop and silently truncates the run.
+# Needs a lock build that carries the diagnostics (LUAFAN_TESTING=ON)
 # and >= 4 event workers; it exits 77 (SKIP) otherwise, so on a default dev build
 # this step is just a skip line.
 LOCK_TEST="$SCRIPT_DIR/lua/test_lock_granularity.lua"
@@ -124,6 +125,61 @@ if [ -f "$LOCK_TEST" ]; then
         fi
     fi
 fi
+
+# Suites that need their own process (and therefore their own event loop), because
+# they cannot work inside the curated runner above:
+#   (a) they start a file-scope fan.loop() and end it with fan.loopbreak()/os.exit();
+#       a break inside such a nested loop also ends the runner's loop, which
+#       silently truncates the run (no summary, exit code still 0);
+#   (b) they drive the loop themselves with a bare fan.loop(), which makes no
+#       progress nested inside the runner's loop (their helpers return nil), even
+#       though they pass in a fresh process.
+# Each one runs here as its own process, in the same lock shape as the rest of the
+# suite -- same treatment as the lock granularity step above. Keep this list in
+# sync with the note in lua/run_all_lua_tests.lua.
+STANDALONE_TESTS="
+test_tcpd_concurrent_lifecycle.lua
+test_udpd_event_lifecycle.lua
+test_udpd_send_ready_race.lua
+test_httpd_websocket_lifecycle.lua
+test_mariadb_pending_event.lua
+test_mariadb_workers.lua
+test_evdns_integration.lua
+test_luafan_mainevent_lifetime.lua
+test_httpd_lifecycle_regressions.lua
+test_httpd_rfc_regressions.lua
+test_http_client.lua
+test_httpd_compliance.lua
+test_httpd_security.lua
+test_httpd_performance.lua
+"
+for standalone_name in $STANDALONE_TESTS; do
+    standalone_path="$SCRIPT_DIR/lua/$standalone_name"
+    if [ ! -f "$standalone_path" ]; then
+        echo -e "${YELLOW}⊝ $standalone_name not found - skipped${NC}"
+        continue
+    fi
+
+    echo
+    echo -e "${YELLOW}Running $standalone_name (standalone)...${NC}"
+    if timeout 180s $LUA_CMD "$standalone_path"; then
+        echo -e "${GREEN}✓ $standalone_name passed${NC}"
+        TESTS_RUN=$((TESTS_RUN + 1))
+    else
+        standalone_exit=$?
+        if [ "$standalone_exit" -eq 124 ]; then
+            echo -e "${RED}✗ $standalone_name timed out${NC}"
+        elif [ "$standalone_exit" -eq 77 ]; then
+            echo -e "${YELLOW}⊝ $standalone_name skipped${NC}"
+            TESTS_RUN=$((TESTS_RUN + 1))
+            continue
+        else
+            echo -e "${RED}✗ $standalone_name failed (exit $standalone_exit)${NC}"
+        fi
+        TESTS_RUN=$((TESTS_RUN + 1))
+        TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
+    fi
+done
 
 # Summary
 echo "=================================="

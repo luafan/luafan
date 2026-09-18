@@ -125,7 +125,9 @@ local test_files = {
     "test_fan_upnp.lua",
     "test_fan_httpd_core.lua",
     -- "test_fan_httpd.lua",
-    -- "test_fan_httpd_loop.lua",
+    -- "test_fan_httpd_loop.lua" deleted: it only smoke-tested server object
+    -- creation (never a real request) and is covered by test_fan_httpd.lua,
+    -- test_fan_httpd_core.lua and test_httpd_rfc_regressions.lua.
     "test_fan_httpd_lua.lua",
     "test_fan_http_enhanced.lua",
     "test_fan_stream.lua",
@@ -148,37 +150,74 @@ local test_files = {
     "test_mariadb_phase4_charset.lua",     -- Phase 4: Character Set and Collation Support
     "test_mariadb_phase5_memory.lua",      -- Phase 5: Cursor and Memory Management
     "test_mariadb_phase6_performance.lua", -- Phase 6: Performance and Security Testing
-    "test_mariadb_simple_debug.lua",
+    -- test_mariadb_simple_debug.lua removed: the file no longer exists (the runner
+    -- would report a "Failed to load" failure for it).
     "test_sqlite3_orm.lua",
     "test_integration_http_server.lua",
-    "test_tcpd_callback_self_first.lua",
-    "test_tcpd_concurrent_lifecycle.lua",  -- Regression tests for tcpd buf_mutex / cleanup races
+    -- test_tcpd_concurrent_lifecycle.lua -> standalone step (see the note below the list)
     "test_udpd_callback_self_first.lua",
-    "test_udpd_event_lifecycle.lua",       -- Regression tests for UDP event cleanup races
+    -- test_udpd_event_lifecycle.lua -> standalone step (see the note below the list)
     "test_udpd_dest_getip.lua",
     "test_fan_evdns.lua",
-    "test_evdns_integration.lua",
+    -- test_evdns_integration.lua -> standalone step (see the note below the list)
     "test_memory_leak_fix.lua",
     "test_tcpd_memory_leak_fix.lua",
-    "test_httpd_websocket_lifecycle.lua",  -- Regression tests for WebSocket cleanup races
-    "test_mariadb_pending_event.lua",      -- Regression tests for MariaDB async event cancellation
+    -- test_httpd_websocket_lifecycle.lua -> standalone step (see the note below the list)
+    -- test_mariadb_pending_event.lua -> standalone step (see the note below the list)
+    -- test_mariadb_workers.lua -> standalone step (own worker pool, see the note below)
     "test_event_mgr_loop_cleanup.lua",     -- Regression tests for event_mgr_loop cleanup order
-    "test_luafan_mainevent_lifetime.lua",  -- Regression tests for mainevent UAF/double-free
+    -- test_luafan_mainevent_lifetime.lua -> standalone step (see the note below the list)
     "test_evdns_cleanup_order.lua",        -- Regression tests for DNS base release order
     "test_httpd_websocket_req_access.lua", -- Regression tests for WebSocket API request->req access
     "test_ssl_retain_count.lua",           -- Regression tests for SSL retain_count atomicity
     "test_tcpd_cleanup_mainthread.lua",    -- Regression tests for tcpd_base_conn_cleanup mainthread validity
     "test_http_client_timer_linger.lua",   -- Regression tests for HTTP client timer/socket event lingering
-    "test_udpd_send_ready_race.lua",       -- Regression tests for UDP send_ready vs cleanup race
+    -- test_udpd_send_ready_race.lua -> standalone step (see the note below the list)
     "test_thread_tracker_overflow.lua",     -- Regression tests for thread_tracker array bounds
     "test_orm_base.lua",                    -- ORM base adapter pattern with mock backend
     "test_reliable_udp.lua",                -- Reliable UDP transport data structures
     "test_httpd_comprehensive.lua",        -- Comprehensive httpd tests (request/response/keepalive/WebSocket)
-    "test_httpd_lifecycle_regressions.lua", -- HTTPD lifecycle, metrics, methods, and params regressions
-    "test_httpd_rfc_regressions.lua",      -- Lua HTTPD framing and response RFC regressions
-    "test_http_client.lua",                -- HTTP client tests with local httpd (creates server, ASan leak)
+    -- test_httpd_lifecycle_regressions.lua -> standalone step (see the note below the list)
+    -- test_httpd_rfc_regressions.lua -> standalone step (see the note below the list)
+    -- test_httpd_compliance.lua -> standalone step (see the note below the list)
+    -- test_httpd_security.lua -> standalone step (see the note below the list)
+    -- test_httpd_performance.lua -> standalone step (see the note below the list)
+    -- test_http_client.lua -> standalone step (see the note below the list)
     -- Add more test files here as they are completed
 }
+
+-- ---------------------------------------------------------------------------
+-- Files deliberately kept out of the list above
+--
+-- Three classes, all of which need their own process (and therefore their own
+-- event loop):
+--   (a) files that start a file-scope fan.loop() and end it with fan.loopbreak()
+--       and/or os.exit(). This runner loads a test file and pcalls it from within
+--       another fan.loop(); a break (or an escaping os.exit) inside the nested
+--       loop also ends the *runner's* loop, so the run stops there without a
+--       summary and every file after it is silently skipped -- while the process
+--       still exits 0.
+--   (b) files that drive the loop themselves with a bare fan.loop(), which cannot
+--       make progress nested inside the runner's loop: their helpers return nil
+--       (e.g. test_httpd_rfc_regressions.lua "attempt to index a nil value")
+--       even though every one of them passes in a fresh process.
+--   (c) files that size the worker pool themselves with fan.workers_init(). The
+--       pool must be built before the first fan.loop() and the runner already
+--       owns one, so the call would be refused and the file would report a skip
+--       instead of exercising the worker pool it exists for
+--       (test_mariadb_workers.lua, which additionally skips with 77 when no
+--       MariaDB is reachable, so client-only runners stay green).
+-- run_lua_tests.sh runs all of them as separate processes, in the same lock shape
+-- as the rest of the suite:
+--   test_tcpd_concurrent_lifecycle.lua   test_udpd_event_lifecycle.lua
+--   test_udpd_send_ready_race.lua        test_httpd_websocket_lifecycle.lua
+--   test_mariadb_pending_event.lua       test_evdns_integration.lua
+--   test_luafan_mainevent_lifetime.lua   test_httpd_lifecycle_regressions.lua
+--   test_httpd_rfc_regressions.lua       test_http_client.lua
+--   test_mariadb_workers.lua             test_httpd_compliance.lua
+--   test_httpd_security.lua              test_httpd_performance.lua
+-- (test_lock_granularity.lua is standalone too and never appears in this list.)
+-- ---------------------------------------------------------------------------
 
 -- Function to filter test files based on config
 local function filter_test_files(files, config)

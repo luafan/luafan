@@ -1,35 +1,97 @@
 #!/usr/bin/env lua
--- HTTP Protocol Compliance Test for LuaFan HTTPD
--- Tests RFC 7230/7231 compliance and security features
 
+-- HTTP protocol compliance tests for the Lua fan.httpd implementation
+-- (RFC 7230/7231 framing, routing, compression, security headers, stats).
+--
+-- Migrated from the old library-style tests/lua/test_httpd_compliance.lua. That
+-- file only exported functions for tests/run_httpd_tests.lua, so it never ran in
+-- the curated suite nor in CI. Three defects are fixed by the migration:
+--   * the server used a fixed port (9999); every case now binds port 0 and reads
+--     the real port back from the server object, so runs never clash;
+--   * `http.get(url, {headers = ...})` passed a second argument that fan.http
+--     ignores (request() takes a single args table), so the Accept-Encoding
+--     header never reached the server and the gzip case could not assert;
+--   * assertions ran only when a response existed ("if response then ..."), so a
+--     missing response produced a silent pass. Every case now asserts
+--     unconditionally.
+--
+-- Like the other standalone httpd suites (test_httpd_rfc_regressions.lua,
+-- test_httpd_lifecycle_regressions.lua) each case drives its own fan.loop(), so
+-- this file must run as its own process (see tests/run_lua_tests.sh).
+
+local TestFramework = require("test_framework")
 local fan = require "fan"
-local httpd = require "fan.httpd.httpd"
 local http = require "fan.http"
+local connector = require "fan.connector"
+local httpd = require "fan.httpd.httpd"
 
--- Test configuration
-local TEST_HOST = "127.0.0.1"
-local TEST_PORT = 9999
-local test_results = {}
-local test_count = 0
-local passed_count = 0
+local suite = TestFramework.create_suite("Lua HTTPD Protocol Compliance")
 
--- Test utility functions
-local function test_assert(condition, message)
-    test_count = test_count + 1
-    if condition then
-        passed_count = passed_count + 1
-        print(string.format("✓ PASS: %s", message))
-        return true
-    else
-        print(string.format("✗ FAIL: %s", message))
-        return false
+-- Read a raw response until the header terminator (or the peer closes).
+-- fan.gettime() is the event loop's cached clock: it only advances when the
+-- loop iterates, so the loop must yield. A non-yielding busy loop would never
+-- reach the deadline nor observe the peer's disconnect and would spin forever.
+local function read_response(client, timeout)
+    timeout = (timeout or 2) * 1000
+    local chunks = {}
+    local deadline = fan.gettime() + timeout
+    local attempts = 0
+    while fan.gettime() < deadline and attempts < 500 do
+        attempts = attempts + 1
+        local input = client:receive(1)
+        if not input then
+            break
+        end
+        local data = input:GetBytes()
+        if data and #data > 0 then
+            table.insert(chunks, data)
+            if table.concat(chunks):find("\r\n\r\n", 1, true) then
+                break
+            end
+        end
+        fan.sleep(0.001)
     end
+    return table.concat(chunks)
 end
 
-local function start_test_server()
-    local server = httpd.bind({host = TEST_HOST, port = TEST_PORT})
+-- Bind a router-based server on an ephemeral port, run `client(server)` inside
+-- the event loop, then close the listener. Returns the client's value; a client
+-- error is re-raised as a test failure instead of hanging the suite.
+local function with_server(configure, client)
+    local server = httpd.bind({ host = "127.0.0.1", port = 0 })
+    TestFramework.assert_not_nil(server)
+    TestFramework.assert_true(server.port > 0, "ephemeral bind must report a real port")
+    if configure then
+        configure(server)
+    end
 
-    -- Basic routes for testing
+    local result
+    local done = false
+    coroutine.wrap(function()
+        fan.sleep(5)
+        if not done then
+            done = true
+            fan.loopbreak()
+        end
+    end)()
+    coroutine.wrap(function()
+        local ok, value = pcall(client, server)
+        result = { ok = ok, value = value }
+        done = true
+        fan.loopbreak()
+    end)()
+    fan.loop()
+
+    if server.serv and server.serv.close then
+        pcall(function() server.serv:close() end)
+    end
+
+    TestFramework.assert_true(result and result.ok,
+        result and tostring(result.value) or "client never ran")
+    return result.value
+end
+
+local function base_routes(server)
     server:get("/", function(ctx)
         ctx:reply(200, "OK", "Hello World")
     end)
@@ -43,158 +105,120 @@ local function start_test_server()
     end)
 
     server:get("/large", function(ctx)
-        local large_content = string.rep("A", 2048) -- 2KB content for compression test
-        ctx:addheader("Content-Type", "text/plain")
-        ctx:reply(200, "OK", large_content)
+        ctx:reply(200, "OK", string.rep("A", 2048))
     end)
 
     server:get("/stats", function(ctx)
         local stats = server:get_stats()
         ctx:addheader("Content-Type", "application/json")
-        ctx:reply(200, "OK", "Stats available")
+        ctx:reply(200, "OK", string.format('{"requests_total":%d,"uptime":%d}',
+            stats.requests_total, stats.uptime_seconds))
     end)
-
-    return server
 end
 
--- HTTP/1.1 Protocol Compliance Tests
-local function test_http_version_support()
-    print("\n--- Testing HTTP Version Support ---")
-
-    -- Test HTTP/1.1 support
-    local response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/")
-    test_assert(response and response.status == 200, "HTTP/1.1 GET request succeeds")
-
-    -- Test Keep-Alive default behavior
-    if response and response.headers then
-        local connection = response.headers["connection"]
-        test_assert(not connection or connection:lower() ~= "close", "HTTP/1.1 defaults to keep-alive")
-    end
+local function url(server, path)
+    return "http://127.0.0.1:" .. server.port .. path
 end
 
-local function test_request_methods()
-    print("\n--- Testing HTTP Methods ---")
+suite:test("http_11_get_returns_200_and_body", function()
+    local response = with_server(base_routes, function(server)
+        return http.get(url(server, "/"))
+    end)
+    TestFramework.assert_equal(response.responseCode, 200)
+    TestFramework.assert_equal(response.body, "Hello World")
+end)
 
-    -- Test GET
-    local get_response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/")
-    test_assert(get_response and get_response.status == 200, "GET method works")
+suite:test("http_11_defaults_to_keep_alive", function()
+    -- fan.http always sends "Connection: close", so the HTTP/1.1 default has to
+    -- be observed with a raw request that carries no Connection header.
+    local raw = with_server(base_routes, function(server)
+        local client = connector.connect("tcp://127.0.0.1:" .. server.port)
+        client:send("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        local response = read_response(client)
+        client:close()
+        return response
+    end)
+    TestFramework.assert_match(raw, "HTTP/1%.1 200")
+    TestFramework.assert_true(raw:find("Connection: close", 1, true) == nil,
+        "HTTP/1.1 without a Connection header must not announce close")
+end)
 
-    -- Test POST
-    local post_response = http.post("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/echo", "test data")
-    test_assert(post_response and post_response.status == 200, "POST method works")
+suite:test("http_10_request_is_answered_and_closes", function()
+    local raw = with_server(base_routes, function(server)
+        local client = connector.connect("tcp://127.0.0.1:" .. server.port)
+        client:send("GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+        local response = read_response(client)
+        client:close()
+        return response
+    end)
+    TestFramework.assert_match(raw, "HTTP/1%.0 200")
+    TestFramework.assert_true(raw:find("Connection: close", 1, true) ~= nil,
+        "HTTP/1.0 without keep-alive must announce close")
+end)
 
-    -- Test invalid method (should return 404 for unmatched route)
-    local invalid_response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/nonexistent")
-    test_assert(invalid_response and invalid_response.status == 404, "404 for non-existent routes")
-end
+suite:test("post_body_is_echoed", function()
+    local response = with_server(base_routes, function(server)
+        return http.post({ url = url(server, "/echo"), body = "test data" })
+    end)
+    TestFramework.assert_equal(response.responseCode, 200)
+    TestFramework.assert_equal(response.body, "test data")
+end)
 
-local function test_routing_system()
-    print("\n--- Testing Routing System ---")
+suite:test("path_parameter_is_extracted", function()
+    local response = with_server(base_routes, function(server)
+        return http.get(url(server, "/user/123"))
+    end)
+    TestFramework.assert_equal(response.responseCode, 200)
+    TestFramework.assert_equal(response.body, "User ID: 123")
+end)
 
-    -- Test path parameters
-    local param_response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/user/123")
-    test_assert(param_response and param_response.status == 200, "Path parameters work")
-    test_assert(param_response and param_response.body:find("123"), "Path parameter value extracted")
-end
+suite:test("unknown_route_returns_404_with_message", function()
+    local response = with_server(base_routes, function(server)
+        return http.get(url(server, "/does-not-exist"))
+    end)
+    TestFramework.assert_equal(response.responseCode, 404)
+    TestFramework.assert_match(response.body or "", "not found")
+end)
 
-local function test_content_encoding()
-    print("\n--- Testing Content Encoding ---")
+suite:test("large_body_is_gzip_compressed_when_requested", function()
+    local plain = with_server(base_routes, function(server)
+        return http.get(url(server, "/large"))
+    end)
+    TestFramework.assert_equal(plain.responseCode, 200)
+    TestFramework.assert_equal(plain.headers["content-encoding"], nil)
+    TestFramework.assert_equal(#plain.body, 2048)
 
-    -- Test gzip compression for large content
-    local headers = {["Accept-Encoding"] = "gzip"}
-    local large_response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/large", {headers = headers})
+    local gzipped = with_server(base_routes, function(server)
+        return http.get({
+            url = url(server, "/large"),
+            headers = { ["Accept-Encoding"] = "gzip" },
+        })
+    end)
+    TestFramework.assert_equal(gzipped.responseCode, 200)
+    TestFramework.assert_equal(gzipped.headers["content-encoding"], "gzip")
+    TestFramework.assert_true(#gzipped.body < 2048,
+        "compressed body must be smaller than the 2KB plain body")
+end)
 
-    test_assert(large_response and large_response.status == 200, "Large content request succeeds")
+suite:test("security_headers_are_present_on_served_response", function()
+    local response = with_server(base_routes, function(server)
+        return http.get(url(server, "/"))
+    end)
+    TestFramework.assert_equal(response.responseCode, 200)
+    TestFramework.assert_equal(response.headers["x-content-type-options"], "nosniff")
+    TestFramework.assert_equal(response.headers["x-frame-options"], "DENY")
+    TestFramework.assert_equal(response.headers["x-xss-protection"], "1; mode=block")
+end)
 
-    if large_response and large_response.headers then
-        local encoding = large_response.headers["content-encoding"]
-        test_assert(encoding == "gzip", "Large content is gzip compressed")
-    end
-end
+suite:test("stats_endpoint_reports_request_count", function()
+    local response = with_server(base_routes, function(server)
+        http.get(url(server, "/"))
+        return http.get(url(server, "/stats"))
+    end)
+    TestFramework.assert_equal(response.responseCode, 200)
+    TestFramework.assert_match(response.body or "", "requests_total")
+    TestFramework.assert_match(response.body or "", "uptime")
+end)
 
-local function test_security_headers()
-    print("\n--- Testing Security Headers ---")
-
-    local response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/")
-
-    if response and response.headers then
-        test_assert(response.headers["x-content-type-options"] == "nosniff", "X-Content-Type-Options header present")
-        test_assert(response.headers["x-frame-options"] == "DENY", "X-Frame-Options header present")
-        test_assert(response.headers["x-xss-protection"] == "1; mode=block", "X-XSS-Protection header present")
-    end
-end
-
-local function test_error_handling()
-    print("\n--- Testing Error Handling ---")
-
-    -- Test 404 handling
-    local not_found = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/does-not-exist")
-    test_assert(not_found and not_found.status == 404, "404 status for missing routes")
-    test_assert(not_found and not_found.body:find("not found"), "404 error message present")
-end
-
-local function test_performance_monitoring()
-    print("\n--- Testing Performance Monitoring ---")
-
-    -- Make a few requests to generate stats
-    for i = 1, 5 do
-        http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/")
-        fan.sleep(0.01) -- Small delay
-    end
-
-    local stats_response = http.get("http://" .. TEST_HOST .. ":" .. TEST_PORT .. "/stats")
-    test_assert(stats_response and stats_response.status == 200, "Stats endpoint accessible")
-
-    -- Note: Actual stats validation would require parsing JSON response
-    -- This test just verifies the endpoint is available
-end
-
--- Main test runner
-local function run_all_tests()
-    print("Starting LuaFan HTTPD Compliance Tests...")
-    print("=" .. string.rep("=", 50))
-
-    local server = start_test_server()
-
-    -- Give server time to start
-    fan.sleep(0.1)
-
-    -- Run test suites
-    test_http_version_support()
-    test_request_methods()
-    test_routing_system()
-    test_content_encoding()
-    test_security_headers()
-    test_error_handling()
-    test_performance_monitoring()
-
-    -- Test summary
-    print("\n" .. string.rep("=", 50))
-    print(string.format("Test Results: %d/%d tests passed (%.1f%%)",
-          passed_count, test_count, (passed_count / test_count) * 100))
-
-    if passed_count == test_count then
-        print("🎉 All tests passed! HTTPD is RFC compliant.")
-        return true
-    else
-        print("❌ Some tests failed. Please review implementation.")
-        return false
-    end
-end
-
--- Run tests in coroutine to handle async operations
-local function main()
-    local success, result = pcall(run_all_tests)
-    if not success then
-        print("Test execution failed:", result)
-        return false
-    end
-    return result
-end
-
--- Export for use in other test files
-return {
-    run_all_tests = run_all_tests,
-    test_assert = test_assert,
-    main = main
-}
+local failures = TestFramework.run_suite(suite)
+os.exit(failures > 0 and 1 or 0)

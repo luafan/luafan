@@ -28,9 +28,10 @@
 --   4. Granularity: a worker running an allocating pure-Lua loop must not freeze
 --      the main thread in core-hook mode, and must freeze it in wrapper mode.
 --   5. Neither shape leaks lock depth on the main thread.
---   6. The fan.loop() hand-off has a real level to release (workers_init()'s hold
+--   6. The loop-entry hand-off has a real level to release (workers_init()'s hold
 --      on the calling thread -- a hooked core included, it is not a no-op there)
---      and restores it on exit.
+--      and restores it on exit. The hand-off is performed by event_mgr_loop()
+--      itself (reached here through fan.loop()), not by fan.loop()'s caller.
 --
 -- Requires: -DLUAFAN_TESTING=ON (fan.diag_lock_sleep), >= 4 event workers
 -- (LUAN_TEST_WORKERS, default 4) and fan.tcpd. Skips (exit 77) otherwise.
@@ -294,14 +295,18 @@ local function run_work()
     end
 end
 
--- 6. The fan.loop() hand-off has something to hand over, on BOTH shapes. Its
+-- 6. The loop-entry hand-off has something to hand over, on BOTH shapes. Its
 --    level is the extra one workers_init() took on the calling thread -- not a
 --    resume level, which is exactly why a hooked core needs it as much as a
 --    stock one: parking the loop while still holding it would block every worker
 --    callback in LockMainState forever (which shows up below as checks 1-3
---    timing out, never passing). The exit check proves LuaLockResumeAfterLoop()
---    put the level back, so the enclosing resume's trailing unlock stays
---    balanced.
+--    timing out, never passing). The hand-off is performed inside
+--    event_mgr_loop(), so every embedder path that reaches the loop gets it --
+--    including a host that parks the loop without calling fan.loop() when the
+--    entry chunk yields first (LuanMac/LuaBridge.m; covered host-side by
+--    luan/tests/test_luafan_httpd_workers.lua). The exit check proves
+--    LuaLockResumeAfterLoop() put the level back, so the enclosing resume's
+--    trailing unlock stays balanced.
 local entry_depth = HAVE_DEPTH and fan.diag_lock_depth() or nil
 if HAVE_DEPTH then
     check("worker pool holds a lock level on the main thread before fan.loop()",
