@@ -205,6 +205,14 @@ fan_cb_setup_t fan_cb_setup(lua_State *L, int callback_ref) {
 
 // Shared weak table functions for TCP/UDP connection self-references
 void utlua_store_self_in_weak_table(lua_State *L, void *conn_ptr, int self_index) {
+    // The get-or-create of LUAFAN_WEAK_REFS is a read-modify-write sequence on
+    // the shared registry: two workers that both observe "absent" would each
+    // build a table, and the loser's entry would silently vanish once the
+    // winner's table replaces it in the registry. Stock lua_* calls unlock
+    // between calls, so the whole sequence must run under one (recursive) lock --
+    // same class as the bare luaL_ref sites in patches/lua-5.3.3/README.md.
+    lua_lock(L);
+
     // Get or create weak table for connections (shared by TCP and UDP)
     lua_pushliteral(L, "LUAFAN_WEAK_REFS");
     lua_rawget(L, LUA_REGISTRYINDEX);
@@ -228,6 +236,8 @@ void utlua_store_self_in_weak_table(lua_State *L, void *conn_ptr, int self_index
     lua_pushvalue(L, self_index);
     lua_rawset(L, -3);
     lua_pop(L, 1); // pop weak table
+
+    lua_unlock(L);
 }
 
 void utlua_push_self_from_weak_table(lua_State *L, void *conn_ptr) {

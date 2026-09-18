@@ -70,10 +70,12 @@ void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
         // DNS resolution failed
         conn->state = UDPD_CONN_ERROR;
 
-        // Return error to Lua
+        // Return error to Lua (arguments under lua_lock, released before resume)
+        lua_lock(L);
         lua_pushnil(L);
         lua_pushfstring(L, "DNS resolution failed for '%s': %s",
                        conn->host, evutil_gai_strerror(errcode));
+        lua_unlock(L);
 
         FAN_RESUME(L, NULL, 2);
     } else {
@@ -95,12 +97,20 @@ void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
         if (setup_success) {
             conn->state = UDPD_CONN_READY;
 
-            // Return success to Lua - get connection object from weak table
+            // Return success to Lua - get connection object from weak table.
+            // Argument construction under lua_lock; the lock is released before
+            // FAN_RESUME, which owns it for the duration of the resume.
+            lua_lock(L);
             utlua_push_self_from_weak_table(L, conn);
-            if (lua_isnil(L, -1)) {
+            int is_nil = lua_isnil(L, -1);
+            lua_unlock(L);
+
+            if (is_nil) {
+                lua_lock(L);
                 lua_pop(L, 1); // pop nil
                 lua_pushnil(L);
                 lua_pushstring(L, "Connection object not found in weak table");
+                lua_unlock(L);
                 FAN_RESUME(L, NULL, 2);
             } else {
                 FAN_RESUME(L, NULL, 1);
@@ -108,9 +118,11 @@ void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
         } else {
             conn->state = UDPD_CONN_ERROR;
 
-            // Return error to Lua
+            // Return error to Lua (arguments under lua_lock, released before resume)
+            lua_lock(L);
             lua_pushnil(L);
             lua_pushstring(L, "Failed to set up UDP connection after DNS resolution");
+            lua_unlock(L);
             FAN_RESUME(L, NULL, 2);
         }
     }
@@ -141,15 +153,21 @@ void udpd_dest_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
 
     if (errcode) {
         // DNS resolution failed
+        lua_lock(L);
         lua_pushnil(L);
         lua_pushfstring(L, "DNS resolution failed for '%s': %s",
                        request->hostname, evutil_gai_strerror(errcode));
+        lua_unlock(L);
 
         if (request->yielded) {
             FAN_RESUME(L, NULL, 2);
         }
     } else {
-        // DNS resolution successful - create destination object
+        // DNS resolution successful - create destination object.
+        // Argument construction is one multi-call sequence on the shared registry
+        // (weak-table store included), so it runs under lua_lock; the lock is
+        // released before FAN_RESUME, which owns it for the duration of the resume.
+        lua_lock(L);
         udpd_dest_t *dest = lua_newuserdata(L, sizeof(udpd_dest_t));
         luaL_getmetatable(L, LUA_UDPD_DEST_TYPE);
         lua_setmetatable(L, -2);
@@ -162,6 +180,7 @@ void udpd_dest_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
 
         // Store destination in weak table
         utlua_store_self_in_weak_table(L, dest, lua_gettop(L));
+        lua_unlock(L);
 
         evutil_freeaddrinfo(addr);
 
@@ -191,15 +210,21 @@ void udpd_dests_dns_callback(int errcode, struct evutil_addrinfo *addr_list, voi
 
     if (errcode) {
         // DNS resolution failed
+        lua_lock(L);
         lua_pushnil(L);
         lua_pushfstring(L, "DNS resolution failed for '%s': %s",
                        request->hostname, evutil_gai_strerror(errcode));
+        lua_unlock(L);
 
         if (request->yielded) {
             FAN_RESUME(L, NULL, 2);
         }
     } else {
-        // DNS resolution successful - create table with all destination objects
+        // DNS resolution successful - create table with all destination objects.
+        // Building the result table (including the shared weak-table store) is one
+        // multi-call sequence, so it runs under lua_lock; the lock is released
+        // before FAN_RESUME, which owns it for the duration of the resume.
+        lua_lock(L);
         lua_newtable(L);
         int table_index = 1;
 
@@ -225,6 +250,7 @@ void udpd_dests_dns_callback(int errcode, struct evutil_addrinfo *addr_list, voi
 
             addr = addr->ai_next;
         }
+        lua_unlock(L);
 
         evutil_freeaddrinfo(addr_list);
 
