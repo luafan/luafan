@@ -32,11 +32,15 @@ LUAFAN_SRC="${LUAFAN_SRC:-$(cd "$(dirname "$0")" && pwd)}"
 # 1.1.1w crashes tcpd's SSL path; Alpine 3.16 happens to ship 1.1.1w so it did
 # not crash, but we build our own here regardless for a single, predictable
 # OpenSSL across both images.)
+# NOTE: libucontext (+ dev headers) supplies the POSIX ucontext functions musl
+# does not implement (musl-dev ships ucontext.h declarations only). MariaDB
+# 5.5's async client needs them on aarch64, see the mariadb section below.
 apk add --update \
     bsd-compat-headers tzdata linux-headers git libstdc++ wget ca-certificates \
     gcc libc-dev unzip cmake g++ make \
     curl-dev curl \
-    ncurses-dev bison openssl-dev openssl perl sqlite-dev
+    ncurses-dev bison openssl-dev openssl perl sqlite-dev \
+    libucontext libucontext-dev
 update-ca-certificates
 
 # Normalize cwd so every download/extract below lives under /opt.
@@ -83,13 +87,21 @@ tar xzf luarocks-$LUAROCKS_VERSION.tar.gz
 )
 
 # --- mariadb (client libs / headers only) ---
-# alpine's musl lacks ucontext.h; strip the probe so cmake doesn't bail.
+# fan.mariadb is built on MariaDB's non-blocking API (mysql_real_connect_start
+# & co.), which needs a my_context implementation. my_context.h picks, in order,
+# win32 fibers / x86_64+i386 GCC asm / HAVE_UCONTEXT_H, and otherwise falls back
+# to MY_CONTEXT_DISABLE, whose my_context_init() *always* fails. On aarch64 musl
+# that fallback is what happens (no ucontext implementation), so
+# mysql_options(MYSQL_OPT_NONBLOCK) leaves the async context NULL and the very
+# next mysql_real_connect_start() dereferences it -> SIGSEGV. musl-dev ships the
+# ucontext.h declarations and libucontext provides the implementation, so keep
+# the probe and link it into libmysqlclient (see the note on the package list).
 wget https://github.com/MariaDB/server/archive/mariadb-$MARIADB_VERSION.tar.gz
 tar xzf mariadb-$MARIADB_VERSION.tar.gz
 (
     cd server-mariadb-$MARIADB_VERSION
-    sed -i '/HAVE_UCONTEXT_H/d' config.h.cmake
-    cmake -DWITHOUT_TOKUDB=1 .
+    cmake -DWITHOUT_TOKUDB=1 \
+        -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-as-needed -lucontext -Wl,--as-needed" .
     (cd libmysql && make -j$(nproc) install)
     (cd include  && make install)
 )
