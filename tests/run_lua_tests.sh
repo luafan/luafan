@@ -46,6 +46,15 @@ cd "$SCRIPT_DIR"
 export LUA_PATH="$PROJECT_ROOT/modules/?.lua;$PROJECT_ROOT/modules/?/init.lua;$SCRIPT_DIR/lua/framework/?.lua;$SCRIPT_DIR/lua/?.lua;;"
 export LUA_CPATH="$SCRIPT_DIR/build/?.so;$PROJECT_ROOT/?.so;;"
 
+# The HTTP client loads modules/config.lua, which requires LuaFileSystem.
+# Fail once with an actionable dependency message instead of repeating the same
+# missing-module failure for every standalone HTTPD suite.
+if ! $LUA_CMD -e "require('lfs')" >/dev/null 2>&1; then
+    echo -e "${RED}Error: LuaFileSystem (module 'lfs') is required by the HTTP client tests.${NC}"
+    echo "Install it with: luarocks install luafilesystem"
+    exit 1
+fi
+
 # Check if LuaFan is available and report the lock mode of this run
 echo "Checking LuaFan availability..."
 if ! $LUA_CMD -e "require('fan')" >/dev/null 2>&1; then
