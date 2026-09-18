@@ -165,6 +165,20 @@ end
 
 -- ------------------------------------------------------------------ test cases
 local function run_all()
+    --------------------------------------------------- 0) server reachability
+    -- Every case below talks to a real server; without one each connect fails
+    -- and the suite would look like a regression. Skip like the other mariadb
+    -- suites (exit 77) instead, so run_lua_tests.sh reports it as skipped on a
+    -- runner that has no MariaDB (CI builds the client only).
+    do
+        local conn = connect(-1)
+        if conn == nil then
+            print("SKIP MariaDB not reachable (start with: cd tests && ./docker-setup.sh start)")
+            os.exit(77)
+        end
+        conn:close()
+    end
+
     ---------------------------------------------------------------- 1) validation
     do
         local cases = {
@@ -245,19 +259,32 @@ local function run_all()
         }
         check("worker-affinity server bind ok", srv and srv.port, srv and srv.port)
 
+        -- A single burst of n sequential connections can miss a worker by
+        -- chance: httpd distribute mode gives every worker its own
+        -- SO_REUSEPORT listener and the kernel hashes each connection's
+        -- 4-tuple, so 16 draws miss one of four workers ~4% of the time
+        -- (measured: 5/90 runs before this). Repeat the burst until every
+        -- worker answered at least once, accumulating `seen`: the assertion
+        -- stays exact, its false-failure rate drops below 1e-5, and a genuine
+        -- "all load landed on one worker" regression still fails it.
         local n = math.max(WORKERS * 2, 16)
-        local done = 0
-        for _ = 1, n do
-            local res = fetch("http://127.0.0.1:" .. srv.port .. "/")
-            if res and res.responseCode == 200 then done = done + 1 end
-        end
-        check("worker-thread connections serve queries", done == n,
-              "ok=" .. done .. "/" .. n .. (bad and (" (" .. bad .. ")") or ""))
-
-        local distinct = 0
-        for _ in pairs(seen) do distinct = distinct + 1 end
+        local done, served = 0, 0
+        local distinct, rounds = 0, 0
+        repeat
+            rounds = rounds + 1
+            for _ = 1, n do
+                served = served + 1
+                local res = fetch("http://127.0.0.1:" .. srv.port .. "/")
+                if res and res.responseCode == 200 then done = done + 1 end
+            end
+            distinct = 0
+            for _ in pairs(seen) do distinct = distinct + 1 end
+        until distinct == WORKERS or rounds >= 3
+        check("worker-thread connections serve queries", done == served,
+              "ok=" .. done .. "/" .. served .. (bad and (" (" .. bad .. ")") or ""))
         check("requests ran on every worker", distinct == WORKERS,
-              "distinct=" .. distinct .. "/" .. WORKERS)
+              "distinct=" .. distinct .. "/" .. WORKERS ..
+              " in " .. rounds .. " round(s)")
 
         ------------------------------------- 6) worker thread, no affinity given
         -- Round-robin may place the connection on ANOTHER worker than the one
@@ -287,6 +314,13 @@ local function run_all()
         collectgarbage("collect")
 
         ------------------------------------------- 7) concurrent load per worker
+        -- Same accumulation as case 5, but concurrent: httpd distribute mode
+        -- gives every worker its own SO_REUSEPORT listener and the kernel
+        -- hashes each connection's 4-tuple, so a single burst of WORKERS*4
+        -- clients still misses one worker in a few percent of runs (measured:
+        -- 4/90). Repeat the burst until every worker answered at least once,
+        -- accumulating `hits`; the assertion stays exact and a genuine "all
+        -- load landed on one worker" regression still fails it.
         local CONC = WORKERS * 4
         local PER_REQ = 5
         local hits = {}
@@ -305,28 +339,39 @@ local function run_all()
         }
         local t0 = os.clock()
         local done3, failed3 = 0, 0
-        for _ = 1, CONC do
-            coroutine.wrap(function()
-                local res = fetch("http://127.0.0.1:" .. srv3.port .. "/", 30)
-                if res and res.responseCode == 200 then
-                    done3 = done3 + 1
-                else
-                    failed3 = failed3 + 1
-                end
-            end)()
-        end
-        local finished = wait_until(function() return done3 + failed3 >= CONC end, 60)
+        local distinct3, rounds3, finished3 = 0, 0, true
+        repeat
+            rounds3 = rounds3 + 1
+            local round_done, round_failed = 0, 0
+            for _ = 1, CONC do
+                coroutine.wrap(function()
+                    local res = fetch("http://127.0.0.1:" .. srv3.port .. "/", 30)
+                    if res and res.responseCode == 200 then
+                        round_done = round_done + 1
+                    else
+                        round_failed = round_failed + 1
+                    end
+                end)()
+            end
+            finished3 = wait_until(function() return round_done + round_failed >= CONC end, 60)
+                          and finished3
+            done3 = done3 + round_done
+            failed3 = failed3 + round_failed
+            distinct3 = 0
+            for _ in pairs(hits) do distinct3 = distinct3 + 1 end
+        until (not finished3) or distinct3 == WORKERS or rounds3 >= 3
         local dt = os.clock() - t0
-        check("concurrent worker load completes", finished,
-              "done=" .. (done3 + failed3) .. "/" .. CONC)
-        check("concurrent worker load all 200", failed3 == 0 and done3 == CONC,
-              "ok=" .. done3 .. " fail=" .. failed3 .. " queries=" .. (CONC * PER_REQ))
-        local distinct3 = 0
-        for _ in pairs(hits) do distinct3 = distinct3 + 1 end
+        local total3 = CONC * rounds3
+        check("concurrent worker load completes", finished3 and done3 + failed3 >= total3,
+              "done=" .. (done3 + failed3) .. "/" .. total3 ..
+              " in " .. rounds3 .. " round(s)")
+        check("concurrent worker load all 200", failed3 == 0 and done3 == total3,
+              "ok=" .. done3 .. " fail=" .. failed3 .. " queries=" .. (total3 * PER_REQ))
         check("concurrent load hit every worker", distinct3 == WORKERS,
-              "distinct=" .. distinct3 .. "/" .. WORKERS)
-        info("load", string.format("%d concurrent x %d queries, %.2fs",
-                                   CONC, PER_REQ, dt))
+              "distinct=" .. distinct3 .. "/" .. WORKERS ..
+              " in " .. rounds3 .. " round(s)")
+        info("load", string.format("%d concurrent x %d queries, %d round(s), %.2fs",
+                                   CONC, PER_REQ, rounds3, dt))
 
         srv3.serv:close()
         srv3 = nil

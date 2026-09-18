@@ -119,15 +119,13 @@ static void free_result_cont(int fd, short event, void *_userdata)
                         bag->extra) != 0)
     {
       int nresults = mariadb_push_wait_error(L);
-      UNREF_CO(cur);
-      FAN_RESUME(L, NULL, nresults);
+      RESUME_AND_UNREF_CO(cur, nresults);
     }
   }
   else
   {
     lua_pushboolean(L, true);
-    UNREF_CO(cur);
-    FAN_RESUME(L, NULL, 1);
+    RESUME_AND_UNREF_CO(cur, 1);
   }
 
   event_free(bag->event);
@@ -219,8 +217,7 @@ static void fetch_row_cont(int fd, short event, void *_userdata)
     if (wait_for_status(L, cur->ctx, cur, status, fetch_row_cont, bag->extra) != 0)
     {
       int nresults = mariadb_push_wait_error(L);
-      UNREF_CO(cur);
-      FAN_RESUME(L, NULL, nresults);
+      RESUME_AND_UNREF_CO(cur, nresults);
     }
   }
   else
@@ -228,8 +225,7 @@ static void fetch_row_cont(int fd, short event, void *_userdata)
     int count = fetch_row_result(L, cur, row);
     if (count >= 0)
     {
-      UNREF_CO(cur);
-      FAN_RESUME(L, NULL, count);
+      RESUME_AND_UNREF_CO(cur, count);
     }
     else if (count == CONTINUE_YIELD)
     {

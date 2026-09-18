@@ -14,8 +14,7 @@ static void stmt_close_cont(int fd, short event, void *_userdata)
     {
       CLEAR_REF(L, st->table);
       int nresults = mariadb_push_wait_error(L);
-      UNREF_CO(st);
-      FAN_RESUME(L, NULL, nresults);
+      RESUME_AND_UNREF_CO(st, nresults);
     }
   }
   else if (ret == 0)
@@ -23,15 +22,13 @@ static void stmt_close_cont(int fd, short event, void *_userdata)
     CLEAR_REF(L, st->table);
 
     lua_pushboolean(L, 1);
-    UNREF_CO(st);
-    FAN_RESUME(L, NULL, 1);
+    RESUME_AND_UNREF_CO(st, 1);
   }
   else
   {
     CLEAR_REF(L, st->table);
     int nresults = luamariadb_push_errno(L, bag->ctx);
-    UNREF_CO(st);
-    FAN_RESUME(L, NULL, nresults);
+    RESUME_AND_UNREF_CO(st, nresults);
   }
 
   event_free(bag->event);

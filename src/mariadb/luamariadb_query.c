@@ -67,8 +67,7 @@ static void real_query_cont(int fd, short event, void *_userdata)
   if (errorcode)
   {
     int nresults = luamariadb_push_errno(L, bag->ctx);
-    UNREF_CO(bag->ctx);
-    FAN_RESUME(L, NULL, nresults);
+    RESUME_AND_UNREF_CO(bag->ctx, nresults);
   }
   else
   {
@@ -80,21 +79,18 @@ static void real_query_cont(int fd, short event, void *_userdata)
                           bag->extra) != 0)
       {
         int nresults = mariadb_push_wait_error(L);
-        UNREF_CO(bag->ctx);
-        FAN_RESUME(L, NULL, nresults);
+        RESUME_AND_UNREF_CO(bag->ctx, nresults);
       }
     }
     else if (ret == 0)
     {
       int count = real_query_result(L, bag->ctx);
-      UNREF_CO(bag->ctx);
-      FAN_RESUME(L, NULL, count);
+      RESUME_AND_UNREF_CO(bag->ctx, count);
     }
     else
     {
       int nresults = luamariadb_push_errno(L, bag->ctx);
-      UNREF_CO(bag->ctx);
-      FAN_RESUME(L, NULL, nresults);
+      RESUME_AND_UNREF_CO(bag->ctx, nresults);
     }
   }
   event_free(bag->event);

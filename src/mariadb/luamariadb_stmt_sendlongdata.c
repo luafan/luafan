@@ -16,8 +16,7 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata)
   if (errorcode)
   {
     int nresults = luamariadb_push_stmt_error(L, st);
-    UNREF_CO(st);
-    FAN_RESUME(L, NULL, nresults);
+    RESUME_AND_UNREF_CO(st, nresults);
   }
   else
   {
@@ -29,21 +28,18 @@ static void stmt_send_long_data_event(int fd, short event, void *_userdata)
                           bag->extra) != 0)
       {
         int nresults = mariadb_push_wait_error(L);
-        UNREF_CO(st);
-        FAN_RESUME(L, NULL, nresults);
+        RESUME_AND_UNREF_CO(st, nresults);
       }
     }
     else if (ret == 0)
     {
       int count = stmt_send_long_data_result(L, st);
-      UNREF_CO(st);
-      FAN_RESUME(L, NULL, count);
+      RESUME_AND_UNREF_CO(st, count);
     }
     else
     {
       int nresults = luamariadb_push_stmt_error(L, st);
-      UNREF_CO(st);
-      FAN_RESUME(L, NULL, nresults);
+      RESUME_AND_UNREF_CO(st, nresults);
     }
   }
 

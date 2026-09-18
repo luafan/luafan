@@ -38,8 +38,7 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata)
   if (errorcode)
   {
     int nresults = luamariadb_push_stmt_error(L, st);
-    UNREF_CO(st);
-    FAN_RESUME(L, NULL, nresults);
+    RESUME_AND_UNREF_CO(st, nresults);
   }
   else
   {
@@ -55,8 +54,7 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata)
       else
       {
         int nresults = mariadb_push_wait_error(L);
-        UNREF_CO(st);
-        FAN_RESUME(L, NULL, nresults);
+        RESUME_AND_UNREF_CO(st, nresults);
         /* skip_unref stays 0: bag->extra is released below. */
       }
     }
@@ -65,14 +63,12 @@ static void stmt_prepare_cont(int fd, short event, void *_userdata)
       stmt_prepare_result(L, st);
 
       lua_rawgeti(L, LUA_REGISTRYINDEX, bag->extra);
-      UNREF_CO(st);
-      FAN_RESUME(L, NULL, 1);
+      RESUME_AND_UNREF_CO(st, 1);
     }
     else
     {
       int nresults = luamariadb_push_errno(L, st->ctx);
-      UNREF_CO(st);
-      FAN_RESUME(L, NULL, nresults);
+      RESUME_AND_UNREF_CO(st, nresults);
     }
   }
 

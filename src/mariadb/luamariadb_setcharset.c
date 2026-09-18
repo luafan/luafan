@@ -14,21 +14,18 @@ static void set_character_set_cont(int fd, short event, void *_userdata)
                         bag->extra) != 0)
     {
       int nresults = mariadb_push_wait_error(L);
-      UNREF_CO(bag->ctx);
-      FAN_RESUME(L, NULL, nresults);
+      RESUME_AND_UNREF_CO(bag->ctx, nresults);
     }
   }
   else if (ret == 0)
   {
     lua_pushboolean(L, 1);
-    UNREF_CO(bag->ctx);
-    FAN_RESUME(L, NULL, 1);
+    RESUME_AND_UNREF_CO(bag->ctx, 1);
   }
   else
   {
     int nresults = luamariadb_push_errno(L, bag->ctx);
-    UNREF_CO(bag->ctx);
-    FAN_RESUME(L, NULL, nresults);
+    RESUME_AND_UNREF_CO(bag->ctx, nresults);
   }
 
   event_free(bag->event);

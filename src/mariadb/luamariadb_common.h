@@ -4,6 +4,7 @@
 #include "../utlua.h"
 #include "../luasql.h"
 #include <mysql/mysql.h>
+#include <pthread.h>
 
 // Constants and macros
 #define MARIADB_CONNECTION_METATABLE "MARIADB_CONNECTION_METATABLE"
@@ -139,7 +140,53 @@
   lua_unlock(L);                                      \
 } while(0)
 
+/* Releases the object's reference to the parked coroutine, but only *after*
+ * resuming it.
+ *
+ * The slot taken by REF_CO is the only strong reference to the suspended
+ * coroutine, so it has to stay valid across FAN_RESUME: with the unref in front
+ * of the resume another thread's GC could collect the coroutine and the resume
+ * would continue on freed memory -- the very order R17 had to fix in the
+ * WebSocket path. The resumed Lua code may free the object itself (connection,
+ * cursor or statement), so the slot is detached from it *before* the resume and
+ * unref'd from a local afterwards; never touch (x) after the resume. */
+#define RESUME_AND_UNREF_CO(x, nresults) do {                 \
+  int resume_held_coref = LUA_NOREF;                          \
+  lua_lock(L);                                                \
+  if ((x)->coref != LUA_NOREF)                                \
+  {                                                           \
+    (x)->coref_count--;                                       \
+    if ((x)->coref_count == 0)                                \
+    {                                                         \
+      resume_held_coref = (x)->coref;                         \
+      (x)->coref = LUA_NOREF;                                 \
+    }                                                         \
+  }                                                           \
+  lua_unlock(L);                                              \
+  FAN_RESUME(L, NULL, (nresults));                            \
+  if (resume_held_coref != LUA_NOREF)                         \
+  {                                                           \
+    lua_lock(L);                                              \
+    luaL_unref(L, LUA_REGISTRYINDEX, resume_held_coref);      \
+    lua_unlock(L);                                            \
+  }                                                           \
+} while(0)
+
 // Structure definitions
+struct DB_STATUS;
+
+/* Pending-wait context: everything a wait needs to be armed, claimed and
+ * accounted for, allocated on the heap instead of living inside DB_CTX (see the
+ * reference-count note in luamariadb.c). */
+typedef struct
+{
+  pthread_mutex_t mutex;   // guards waits/state/in_flight, refs is atomic
+  pthread_cond_t cond;     // signalled when in_flight drops (close drain)
+  int refs;                // DB_CTX's reference plus one per armed/claimed wait
+  int in_flight;           // claims whose continuation has not returned, all threads
+  struct DB_STATUS *waits; // armed waits of one connection
+} DB_PENDING;
+
 typedef struct
 {
   short closed;
@@ -147,9 +194,24 @@ typedef struct
   int coref;
   int coref_count;
   int worker_id;
+  /* Async waits still armed for this connection, and the accounting the close
+   * drain needs. The base of ctx->worker_id may be run by another worker thread,
+   * so the arming thread, the dispatching loop thread and the closing thread all
+   * touch this object. It is reference counted and owned by this userdata, but
+   * outlives it while a claim is still in flight: the resumed coroutine is the
+   * only strong reference to the connection, so the GC may finalize this
+   * userdata before the dispatcher left its claim (see luamariadb.c). */
+  DB_PENDING *pending;
 } DB_CTX;
 
-typedef struct
+/* Pending wait, one per armed async operation. Owned by the arming thread until
+ * wait_for_status() publishes it, then by whichever dispatcher claims it (see
+ * wait_for_status_locked_cb / mariadb_cancel_pending_waits in luamariadb.c).
+ * `ctx` is what the continuation needs while it runs; `pending` is what the
+ * dispatcher is allowed to touch after it returned (the connection userdata may
+ * be gone by then). The bag holds one reference on `pending` for as long as it
+ * exists; the claim inherits it and the dispatcher releases it. */
+typedef struct DB_STATUS
 {
   lua_State *L;
   void *data;
@@ -157,8 +219,21 @@ typedef struct
   struct event *event;
   event_callback_fn callback;
   DB_CTX *ctx;
+  DB_PENDING *pending;    // reference-counted accounting (see DB_PENDING)
   int extra;
+  int defer_retries;      // dispatches handed back until the coroutine yielded
+  struct DB_STATUS *next; // next armed wait on pending->waits
+  int state;              // WAIT_ARMED / WAIT_DISPATCHING while on pending->waits
 } DB_STATUS;
+
+/* Claim state of a DB_STATUS, guarded by DB_PENDING.mutex. A wait is only ever
+ * claimed once, so the event's own dispatch and the close drain can never run
+ * (and free) the same bag. */
+enum
+{
+  WAIT_ARMED = 1,      // armed, published on pending->waits, nobody dispatched it
+  WAIT_DISPATCHING = 2 // claimed by exactly one dispatcher, which owns the bag
+};
 
 typedef struct
 {
@@ -196,12 +271,31 @@ extern int LONG_DATA;
 // Core utility functions (implemented in luamariadb.c)
 DB_CTX *getconnection(lua_State *L);
 int luamariadb_push_errno(lua_State *L, DB_CTX *ctx);
+/* Creates the pending-wait context of a connection (refs = 1, owned by it), and
+ * takes/drops one reference on it. The last reference destroys the mutex, the
+ * condition variable and the memory (see luamariadb.c). */
+DB_PENDING *mariadb_pending_new(void);
+DB_PENDING *mariadb_pending_ref(DB_PENDING *pending);
+void mariadb_pending_unref(DB_PENDING *pending);
 /* Registers the async wait event for `status` on the base of ctx->worker_id.
  * Returns 0 when the wait event is armed (the caller must yield), non-zero when
  * it could not be armed (the caller must restore its own coroutine instead of
- * yielding, otherwise the operation hangs forever). */
+ * yielding, otherwise the operation hangs forever).
+ *
+ * Arming and publishing the wait on ctx->pending is one critical section (the
+ * pending context's mutex): the event base of ctx->worker_id may belong to
+ * another worker thread, so from the moment event_add() returns that thread can
+ * dispatch the wait, and the arming thread must not touch the bag after it. */
 int wait_for_status(lua_State *L, DB_CTX *ctx, void *data, int status, event_callback_fn callback, int extra);
 int mariadb_push_wait_error(lua_State *L);
+/* Marks `ctx` closed under the pending context's mutex. Callers must do this
+ * *before* mariadb_cancel_pending_waits(), so that no wait can be armed between
+ * the drain and the mysql_close*() that releases the connection internals. */
+void mariadb_close_begin(DB_CTX *ctx);
+/* Aborts every async wait still armed for `ctx`, resuming each suspended call
+ * with (nil, error). Callers must mark ctx closed first (mariadb_close_begin),
+ * so no new wait can be armed while the list drains (see luamariadb_close.c). */
+void mariadb_cancel_pending_waits(DB_CTX *ctx);
 
 // Statement utility functions (implemented in luamariadb_stmt.c)
 STMT_CTX *getstatement(lua_State *L);

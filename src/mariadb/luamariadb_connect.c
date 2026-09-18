@@ -20,8 +20,7 @@ static void real_connect_cont(int fd, short event, void *_userdata)
     else
     {
       int nresults = mariadb_push_wait_error(L);
-      UNREF_CO(bag->ctx);
-      FAN_RESUME(L, NULL, nresults);
+      RESUME_AND_UNREF_CO(bag->ctx, nresults);
       /* skip_unref stays 0: bag->extra is released below. */
     }
   }
@@ -32,17 +31,15 @@ static void real_connect_cont(int fd, short event, void *_userdata)
 
     lua_lock(L);
     lua_rawgeti(L, LUA_REGISTRYINDEX, bag->extra);
-    UNREF_CO(bag->ctx);
     lua_unlock(L);
-    FAN_RESUME(L, NULL, 1);
+    RESUME_AND_UNREF_CO(bag->ctx, 1);
   }
   else
   {
     lua_lock(L);
     int nresults = luamariadb_push_errno(L, bag->ctx);
-    UNREF_CO(bag->ctx);
     lua_unlock(L);
-    FAN_RESUME(L, NULL, nresults);
+    RESUME_AND_UNREF_CO(bag->ctx, nresults);
   }
 
   if (!skip_unref)
@@ -80,6 +77,14 @@ LUA_API int real_connect_start(lua_State *L)
 
   DB_CTX *ctx = (DB_CTX *)lua_newuserdata(L, sizeof(DB_CTX));
   memset(ctx, 0, sizeof(DB_CTX));
+  /* The pending-wait context this connection shares with the loop thread that
+   * dispatches its waits and the thread that closes it (see luamariadb.c). Its
+   * reference count starts at 1, owned by this userdata. */
+  ctx->pending = mariadb_pending_new();
+  if (ctx->pending == NULL)
+  {
+    return luaL_error(L, "out of memory");
+  }
   ctx->coref = LUA_NOREF;
   ctx->worker_id = requested_worker;
 
