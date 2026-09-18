@@ -156,7 +156,11 @@ test_httpd_performance.lua
 for standalone_name in $STANDALONE_TESTS; do
     standalone_path="$SCRIPT_DIR/lua/$standalone_name"
     if [ ! -f "$standalone_path" ]; then
-        echo -e "${YELLOW}⊝ $standalone_name not found - skipped${NC}"
+        # A name in this list without a file means the suite silently lost
+        # coverage (rename or typo), so it must fail the run instead of skipping.
+        echo -e "${RED}✗ $standalone_name not found${NC}"
+        TESTS_RUN=$((TESTS_RUN + 1))
+        TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
         continue
     fi
 

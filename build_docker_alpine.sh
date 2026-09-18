@@ -4,6 +4,12 @@
 # environments differ only in starting cwd, so we normalize to /opt below.
 # Uses POSIX sh (busybox ash), not bash -- keep it portable.
 set -eux
+# A pipeline reports only its last command's status, so `tar ... | tar ...` could
+# fail unnoticed. POSIX sh has no pipefail, but the shells that actually run this
+# (busybox ash in the image, bash in CI) do support it -- enable it where it
+# exists. dash (used by `sh script.sh` on the CI host) rejects the option, so the
+# probe keeps that path working exactly as before.
+(set -o pipefail) 2>/dev/null && set -o pipefail || true
 
 TZ=Asia/Shanghai
 ln -snf /usr/share/zoneinfo/$TZ /etc/localtime

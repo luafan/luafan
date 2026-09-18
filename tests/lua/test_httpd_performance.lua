@@ -107,8 +107,12 @@ suite:test("concurrent_requests_all_complete", function()
         local start = fan.gettime()
         for _ = 1, CONCURRENT_REQUESTS do
             coroutine.wrap(function()
-                local response = http.get(url(server, "/fast"))
-                if response and response.responseCode == 200 then
+                -- pcall: an error raised after this coroutine was resumed (i.e.
+                -- after it yielded inside http.get) would otherwise escape into
+                -- the event loop instead of being reported by the assertions
+                -- below; the request then just counts as not completed.
+                local ok, response = pcall(http.get, url(server, "/fast"))
+                if ok and response and response.responseCode == 200 then
                     succeeded = succeeded + 1
                 end
                 completed = completed + 1

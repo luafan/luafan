@@ -96,8 +96,10 @@ fan.loop(function()
     print("query_result=" .. tostring(query_result))
     print("query_err=" .. tostring(query_err))
     -- Aborted (not merely "no crash"): the suspended execute() was still parked
-    -- when close() ran and came back with (nil, error).
-    if parked_before_close and query_done and query_result == nil then
+    -- when close() ran and came back with (nil, error) -- the error matters: a
+    -- bare (nil, nil) would mean the call was resumed without a diagnosis.
+    if parked_before_close and query_done and query_result == nil
+        and query_err ~= nil then
         print("PENDING_QUERY_ABORTED_ON_CLOSE")
     end
 
@@ -177,7 +179,8 @@ fan.loop(function()
     print("stmt_done=" .. tostring(stmt_done))
     print("stmt_result=" .. tostring(stmt_result))
     print("stmt_err=" .. tostring(stmt_err))
-    if parked_before_close and stmt_done and stmt_result == nil then
+    if parked_before_close and stmt_done and stmt_result == nil
+        and stmt_err ~= nil then
         print("PENDING_STMT_ABORTED_ON_CLOSE")
     end
 
@@ -300,8 +303,11 @@ suite:test("mariadb_connectivity_check", function()
         TestFramework.skip_test("MariaDB not reachable (start: cd tests && ./docker-setup.sh start)")
         return
     end
-    pcall(function() conn:close() end)
-    TestFramework.assert_true(true)
+    -- Assert the handle is actually usable, not just that connect() returned:
+    -- an unconditional assert_true(true) passes even if close() raises.
+    local closed, close_err = pcall(function() conn:close() end)
+    TestFramework.assert_true(closed,
+        "close() on a freshly connected handle must succeed: " .. tostring(close_err))
 end)
 
 fan.loop(function()

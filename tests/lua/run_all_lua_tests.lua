@@ -355,10 +355,12 @@ local function run_test_file(filename)
             return false
         end
     else
-        -- Test completed without calling exit (shouldn't happen normally)
-        print(string.format("? %s completed without exit", filename))
-        passed_files = passed_files + 1
-        return true
+        -- A curated test that returns without os.exit() reported no result: it
+        -- may have skipped its own assertions entirely (an early `return` in a
+        -- helper) or lost its loop, so counting it as a pass hides regressions.
+        print(string.format("✗ %s completed without calling exit", filename))
+        failed_files = failed_files + 1
+        return false
     end
 end
 
