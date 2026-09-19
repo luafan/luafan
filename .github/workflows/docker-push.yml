@@ -1,19 +1,15 @@
 name: Docker Push
 
 on:
-  schedule:
-    - cron: '0 0 * * 1'
-  workflow_dispatch:
-    inputs:
-      target:
-        description: 'Which image to build and push'
-        required: true
-        default: 'both'
-        type: choice
-        options:
-          - both
-          - ubuntu
-          - alpine
+  workflow_run:
+    workflows: ["LuaFan CI"]
+    types: [completed]
+    branches: [master]
+
+# Images are published only for a successful CI push on master. The workflow
+# checks the source run's event explicitly so pull-request CI cannot publish.
+permissions:
+  contents: read
 
 # Multi-arch build strategy:
 #   1. Per-arch job runs on a NATIVE runner (ubuntu-22.04 for amd64,
@@ -26,34 +22,11 @@ on:
 # Reference: https://docs.docker.com/build/ci/github-actions/multi-platform/
 
 jobs:
-  check-changes:
-    runs-on: ubuntu-22.04
-    if: github.event_name == 'schedule'
-    outputs:
-      has_changes: ${{ steps.check.outputs.has_changes }}
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v6
-      with:
-        fetch-depth: 0
-
-    - name: Check for commits in the past week
-      id: check
-      run: |
-        if git log --since="7 days ago" --oneline | grep -q .; then
-          echo "has_changes=true" >> $GITHUB_OUTPUT
-        else
-          echo "has_changes=false" >> $GITHUB_OUTPUT
-        fi
-
   # ---------------- Ubuntu ----------------
   build-ubuntu:
-    needs: [check-changes]
-    if: |
-      always() && (
-        github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'ubuntu') ||
-        github.event_name == 'schedule' && needs.check-changes.outputs.has_changes == 'true'
-      )
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -66,8 +39,10 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
-    - name: Checkout code
+    - name: Checkout tested commit
       uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.workflow_run.head_sha }}
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -106,10 +81,7 @@ jobs:
 
   merge-ubuntu:
     needs: [build-ubuntu]
-    # Explicit gate: GHA's default success() propagates transitive 'skipped'
-    # from check-changes on workflow_dispatch; we only care whether the
-    # direct build actually succeeded.
-    if: always() && needs.build-ubuntu.result == 'success'
+    if: needs.build-ubuntu.result == 'success'
     runs-on: ubuntu-22.04
     steps:
     - name: Download digests
@@ -133,7 +105,7 @@ jobs:
       run: |
         docker buildx imagetools create \
           -t luafan/luafan-ubuntu:latest \
-          -t luafan/luafan-ubuntu:${{ github.sha }} \
+          -t luafan/luafan-ubuntu:${{ github.event.workflow_run.head_sha }} \
           $(printf 'luafan/luafan-ubuntu@sha256:%s ' *)
 
     - name: Inspect image
@@ -148,16 +120,13 @@ jobs:
           -H "Authorization: Bearer $GH_TOKEN" \
           -H "Accept: application/vnd.github+json" \
           https://api.github.com/repos/luafan/webase/dispatches \
-          -d '{"event_type":"luafan-ubuntu-updated","client_payload":{"luafan_sha":"${{ github.sha }}"}}'
+          -d '{"event_type":"luafan-ubuntu-updated","client_payload":{"luafan_sha":"${{ github.event.workflow_run.head_sha }}"}}'
 
   # ---------------- Alpine ----------------
   build-alpine:
-    needs: [check-changes]
-    if: |
-      always() && (
-        github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'alpine') ||
-        github.event_name == 'schedule' && needs.check-changes.outputs.has_changes == 'true'
-      )
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -170,8 +139,10 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
-    - name: Checkout code
+    - name: Checkout tested commit
       uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.workflow_run.head_sha }}
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -209,10 +180,7 @@ jobs:
 
   merge-alpine:
     needs: [build-alpine]
-    # Explicit gate: GHA's default success() propagates transitive 'skipped'
-    # from check-changes on workflow_dispatch; we only care whether the
-    # direct build actually succeeded.
-    if: always() && needs.build-alpine.result == 'success'
+    if: needs.build-alpine.result == 'success'
     runs-on: ubuntu-22.04
     steps:
     - name: Download digests
@@ -236,7 +204,7 @@ jobs:
       run: |
         docker buildx imagetools create \
           -t luafan/luafan-alpine:latest \
-          -t luafan/luafan-alpine:${{ github.sha }} \
+          -t luafan/luafan-alpine:${{ github.event.workflow_run.head_sha }} \
           $(printf 'luafan/luafan-alpine@sha256:%s ' *)
 
     - name: Inspect image
@@ -251,4 +219,4 @@ jobs:
           -H "Authorization: Bearer $GH_TOKEN" \
           -H "Accept: application/vnd.github+json" \
           https://api.github.com/repos/luafan/webase/dispatches \
-          -d '{"event_type":"luafan-alpine-updated","client_payload":{"luafan_sha":"${{ github.sha }}"}}'
+          -d '{"event_type":"luafan-alpine-updated","client_payload":{"luafan_sha":"${{ github.event.workflow_run.head_sha }}"}}'
