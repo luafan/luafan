@@ -869,10 +869,20 @@ int event_mgr_init() {
  * the hand-off pair below: the calling thread still owns every lock level it
  * holds, and parked in here it would never release them. */
 static void event_mgr_loop_run(int claim_main_owner) {
-    int expected = EVENT_MGR_LIFECYCLE_IDLE;
-    if (!atomic_compare_exchange_strong(&lifecycle_state, &expected,
-                                        EVENT_MGR_LIFECYCLE_RUNNING)) {
-        return;
+    int expected = atomic_load(&lifecycle_state);
+    for (;;) {
+        /* A loop may be entered again before the embedder performs the
+         * post-lua_close final cleanup. The bases are intentionally still
+         * alive in PENDING_FINAL_CLEANUP, so treat that state as reusable
+         * rather than rejecting the historical loop/loopbreak contract. */
+        if (expected != EVENT_MGR_LIFECYCLE_IDLE &&
+            expected != EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP) {
+            return;
+        }
+        if (atomic_compare_exchange_weak(&lifecycle_state, &expected,
+                                         EVENT_MGR_LIFECYCLE_RUNNING)) {
+            break;
+        }
     }
 
     event_mgr_init();
