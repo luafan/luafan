@@ -135,17 +135,8 @@ if [ -f "$LOCK_TEST" ]; then
     fi
 fi
 
-# Suites that need their own process (and therefore their own event loop), because
-# they cannot work inside the curated runner above:
-#   (a) they start a file-scope fan.loop() and end it with fan.loopbreak()/os.exit();
-#       a break inside such a nested loop also ends the runner's loop, which
-#       silently truncates the run (no summary, exit code still 0);
-#   (b) they drive the loop themselves with a bare fan.loop(), which makes no
-#       progress nested inside the runner's loop (their helpers return nil), even
-#       though they pass in a fresh process.
-# Each one runs here as its own process, in the same lock shape as the rest of the
-# suite -- same treatment as the lock granularity step above. Keep this list in
-# sync with the note in lua/run_all_lua_tests.lua.
+# Only native crash/UAF guards, independently-sized worker pools, and the
+# mainevent lifetime guard require a separate process.
 STANDALONE_TESTS="
 test_tcpd_concurrent_lifecycle.lua
 test_udpd_event_lifecycle.lua
@@ -154,14 +145,7 @@ test_httpd_websocket_lifecycle.lua
 test_mariadb_pending_event.lua
 test_mariadb_workers.lua
 test_mariadb_pending_owner.lua
-test_evdns_integration.lua
 test_luafan_mainevent_lifetime.lua
-test_httpd_lifecycle_regressions.lua
-test_httpd_rfc_regressions.lua
-test_http_client.lua
-test_httpd_compliance.lua
-test_httpd_security.lua
-test_httpd_performance.lua
 "
 for standalone_name in $STANDALONE_TESTS; do
     standalone_path="$SCRIPT_DIR/lua/$standalone_name"
