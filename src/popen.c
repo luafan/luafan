@@ -36,6 +36,23 @@ typedef struct {
     int closed;
 } POPEN;
 
+static POPEN *popen_check(lua_State *L, int index) {
+    POPEN **slot = (POPEN **)luaL_checkudata(L, index, LUA_POPEN_TYPE);
+    if (!*slot) {
+        luaL_error(L, "popen is closed");
+    }
+    return *slot;
+}
+
+static void popen_cleanup_owner(POPEN *p);
+static void popen_cleanup_owner_cb(evutil_socket_t fd, short what, void *arg) {
+    (void)fd;
+    (void)what;
+    POPEN *p = (POPEN *)arg;
+    popen_cleanup_owner(p);
+    free(p);
+}
+
 static void popen_try_disconnected(POPEN *p, const char *reason) {
     // Only fire when both stdout and stderr events are gone
     if (p->stdout_ev || p->stderr_ev) return;
@@ -224,10 +241,10 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     }
     lua_pop(L, 1);
 
+    // Unspecified worker keeps the process events on the main event base.
     int worker_id = -1;
     lua_getfield(L, 1, "worker");
-    int worker_specified = !lua_isnil(L, -1);
-    if (worker_specified) {
+    if (!lua_isnil(L, -1)) {
         if (!lua_isinteger(L, -1)) {
             lua_pop(L, 1);
             return luaL_error(L, "popen worker must be an integer");
@@ -240,9 +257,6 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
         worker_id = w;
     }
     lua_pop(L, 1);
-    if (!worker_specified && event_mgr_worker_count() > 0) {
-        worker_id = event_mgr_next_worker();
-    }
 
     // Optional dedicated process group lets close() terminate shell descendants.
     int process_group = 0;
@@ -444,9 +458,20 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     fcntl(pipe_stdout[0], F_SETFL, O_NONBLOCK);
     if (capture_stderr) fcntl(pipe_stderr[0], F_SETFL, O_NONBLOCK);
 
-    // Create userdata
-    POPEN *p = (POPEN *)lua_newuserdata(L, sizeof(POPEN));
-    memset(p, 0, sizeof(POPEN));
+    // Create userdata and an independent native context. Events never retain
+    // the Lua userdata address, so foreign GC can safely hand off the context.
+    POPEN **slot = (POPEN **)lua_newuserdata(L, sizeof(POPEN *));
+    *slot = NULL;
+    POPEN *p = (POPEN *)calloc(1, sizeof(POPEN));
+    if (!p) {
+        close(pipe_stdin[1]);
+        close(pipe_stdout[0]);
+        if (capture_stderr) close(pipe_stderr[0]);
+        kill(pid, SIGTERM);
+        waitpid(pid, NULL, 0);
+        return luaL_error(L, "out of memory");
+    }
+    *slot = p;
     p->stdin_fd = pipe_stdin[1];
     p->stdout_fd = pipe_stdout[0];
     p->stderr_fd = capture_stderr ? pipe_stderr[0] : -1;
@@ -471,19 +496,29 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     // Register read events with separate callbacks
     if (p->onReadRef != LUA_NOREF) {
         p->stdout_ev = event_new(popen_base, p->stdout_fd, EV_PERSIST | EV_READ, popen_stdout_cb, p);
-        event_add(p->stdout_ev, NULL);
+        if (!p->stdout_ev || event_add(p->stdout_ev, NULL) < 0) {
+            goto setup_error;
+        }
     }
 
     if (capture_stderr && p->onStderrRef != LUA_NOREF) {
         p->stderr_ev = event_new(popen_base, p->stderr_fd, EV_PERSIST | EV_READ, popen_stderr_cb, p);
-        event_add(p->stderr_ev, NULL);
+        if (!p->stderr_ev || event_add(p->stderr_ev, NULL) < 0) {
+            goto setup_error;
+        }
     }
 
     return 1;
+
+setup_error:
+    popen_cleanup_owner(p);
+    *slot = NULL;
+    free(p);
+    return luaL_error(L, "failed to set up popen events");
 }
 
 LUA_API int luafan_popen_send(lua_State *L) {
-    POPEN *p = luaL_checkudata(L, 1, LUA_POPEN_TYPE);
+    POPEN *p = popen_check(L, 1);
     size_t data_len;
     const char *data = luaL_optlstring(L, 2, NULL, &data_len);
 
@@ -513,7 +548,7 @@ LUA_API int luafan_popen_send(lua_State *L) {
 }
 
 LUA_API int luafan_popen_close_stdin(lua_State *L) {
-    POPEN *p = luaL_checkudata(L, 1, LUA_POPEN_TYPE);
+    POPEN *p = popen_check(L, 1);
 
     if (p->stdin_fd >= 0) {
         close(p->stdin_fd);
@@ -524,22 +559,17 @@ LUA_API int luafan_popen_close_stdin(lua_State *L) {
     return 1;
 }
 
-LUA_API int luafan_popen_close(lua_State *L) {
-    POPEN *p = luaL_checkudata(L, 1, LUA_POPEN_TYPE);
-
-    if (p->closed) {
-        lua_pushboolean(L, 1);
-        return 1;
-    }
+static void popen_cleanup_owner(POPEN *p) {
+    if (!p || p->closed || !event_mgr_is_current_owner(p->worker_id)) return;
     p->closed = 1;
 
-    CLEAR_REF(L, p->onReadRef)
-    CLEAR_REF(L, p->onStderrRef)
-    CLEAR_REF(L, p->onDisconnectedRef)
-
+    if (p->mainthread) {
+        CLEAR_REF(p->mainthread, p->onReadRef)
+        CLEAR_REF(p->mainthread, p->onStderrRef)
+        CLEAR_REF(p->mainthread, p->onDisconnectedRef)
+    }
     if (p->stdout_ev) { event_free(p->stdout_ev); p->stdout_ev = NULL; }
     if (p->stderr_ev) { event_free(p->stderr_ev); p->stderr_ev = NULL; }
-
     if (p->stdin_fd >= 0) { close(p->stdin_fd); p->stdin_fd = -1; }
     if (p->stdout_fd >= 0) { close(p->stdout_fd); p->stdout_fd = -1; }
     if (p->stderr_fd >= 0) { close(p->stderr_fd); p->stderr_fd = -1; }
@@ -553,29 +583,48 @@ LUA_API int luafan_popen_close(lua_State *L) {
             usleep(10000);
             ret = waitpid(p->child_pid, &status, WNOHANG);
         }
-        // A shell may exit on SIGTERM while one of its descendants ignores it.
-        // Kill the whole dedicated group once more before releasing the handle.
         if (p->process_group) {
             kill(signal_pid, SIGKILL);
         } else if (ret == 0) {
             kill(signal_pid, SIGKILL);
         }
-        if (ret == 0) {
-            waitpid(p->child_pid, &status, 0);
-        }
+        if (ret == 0) waitpid(p->child_pid, &status, 0);
         p->child_pid = -1;
     }
+}
 
+LUA_API int luafan_popen_close(lua_State *L) {
+    POPEN *p = popen_check(L, 1);
+
+    // Keep the closed state object until __gc so close() remains idempotent.
+    // Native resources and callback refs are already released by cleanup;
+    // retaining this small object prevents a second close/send from touching
+    // freed memory while still allowing __gc to free it exactly once.
+    popen_cleanup_owner(p);
     lua_pushboolean(L, 1);
     return 1;
 }
 
 LUA_API int luafan_popen_gc(lua_State *L) {
-    return luafan_popen_close(L);
+    POPEN **slot = (POPEN **)luaL_checkudata(L, 1, LUA_POPEN_TYPE);
+    POPEN *p = *slot;
+    *slot = NULL;
+    if (!p) return 0;
+    if (!event_mgr_is_current_owner(p->worker_id)) {
+        if (event_mgr_worker_once_internal(p->worker_id,
+                                           popen_cleanup_owner_cb, p) != 0) {
+            LOGE("popen owner cleanup dispatch failed (owner=%d); retaining native resources",
+                 p->worker_id);
+        }
+        return 0;
+    }
+    popen_cleanup_owner(p);
+    free(p);
+    return 0;
 }
 
 LUA_API int luafan_popen_getpid(lua_State *L) {
-    POPEN *p = luaL_checkudata(L, 1, LUA_POPEN_TYPE);
+    POPEN *p = popen_check(L, 1);
     if (p->child_pid > 0) {
         lua_pushinteger(L, p->child_pid);
     } else {
@@ -585,7 +634,7 @@ LUA_API int luafan_popen_getpid(lua_State *L) {
 }
 
 LUA_API int luafan_popen_is_alive(lua_State *L) {
-    POPEN *p = luaL_checkudata(L, 1, LUA_POPEN_TYPE);
+    POPEN *p = popen_check(L, 1);
 
     if (p->child_pid <= 0) {
         lua_pushboolean(L, 0);

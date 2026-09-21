@@ -7,6 +7,9 @@
 typedef struct tcpd_server {
     struct evconnlistener *listener;
     lua_State *mainthread;
+    // Strong registry pin while listener callback may still reference server.
+    int self_ref;
+    int cleanup_requested;
 
     int onAcceptRef;
     int onSSLHostNameRef;

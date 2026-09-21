@@ -73,6 +73,7 @@ jobs:
           luarocks zlib1g-dev libsqlite3-dev
         luarocks install lzlib
         luarocks install lua-cjson 2.1.0-1
+        luarocks install luafilesystem
         luarocks install lsqlite3
 
     - name: Build MariaDB client from source
@@ -116,6 +117,7 @@ jobs:
         LUAFAN_CORE_LOCK_HOOK: "ON"
         LUAFAN_TESTING: "ON"
         LUAFAN_LUA_BIN: /usr/local/bin/lua
+        LUAN_TEST_WORKERS: "4"
       run: |
         export PATH=/usr/local/bin:$PATH
         lua -v

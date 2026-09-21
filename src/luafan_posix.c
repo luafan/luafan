@@ -60,12 +60,25 @@ LUA_API int luafan_setsid(lua_State *L) {
 extern char *__progname;
 #endif
 
+/* Keep the process name in a buffer of our own and only re-point __progname at
+ * it. __progname points into the process's initial argv/env string block (glibc,
+ * musl), so writing a fixed 128 bytes through it destroys whatever follows --
+ * on Linux that is the environment itself: getenv("PATH") starts returning NULL
+ * and every child process spawned afterwards loses its environment. Re-pointing
+ * is what the platform's own setprogname() does and is safe here: __progname is
+ * a writable pointer object (glibc: .data, musl: char *). */
 LUA_API int luafan_setprogname(lua_State *L) {
 #if TARGET_OS_IOS == 0
+    static char fan_progname[128];
     size_t size = 0;
     const char *name = luaL_checklstring(L, 1, &size);
-    memset(__progname, 0, 128);
-    strncpy(__progname, name, 127 > size ? size : 127);
+
+    if (size > sizeof(fan_progname) - 1) {
+        size = sizeof(fan_progname) - 1;
+    }
+    memcpy(fan_progname, name, size);
+    fan_progname[size] = '\0';
+    __progname = fan_progname;
 #endif
 
     return 0;

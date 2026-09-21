@@ -185,3 +185,15 @@ sudo apt-get install -y libluajit-5.1-dev
 - **macOS**: May need to specify OpenSSL path explicitly
 - **Alpine Linux**: Use `musl-dev` instead of `libc6-dev`
 - **ARM64**: Architecture detection should work automatically with `uname -m`
+- **Alpine Linux / musl on aarch64 (MariaDB)**: `fan.mariadb` is built on MariaDB's
+  non-blocking API (`mysql_real_connect_start()` & co.), which needs a `my_context`
+  implementation. musl ships the `ucontext.h` *declarations* but no implementation, and
+  `include/my_context.h` then falls back to `MY_CONTEXT_DISABLE`, whose
+  `my_context_init()` always fails — `mysql_options(MYSQL_OPT_NONBLOCK)` leaves the async
+  context NULL and `mysql_real_connect_start()` dereferences it (SIGSEGV). Link the
+  client library against [libucontext](https://github.com/kaniini/libucontext)
+  (`apk add libucontext libucontext-dev`, `-DCMAKE_SHARED_LINKER_FLAGS="-lucontext"`) to
+  get a working ucontext; x86_64 musl uses the GCC inline-asm implementation instead and
+  is unaffected. With the fix missing, `mariadb.connect()` now reports
+  `LuaSQL: mariadb: client library without a non-blocking API
+  (mysql_options(MYSQL_OPT_NONBLOCK) failed)` rather than crashing.

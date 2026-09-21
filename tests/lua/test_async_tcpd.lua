@@ -312,6 +312,41 @@ suite:test("worker_affinity_server", function()
     close_server(server)
 end)
 
+-- 8. Client userdata must stay pinned while its bufferevent is active, even
+-- when the Lua caller drops its last external reference before callbacks run.
+suite:test("client_gc_does_not_drop_active_bufferevent", function()
+    local got = false
+    local server, port = bind_server({
+        host = "127.0.0.1", port = 0,
+        onaccept = function(_, apt)
+            apt:bind{
+                onread = function(conn, buf)
+                    if tostring(buf) == "gc-pin" then
+                        conn:send("gc-pin-ok")
+                    end
+                end,
+            }
+        end,
+    })
+
+    do
+        local client = tcpd.connect{
+            host = "127.0.0.1", port = port,
+            onread = function(_, buf)
+                if tostring(buf) == "gc-pin-ok" then got = true end
+            end,
+            ondisconnected = function() end,
+        }
+        assert(client, "connect failed")
+        client:send("gc-pin")
+    end
+    collectgarbage("collect")
+
+    assert(wait_until(function() return got end, 10),
+        "active client callback was lost after external userdata reference was collected")
+    close_server(server)
+end)
+
 -- 8. Two servers on distinct ports are independent.
 suite:test("two_servers_independent", function()
     local got_a, got_b = false, false
@@ -350,7 +385,28 @@ suite:test("two_servers_independent", function()
     close_server(srv_b)
 end)
 
--- 9. onaccept arity contract. Every accept must hand the callback
+-- 9. Explicit server close releases the listener so the same port can bind again.
+suite:test("server_close_releases_listener", function()
+    local first, port = bind_server{
+        host = "127.0.0.1", port = 0,
+        onaccept = function(_, accept)
+            if accept then accept:close() end
+        end,
+    }
+    assert(first and port and port > 0, "initial bind failed")
+    first:close()
+
+    local second = tcpd.bind{
+        host = "127.0.0.1", port = port,
+        onaccept = function(_, accept)
+            if accept then accept:close() end
+        end,
+    }
+    assert(second, "same port could not be rebound after server:close()")
+    second:close()
+end)
+
+-- 10. onaccept arity contract. Every accept must hand the callback
 -- (server, accept) -- always arity 2 under callback_self_first. The documented
 -- failed-accept path (kernel hand-over that cannot be set up locally) hands
 -- (server, nil); it must never deliver a bare nil in first position, which

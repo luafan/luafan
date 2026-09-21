@@ -26,9 +26,6 @@ static void real_connect_cont(int fd, short event, void *_userdata)
   }
   else if (ret == conn)
   {
-    char value = 1;
-    mysql_options(conn, MYSQL_OPT_RECONNECT, &value);
-
     lua_lock(L);
     lua_rawgeti(L, LUA_REGISTRYINDEX, bag->extra);
     lua_unlock(L);
@@ -90,10 +87,32 @@ LUA_API int real_connect_start(lua_State *L)
 
   luasql_setmeta(L, MARIADB_CONNECTION_METATABLE);
 
-  mysql_init(&ctx->my_conn);
+  /* The whole module is built on the non-blocking client API: mysql_options()
+   * only creates the async context when the client library was compiled with a
+   * working my_context implementation (ucontext / win32 fibers / x86 GCC asm).
+   * Without one, every mysql_*_start() below dereferences that NULL context and
+   * kills the process (musl + aarch64 without libucontext), so refuse to hand
+   * out a connection instead of crashing later. */
+  if (mysql_init(&ctx->my_conn) == NULL)
+  {
+    /* Nothing to close: mark it closed so conn_gc only drops `pending`. */
+    ctx->closed = 1;
+    return luaL_error(L, LUASQL_PREFIX "mariadb: mysql_init failed");
+  }
   char value = 1;
-  mysql_options(&ctx->my_conn, MYSQL_OPT_NONBLOCK, 0);
-  mysql_options(&ctx->my_conn, MYSQL_OPT_RECONNECT, &value);
+  if (mysql_options(&ctx->my_conn, MYSQL_OPT_NONBLOCK, 0) != 0)
+  {
+    /* conn_gc() closes the half-built connection and releases `pending`. */
+    return luaL_error(L, LUASQL_PREFIX
+                             "mariadb: client library without a non-blocking "
+                             "API (mysql_options(MYSQL_OPT_NONBLOCK) failed)");
+  }
+  if (mysql_options(&ctx->my_conn, MYSQL_OPT_RECONNECT, &value) != 0)
+  {
+    /* Do not enter the async state machine with an option the client rejected. */
+    return luaL_error(L, LUASQL_PREFIX
+                             "mariadb: MYSQL_OPT_RECONNECT failed");
+  }
 
   /* fill in structure */
   ctx->closed = 0;
@@ -118,7 +137,8 @@ LUA_API int real_connect_start(lua_State *L)
   }
   else if (ret == &ctx->my_conn)
   {
-    mysql_options(&ctx->my_conn, MYSQL_OPT_RECONNECT, &value);
+    /* MYSQL_OPT_RECONNECT was set (and its error checked) before the connect
+     * started; the connect completing synchronously changes nothing about it. */
     return 1;
   }
   else

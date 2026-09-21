@@ -211,6 +211,10 @@ int udpd_base_conn_init(udpd_base_conn_t *conn, udpd_conn_type_t type, lua_State
     conn->read_ev = NULL;
     conn->write_ev = NULL;
     conn->worker_id = -1;
+    conn->self_ref = LUA_NOREF;
+    conn->cleanup_pending = 0;
+    conn->cleaned_up = 0;
+    conn->finalized = 0;
     conn->dns_request = NULL;
 
     // Recursive mutex so cleanup may run nested under callbacks that
@@ -227,12 +231,24 @@ int udpd_base_conn_init(udpd_base_conn_t *conn, udpd_conn_type_t type, lua_State
 
 // Clean up base connection
 void udpd_base_conn_cleanup(udpd_base_conn_t *conn) {
-    if (!conn) return;
+    if (!conn || conn->cleaned_up) return;
+
+    // Cancel DNS first. Its native callback owns the final request free and
+    // still uses conn as callback context until that callback runs. Do not
+    // destroy any connection state until that callback has completed.
+    if (conn->dns_request) {
+        conn->cleanup_pending = 1;
+        udpd_dns_cancel_resolution(conn);
+        return;
+    }
 
     // Clear Lua references
     if (conn->mainthread) {
         CLEAR_REF(conn->mainthread, conn->onReadRef);
         CLEAR_REF(conn->mainthread, conn->onSendReadyRef);
+        if (conn->self_ref != LUA_NOREF) {
+            CLEAR_REF(conn->mainthread, conn->self_ref);
+        }
 
         // Clean up REF_STATE reference
         REF_STATE_CLEAR(conn);
@@ -280,10 +296,21 @@ void udpd_base_conn_cleanup(udpd_base_conn_t *conn) {
     // Clean up configuration
     udpd_config_cleanup(&conn->config);
 
-    // Update state
+    // Update state and make cleanup idempotent for explicit close followed by
+    // Lua finalization.
     conn->state = UDPD_CONN_DISCONNECTED;
+    conn->cleanup_pending = 0;
+    conn->cleaned_up = 1;
+}
 
-    // No further events can fire — destroy the mutex.
+// Finalize storage-owned synchronization after Lua __gc has run the native
+// cleanup path. Explicit close deliberately does not call this: Lua methods
+// can still observe the closed userdata before its finalizer runs.
+void udpd_base_conn_finalize(udpd_base_conn_t *conn) {
+    if (!conn) return;
+    if (__sync_bool_compare_and_swap(&conn->finalized, 0, 1) == false) {
+        return;
+    }
     pthread_mutex_destroy(&conn->event_mutex);
 }
 

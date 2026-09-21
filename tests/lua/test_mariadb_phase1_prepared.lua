@@ -282,3 +282,4 @@ if failures > 0 then
 end
 
 print("✅ All MariaDB Phase 1 - Prepared Statements tests completed successfully!")
+os.exit(0) -- run_all_lua_tests.lua counts a file without os.exit() as failed

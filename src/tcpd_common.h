@@ -5,6 +5,12 @@
 #include <event2/bufferevent.h>
 #include <pthread.h>
 
+// Every TCPD bufferevent uses libevent's own lock. Proxy/tunnel callbacks may
+// write a target connection while its owner loop drains the output buffer.
+// UNLOCK_CALLBACKS is required because callbacks resume Lua and may re-enter
+// operations on the same bufferevent; its lock is not recursive.
+#define TCPD_BEV_FLAGS (BEV_OPT_THREADSAFE | BEV_OPT_UNLOCK_CALLBACKS)
+
 // Forward declarations
 struct tcpd_config;
 struct tcpd_ssl_context;
@@ -58,6 +64,9 @@ typedef struct tcpd_config {
 typedef struct tcpd_base_conn {
     // Core connection data
     struct bufferevent *buf;
+    // Stable event-base owner: -1 is the main base, >= 0 is worker N.
+    // It is selected when the connection is created and never changes.
+    int owner_worker_id;
     // Serialises publication and invalidation of `buf` between the worker
     // thread (eventcb / cleanup, which destroy the bev) and external callers
     // such as tcpd_conn_send (which may run on the Lua main thread).
@@ -108,6 +117,7 @@ typedef struct {
 int tcpd_config_init(tcpd_config_t *config);
 int tcpd_config_set_defaults(tcpd_config_t *config);
 int tcpd_config_from_lua_table(lua_State *L, int table_index, tcpd_config_t *config);
+int tcpd_conn_is_current_owner(const tcpd_base_conn_t *conn);
 
 int tcpd_base_conn_init(tcpd_base_conn_t *conn, tcpd_conn_type_t type, lua_State *L);
 void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn);

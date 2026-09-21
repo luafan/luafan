@@ -15,6 +15,19 @@
 static struct event_base *base = NULL;
 static struct evdns_base *dnsbase = NULL;
 
+enum event_mgr_lifecycle_state {
+    EVENT_MGR_LIFECYCLE_IDLE = 0,
+    EVENT_MGR_LIFECYCLE_RUNNING,
+    EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP,
+    EVENT_MGR_LIFECYCLE_FINALIZING
+};
+
+/* The loop teardown has two phases: event_mgr_loop_run() releases DNS and
+ * workers while Lua is alive, then the embedder runs lua_close() and calls
+ * event_mgr_loop_cleanup() to release event bases. No other cleanup path may
+ * cross that boundary or free the main base early. */
+static _Atomic int lifecycle_state = EVENT_MGR_LIFECYCLE_IDLE;
+
 static int signal_count = 0;
 static struct event signal_int;
 static struct event signal_pipe;
@@ -856,6 +869,22 @@ int event_mgr_init() {
  * the hand-off pair below: the calling thread still owns every lock level it
  * holds, and parked in here it would never release them. */
 static void event_mgr_loop_run(int claim_main_owner) {
+    int expected = atomic_load(&lifecycle_state);
+    for (;;) {
+        /* A loop may be entered again before the embedder performs the
+         * post-lua_close final cleanup. The bases are intentionally still
+         * alive in PENDING_FINAL_CLEANUP, so treat that state as reusable
+         * rather than rejecting the historical loop/loopbreak contract. */
+        if (expected != EVENT_MGR_LIFECYCLE_IDLE &&
+            expected != EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP) {
+            return;
+        }
+        if (atomic_compare_exchange_weak(&lifecycle_state, &expected,
+                                         EVENT_MGR_LIFECYCLE_RUNNING)) {
+            break;
+        }
+    }
+
     event_mgr_init();
     if (claim_main_owner) {
         main_owner_thread = pthread_self();
@@ -900,6 +929,7 @@ static void event_mgr_loop_run(int claim_main_owner) {
 
     looping = 0;
     initialized = 0;
+    atomic_store(&lifecycle_state, EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP);
 }
 
 /* ---- Lua-lock hand-off around the blocking loop --------------------------
@@ -960,12 +990,38 @@ int event_mgr_loop_later_cleanup() {
 }
 
 void event_mgr_cleanup() {
+    int expected = EVENT_MGR_LIFECYCLE_IDLE;
+
+    /* A loop teardown owns the bases from loop entry until the embedder calls
+     * event_mgr_loop_cleanup(). Do not let a second cleanup path free them in
+     * that interval. */
+    if (!atomic_compare_exchange_strong(&lifecycle_state, &expected,
+                                        EVENT_MGR_LIFECYCLE_FINALIZING)) {
+        return;
+    }
+
     if (initialized) {
         full_cleanup();
     }
+    atomic_store(&lifecycle_state, EVENT_MGR_LIFECYCLE_IDLE);
 }
 
 void event_mgr_loop_cleanup() {
+    int expected = atomic_load(&lifecycle_state);
+    for (;;) {
+        /* A standalone C test may create a base without entering the loop.
+         * Preserve that historical cleanup contract while still rejecting a
+         * running or already-finalizing lifecycle. */
+        if (expected != EVENT_MGR_LIFECYCLE_IDLE &&
+            expected != EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP) {
+            return;
+        }
+        if (atomic_compare_exchange_weak(&lifecycle_state, &expected,
+                                         EVENT_MGR_LIFECYCLE_FINALIZING)) {
+            break;
+        }
+    }
+
     // Signal events borrow the main base and event_del() reads ev_base before
     // it can report an inactive event. Remove them before freeing the base;
     // cleanup_signal_events() is idempotent for repeated shutdown paths.
@@ -974,6 +1030,7 @@ void event_mgr_loop_cleanup() {
     // so all bevs created on these bases have been removed.
     event_mgr_workers_free_bases();
     cleanup_eventbase();
+    atomic_store(&lifecycle_state, EVENT_MGR_LIFECYCLE_IDLE);
 }
 
 // Check if we are currently in a loop without starting one

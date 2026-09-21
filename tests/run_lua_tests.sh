@@ -46,6 +46,15 @@ cd "$SCRIPT_DIR"
 export LUA_PATH="$PROJECT_ROOT/modules/?.lua;$PROJECT_ROOT/modules/?/init.lua;$SCRIPT_DIR/lua/framework/?.lua;$SCRIPT_DIR/lua/?.lua;;"
 export LUA_CPATH="$SCRIPT_DIR/build/?.so;$PROJECT_ROOT/?.so;;"
 
+# The HTTP client loads modules/config.lua, which requires LuaFileSystem.
+# Fail once with an actionable dependency message instead of repeating the same
+# missing-module failure for every standalone HTTPD suite.
+if ! $LUA_CMD -e "require('lfs')" >/dev/null 2>&1; then
+    echo -e "${RED}Error: LuaFileSystem (module 'lfs') is required by the HTTP client tests.${NC}"
+    echo "Install it with: luarocks install luafilesystem"
+    exit 1
+fi
+
 # Check if LuaFan is available and report the lock mode of this run
 echo "Checking LuaFan availability..."
 if ! $LUA_CMD -e "require('fan')" >/dev/null 2>&1; then
@@ -126,17 +135,8 @@ if [ -f "$LOCK_TEST" ]; then
     fi
 fi
 
-# Suites that need their own process (and therefore their own event loop), because
-# they cannot work inside the curated runner above:
-#   (a) they start a file-scope fan.loop() and end it with fan.loopbreak()/os.exit();
-#       a break inside such a nested loop also ends the runner's loop, which
-#       silently truncates the run (no summary, exit code still 0);
-#   (b) they drive the loop themselves with a bare fan.loop(), which makes no
-#       progress nested inside the runner's loop (their helpers return nil), even
-#       though they pass in a fresh process.
-# Each one runs here as its own process, in the same lock shape as the rest of the
-# suite -- same treatment as the lock granularity step above. Keep this list in
-# sync with the note in lua/run_all_lua_tests.lua.
+# Only native crash/UAF guards, independently-sized worker pools, and the
+# mainevent lifetime guard require a separate process.
 STANDALONE_TESTS="
 test_tcpd_concurrent_lifecycle.lua
 test_udpd_event_lifecycle.lua
@@ -144,19 +144,17 @@ test_udpd_send_ready_race.lua
 test_httpd_websocket_lifecycle.lua
 test_mariadb_pending_event.lua
 test_mariadb_workers.lua
-test_evdns_integration.lua
+test_mariadb_pending_owner.lua
 test_luafan_mainevent_lifetime.lua
-test_httpd_lifecycle_regressions.lua
-test_httpd_rfc_regressions.lua
-test_http_client.lua
-test_httpd_compliance.lua
-test_httpd_security.lua
-test_httpd_performance.lua
 "
 for standalone_name in $STANDALONE_TESTS; do
     standalone_path="$SCRIPT_DIR/lua/$standalone_name"
     if [ ! -f "$standalone_path" ]; then
-        echo -e "${YELLOW}⊝ $standalone_name not found - skipped${NC}"
+        # A name in this list without a file means the suite silently lost
+        # coverage (rename or typo), so it must fail the run instead of skipping.
+        echo -e "${RED}✗ $standalone_name not found${NC}"
+        TESTS_RUN=$((TESTS_RUN + 1))
+        TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
         continue
     fi
 

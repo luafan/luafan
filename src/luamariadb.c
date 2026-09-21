@@ -187,8 +187,9 @@ static void wait_in_flight_leave(DB_PENDING *pending)
  * dropped, because a level-triggered fd would re-fire immediately and spin the
  * loop instead of letting the arming thread finish. The retries are bounded --
  * a status that never becomes LUA_YIELD (dead coroutine, e.g. a yield that
- * raised instead of suspending) falls through to the old behaviour, so the
- * claim is always released and the connection can still be closed.
+ * raised instead of suspending) is dropped by wait_defer_abandon() once the
+ * tries are used up instead of being resumed, so the claim is always released
+ * and the connection can still be closed.
  *
  * On a stock core the lock comes from event_mgr's resume wrapper
  * (locking_resume()), which holds it across the whole lua_resume(), so the
@@ -197,10 +198,12 @@ static void wait_in_flight_leave(DB_PENDING *pending)
 #define WAIT_DEFER_FAST_USEC 1000 /* 1 ms: the arming thread was preempted */
 #define WAIT_DEFER_FAST_TRIES 50
 #define WAIT_DEFER_SLOW_USEC 5000 /* 5 ms: it is doing something long */
+/* ~1.05 s of handing the wait back, after which it is dropped (see above). */
 #define WAIT_DEFER_MAX_TRIES (WAIT_DEFER_FAST_TRIES + 200)
 
 static void wait_dispatch(DB_STATUS *bag, int fd, short event, int claimed);
 static void wait_defer_retry_cb(int fd, short event, void *_userdata);
+static void wait_cancel_on_owner_cb(int fd, short event, void *_userdata);
 
 /* Hand a claimed wait back to its own loop as a pure timer. Only the owner of
  * the bag (the thread that claimed it) calls this, from the loop that runs the
@@ -230,6 +233,24 @@ static int wait_defer_retry(DB_STATUS *bag)
   }
   bag->defer_retries++;
   return 0;
+}
+
+/* Terminal cleanup for a wait that can never be dispatched: its coroutine never
+ * suspends (dead coroutine) or its retry timer could not be re-armed. Releases
+ * the claim, so a close still sees in_flight at zero, frees the bag and its
+ * event and never resumes anything. Runs on the thread that owns the bag's
+ * base, exactly like the two dispatchers below. */
+static void wait_defer_abandon(DB_STATUS *bag)
+{
+  DB_PENDING *pending = bag->pending;
+  if (bag->event != NULL)
+  {
+    event_del(bag->event);
+    event_free(bag->event);
+  }
+  wait_in_flight_leave(pending);
+  mariadb_pending_unref(pending);
+  free(bag);
 }
 
 /* Dispatcher shared by the socket event and the deferral timer. `claimed` tells
@@ -271,14 +292,29 @@ static void wait_dispatch(DB_STATUS *bag, int fd, short event, int claimed)
    * back to the loop and come back once it did (see "Deferred dispatch"). */
   if (lua_status(L) != LUA_YIELD)
   {
+    /* Never resume an active or dead coroutine as a timeout fallback. LUA_OK
+     * can mean that the arming C call still owns the coroutine, and a dead
+     * coroutine cannot be resumed at all. Keep handing the wait back to the
+     * owner loop's timer instead -- the normal path reaches LUA_YIELD on the
+     * next pass -- but only for a bounded number of tries: a coroutine that
+     * never suspends (a yield that raised instead of suspending) would
+     * otherwise retry for ever and keep its claim, the retry timer and the bag
+     * alive for good, which also makes the connection unclosable. */
     if (bag->defer_retries < WAIT_DEFER_MAX_TRIES && wait_defer_retry(bag) == 0)
     {
       lua_unlock(L);
       return;
     }
     LOGE("mariadb: wait dispatched while its coroutine is not suspended "
-         "(status=%d, deferred=%d); resuming it anyway\n",
+         "(status=%d, deferred=%d); dropping the wait\n",
          lua_status(L), bag->defer_retries);
+    lua_unlock(L);
+    /* Terminal: this coroutine can never be resumed safely, so drop the wait --
+     * release the claim, free the bag and its event. The parked call stays
+     * suspended; nothing else may be left behind, because a raised in_flight
+     * would block every later close in wait_for_foreign_continuations(). */
+    wait_defer_abandon(bag);
+    return;
   }
 
   wait_dispatch_depth++;
@@ -382,6 +418,7 @@ int wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
   bag->callback = callback;
   bag->ctx = ctx;
   bag->pending = mariadb_pending_ref(pending);
+  bag->owner_worker_id = ctx->worker_id;
   bag->extra = extra;
   bag->next = NULL;
   bag->state = WAIT_ARMED;
@@ -424,6 +461,23 @@ int wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
   pending->waits = bag;
   pthread_mutex_unlock(&pending->mutex);
   return 0;
+}
+
+/* Run a close-cancelled continuation on the event base that owns its event.
+ * The close caller may be another worker, so it must not invoke the callback or
+ * free the event directly. The claim keeps bag and pending alive until this job
+ * returns. */
+static void wait_cancel_on_owner_cb(int fd, short event, void *_userdata)
+{
+  DB_STATUS *bag = (DB_STATUS *)_userdata;
+  DB_PENDING *pending = bag->pending;
+  if (bag->event != NULL)
+  {
+    event_del(bag->event);
+  }
+  bag->callback(fd, event, bag);
+  wait_in_flight_leave(pending);
+  mariadb_pending_unref(pending);
 }
 
 /*
@@ -547,19 +601,41 @@ void mariadb_cancel_pending_waits(DB_CTX *ctx)
     }
     pthread_mutex_unlock(&pending->mutex);
 
-    /* We are now the only dispatcher of this bag. Replaying the continuation
-     * runs it against the still-open connection: it fails to re-arm (closed
-     * context) and takes its "cannot park on an event" branch -- resume with
-     * (nil, error), release the coroutine reference for its own object type,
-     * free the bag and its event. Keeping the replay here (instead of letting
-     * the event fire later) is what keeps the connection alive until every
-     * pending continuation is done, which is what mysql_close*() needs. */
-    lua_State *L = bag->L;
-    lua_lock(L);
-    bag->callback(0, 0, bag);
-    lua_unlock(L);
-    wait_in_flight_leave(pending);
-    mariadb_pending_unref(pending);
+    /* The event and bag belong to the worker base that armed them. Replaying
+     * here would let a foreign thread call event_free() on that event and race
+     * its owner loop. Queue the cancellation continuation on the owner instead;
+     * the claim and pending reference keep the bag alive until that job runs.
+     * The internal hand-off is the one that also survives a shutdown which
+     * already closed the user-level dispatch gate: the owner base's own drain
+     * runs the job right after its loop broke (event_mgr_drain_internal_jobs).
+     * It is only used while the loop still runs -- once the pool stopped, its
+     * bases are drained and joined, so a queued job would never run and this
+     * close would block in wait_for_foreign_continuations() forever. */
+    int handed_off = 0;
+    if (event_mgr_is_current_owner(bag->owner_worker_id))
+    {
+      wait_cancel_on_owner_cb(0, 0, bag);
+      handed_off = 1;
+    }
+    else if (event_mgr_is_loop_running())
+    {
+      handed_off = event_mgr_worker_once_internal(bag->owner_worker_id,
+                                                  wait_cancel_on_owner_cb,
+                                                  bag) == 0;
+    }
+
+    if (!handed_off)
+    {
+      /* No owner thread can run the job: the loop has stopped, or the hand-off
+       * could not allocate it. Replay the continuation here -- what the drain
+       * did before waits had an owner. It is the only option left that neither
+       * leaves the wait armed, which would let it fire after mysql_close*()
+       * released the connection (the R19/R20 use-after-free). */
+      LOGE("mariadb: owner base %d cannot run the pending wait cancellation "
+           "(loop_running=%d); replaying it locally\n",
+           bag->owner_worker_id, event_mgr_is_loop_running());
+      wait_cancel_on_owner_cb(0, 0, bag);
+    }
   }
 
   /* A continuation that another thread dispatched before this close started may

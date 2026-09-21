@@ -41,7 +41,7 @@ suite:test("stderr_capture", TestFramework.async_test(function()
     local stderr_data = ""
 
     local proc = popen.spawn({
-        command = {"bash", "-c", "echo out; echo err >&2"},
+        command = {"/bin/sh", "-c", "echo out; echo err >&2"},
         onread = function(data)
             stdout_data = stdout_data .. data
         end,
@@ -83,7 +83,7 @@ suite:test("exit_nonzero", TestFramework.async_test(function()
     local exit_code = nil
 
     local proc = popen.spawn({
-        command = {"bash", "-c", "exit 42"},
+        command = {"/bin/sh", "-c", "exit 42"},
         onread = function() end,
         ondisconnected = function(msg, code)
             exit_code = code
@@ -130,9 +130,30 @@ suite:test("close_process_group", TestFramework.async_test(function()
     end
     TestFramework.assert_not_nil(child_pid, "child pid was not reported")
     proc:close()
-    fan.sleep(0.05)
-    local alive = fan.kill(child_pid, 0)
-    TestFramework.assert_false(alive == true, "process-group child is still alive")
+
+    local function process_is_running(pid)
+        local stat_file = io.open("/proc/" .. tostring(pid) .. "/stat", "r")
+        if stat_file then
+            local stat = stat_file:read("*a")
+            stat_file:close()
+            local state = stat:match("%) (%a) ")
+            if state == "Z" then
+                return false
+            end
+        end
+        local alive = fan.kill(pid, 0)
+        return alive == true
+    end
+
+    local alive = true
+    for _ = 1, 20 do
+        fan.sleep(0.05)
+        alive = process_is_running(child_pid)
+        if not alive then
+            break
+        end
+    end
+    TestFramework.assert_false(alive, "process-group child is still alive")
 end))
 
 -- Test: large output
@@ -141,7 +162,7 @@ suite:test("large_output", TestFramework.async_test(function()
     local expected = 100 * 1024  -- 100KB
 
     local proc = popen.spawn({
-        command = {"bash", "-c", "dd if=/dev/zero bs=1024 count=100 2>/dev/null"},
+        command = {"/bin/sh", "-c", "dd if=/dev/zero bs=1024 count=100 2>/dev/null"},
         onread = function(data)
             total_received = total_received + #data
         end,
@@ -215,7 +236,7 @@ suite:test("concurrent_processes", TestFramework.async_test(function()
     for i = 1, 3 do
         local idx = i
         local proc = popen.spawn({
-            command = {"bash", "-c", "echo proc" .. idx},
+            command = {"/bin/sh", "-c", "echo proc" .. idx},
             onread = function(data)
                 results[idx] = data
             end,

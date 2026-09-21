@@ -1,11 +1,19 @@
-FROM luafan/luafan-ubuntu:local_base
+# Incremental local builder. The base image contains the toolchain and
+# third-party dependencies; only the current luafan checkout is rebuilt.
+ARG BASE_IMAGE=luafan/luafan-ubuntu:local_base
+FROM ${BASE_IMAGE}
 
-ENV LUAFAN_VERSION=0.7-3
+ARG LUAFAN_VERSION=0.7-3
+ENV LUAFAN_VERSION=${LUAFAN_VERSION}
 
+WORKDIR /root/luafan
 COPY . /root/luafan/
-RUN cd /root/luafan \
-    && CFLAGS="-g -O2" \
-       luarocks make luafan-$LUAFAN_VERSION.rockspec \
-       MARIADB_DIR=/usr/local/mysql \
-       CURL_INCDIR=/usr/include/$(uname -m)-linux-gnu \
-    && cd .. && rm -rf luafan
+
+# Keep source compilation incremental at the Docker layer level while making
+# the architecture-specific include paths explicit for arm64 and x86_64.
+RUN CFLAGS="-g -O2" \
+    luarocks make "luafan-${LUAFAN_VERSION}.rockspec" \
+    MARIADB_DIR=/usr/local/mysql \
+    CURL_INCDIR="/usr/include/$(uname -m)-linux-gnu" \
+    && cd /root \
+    && rm -rf /root/luafan

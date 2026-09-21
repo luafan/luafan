@@ -191,7 +191,10 @@ listening on tcp socket.
 ---------
 `serv` apis
 
-* `close()` shutdown the server.
+* `close()` shutdown the server. A live listener is a daemon resource and must be
+  explicitly closed when the Lua server object is no longer needed; this releases
+  the listener, callback references, and Unix socket path. The native lifetime pin
+  intentionally keeps a live listener valid until `close()` is called.
 * `rebind()` rebind the same host/port.(e.g. resume back in mobile device, rebind port.)
 
 ---------

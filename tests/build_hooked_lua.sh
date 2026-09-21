@@ -36,8 +36,22 @@ set -e
 
 here=$(cd "$(dirname "$0")" && pwd)
 LUA_VERSION="${1:-${LUA_VERSION:-5.3.3}}"
-LUAFAN_SRC="${2:-${LUAFAN_SRC:-$(dirname "$here")/src}}"
+src_arg="${2:-${LUAFAN_SRC:-$(dirname "$here")/src}}"
 PREFIX="${3:-${PREFIX:-/usr/local}}"
+invoked_from=$(pwd)
+
+# Resolve both paths *now*: the script cd's into a scratch tree before it copies
+# the hook files and before `make install`, so a relative argument (CI passes
+# "src") would stop resolving there and the copy would fail with
+# "cp: cannot stat 'src/fan_lua_lock.c': No such file or directory".
+if ! LUAFAN_SRC=$(cd "$src_arg" 2>/dev/null && pwd); then
+    echo "build_hooked_lua: luafan src dir not found: $src_arg" >&2
+    exit 1
+fi
+case "$PREFIX" in
+    /*) ;;
+    *)  PREFIX="$invoked_from/$PREFIX" ;;
+esac
 
 # The R18 threadyield override (see src/fan_lua_lock.h) must recompute the
 # interpreter's local frame base, and that expression differs per Lua version.

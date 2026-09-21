@@ -17,10 +17,28 @@ typedef struct {
 
     lua_State *mainthread;
     int worker_id;
+    int closed;
 
     struct event *read_ev;
     struct event *write_ev;
 } FIFO;
+
+static FIFO *fifo_check(lua_State *L, int index) {
+    FIFO **slot = (FIFO **)luaL_checkudata(L, index, LUA_FIFO_CONNECTION_TYPE);
+    if (!*slot) {
+        luaL_error(L, "fifo is closed");
+    }
+    return *slot;
+}
+
+static void fifo_cleanup_owner(FIFO *fifo);
+static void fifo_cleanup_owner_cb(evutil_socket_t fd, short what, void *arg) {
+    (void)fd;
+    (void)what;
+    FIFO *fifo = (FIFO *)arg;
+    fifo_cleanup_owner(fifo);
+    free(fifo);
+}
 
 static void fifo_write_cb(evutil_socket_t fd, short event, void *arg) {
     FIFO *fifo = (FIFO *)arg;
@@ -174,8 +192,13 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
         }
     }
 
-    FIFO *fifo = (FIFO *)lua_newuserdata(L, sizeof(FIFO));
-    memset(fifo, 0, sizeof(FIFO));
+    FIFO **slot = (FIFO **)lua_newuserdata(L, sizeof(FIFO *));
+    *slot = NULL;
+    FIFO *fifo = (FIFO *)calloc(1, sizeof(FIFO));
+    if (!fifo) {
+        return luaL_error(L, "out of memory");
+    }
+    *slot = fifo;
     fifo->socket = -1;
 
     fifo->name = strdup(fifoname);
@@ -184,6 +207,7 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
     lua_setmetatable(L, -2);
     fifo->mainthread = utlua_mainthread(L);
     fifo->worker_id = worker_id;
+    fifo->closed = 0;
     // fifo->read_ev = NULL;
     // fifo->write_ev = NULL;
     // fifo->name = NULL;
@@ -221,6 +245,12 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
 
     int socket = open(fifoname, rwmodei | O_NONBLOCK, 0);
     if (socket == -1) {
+        CLEAR_REF(L, fifo->onReadRef)
+        CLEAR_REF(L, fifo->onSendReadyRef)
+        CLEAR_REF(L, fifo->onDisconnectedRef)
+        free(fifo->name);
+        free(fifo);
+        *slot = NULL;
         lua_pushnil(L);
         lua_pushstring(L, strerror(errno));
         return 2;
@@ -268,11 +298,13 @@ setup_error:
     CLEAR_REF(L, fifo->onDisconnectedRef)
     free(fifo->name);
     fifo->name = NULL;
+    free(fifo);
+    *slot = NULL;
     return luaL_error(L, "failed to set up FIFO events");
 }
 
 LUA_API int luafan_fifo_send_request(lua_State *L) {
-    FIFO *fifo = luaL_checkudata(L, 1, LUA_FIFO_CONNECTION_TYPE);
+    FIFO *fifo = fifo_check(L, 1);
 
     if (fifo->write_ev) {
         event_add(fifo->write_ev, NULL);
@@ -291,7 +323,7 @@ LUA_API int luafan_fifo_send_request(lua_State *L) {
 }
 
 LUA_API int luafan_fifo_send(lua_State *L) {
-    FIFO *fifo = luaL_checkudata(L, 1, LUA_FIFO_CONNECTION_TYPE);
+    FIFO *fifo = fifo_check(L, 1);
     size_t data_len;
     const char *data = luaL_optlstring(L, 2, NULL, &data_len);
     if (data && data_len > 0) {
@@ -346,46 +378,62 @@ after_send_disconnect:
     return 1;
 }
 
-LUA_API int luafan_fifo_close(lua_State *L) {
-    FIFO *fifo = luaL_checkudata(L, 1, LUA_FIFO_CONNECTION_TYPE);
+static void fifo_cleanup_owner(FIFO *fifo) {
+    if (!fifo || fifo->closed || !event_mgr_is_current_owner(fifo->worker_id)) return;
+    fifo->closed = 1;
 
-    CLEAR_REF(L, fifo->onReadRef)
-    CLEAR_REF(L, fifo->onSendReadyRef)
-    CLEAR_REF(L, fifo->onDisconnectedRef)
-
+    if (fifo->mainthread) {
+        CLEAR_REF(fifo->mainthread, fifo->onReadRef)
+        CLEAR_REF(fifo->mainthread, fifo->onSendReadyRef)
+        CLEAR_REF(fifo->mainthread, fifo->onDisconnectedRef)
+    }
     if (fifo->read_ev) {
         event_free(fifo->read_ev);
         fifo->read_ev = NULL;
     }
-
     if (fifo->write_ev) {
         event_free(fifo->write_ev);
         fifo->write_ev = NULL;
     }
-
     if (fifo->socket >= 0) {
         close(fifo->socket);
         fifo->socket = -1;
     }
-
-    if (fifo->delete_on_close) {
-        if (unlink(fifo->name)) {
-            if (errno != ENOENT) {
-                LOGE("unlink %s, error = %s\n", fifo->name, strerror(errno));
-            }
-        } else {
-            // printf("unlinked %s\n", fifo->name);
+    if (fifo->delete_on_close && fifo->name) {
+        if (unlink(fifo->name) && errno != ENOENT) {
+            LOGE("unlink %s, error = %s\n", fifo->name, strerror(errno));
         }
     }
-
     free(fifo->name);
     fifo->name = NULL;
+}
 
+LUA_API int luafan_fifo_close(lua_State *L) {
+    FIFO *fifo = fifo_check(L, 1);
+
+    // Keep the closed state object until __gc so close() remains idempotent.
+    // Native resources and callback refs are released exactly once here;
+    // __gc frees the small context after later method calls are impossible.
+    fifo_cleanup_owner(fifo);
     return 0;
 }
 
 LUA_API int luafan_fifo_gc(lua_State *L) {
-    return luafan_fifo_close(L);
+    FIFO **slot = (FIFO **)luaL_checkudata(L, 1, LUA_FIFO_CONNECTION_TYPE);
+    FIFO *fifo = *slot;
+    *slot = NULL;
+    if (!fifo) return 0;
+    if (!event_mgr_is_current_owner(fifo->worker_id)) {
+        if (event_mgr_worker_once_internal(fifo->worker_id,
+                                           fifo_cleanup_owner_cb, fifo) != 0) {
+            LOGE("fifo owner cleanup dispatch failed (owner=%d); retaining native resources",
+                 fifo->worker_id);
+        }
+        return 0;
+    }
+    fifo_cleanup_owner(fifo);
+    free(fifo);
+    return 0;
 }
 
 static const struct luaL_Reg fifolib[] = {

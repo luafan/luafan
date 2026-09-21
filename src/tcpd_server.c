@@ -29,6 +29,8 @@ typedef struct {
 
 // Forward declarations
 static void tcpd_accept_cleanup_on_disconnect(tcpd_accept_conn_t *accept);
+static void tcpd_server_cleanup_owner(tcpd_server_t *server);
+static void tcpd_server_cleanup_owner_cb(evutil_socket_t fd, short what, void *arg);
 
 // Server connection listener callback
 void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd,
@@ -59,8 +61,10 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     tcpd_accept_conn_t *accept = lua_newuserdata(cbs.co, sizeof(tcpd_accept_conn_t));
     memset(accept, 0, sizeof(tcpd_accept_conn_t));
 
-    // Initialize base connection
+    // Initialize base connection. Accepted connections inherit the listener's
+    // owner; they must never be rebound to a different worker implicitly.
     tcpd_base_conn_init(&accept->base, TCPD_CONN_TYPE_ACCEPT, mainthread);
+    accept->base.owner_worker_id = server->worker_id;
     accept->base.config = server->config;  // Copy server config
 
     luaL_getmetatable(cbs.co, LUA_TCPD_ACCEPT_TYPE);
@@ -87,16 +91,15 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     //
     // The accept handshake (create bev -> setcb -> enable -> onaccept) must
     // therefore complete atomically on the listener's own (main) thread. So we
-    // always bind the accepted bufferevent to the listener's base and never
-    // add BEV_OPT_THREADSAFE / BEV_OPT_UNLOCK_CALLBACKS here. (Callers that
-    // want a per-connection worker base can migrate explicitly after onaccept.)
+    // always bind the accepted bufferevent to the listener's base. The
+    // bufferevent lock still protects proxy/tunnel writes from other threads;
+    // it does not move the accept handshake or change callback affinity.
     struct event_base *accept_base = evconnlistener_get_base(listener);
     int use_worker = (event_mgr_worker_count() > 0);
     struct bufferevent *bev;
 
-    // Create bufferevent (SSL or regular). No BEV_OPT_THREADSAFE /
-    // BEV_OPT_UNLOCK_CALLBACKS: the accept handshake stays on the listener
-    // thread (see above), so the extra bev locking is unnecessary.
+    // Create bufferevent (SSL or regular). The accept handshake stays on the
+    // listener thread, so do not enable cross-thread callback flags here.
 #if TCPD_ACCEPT_FAIL_INJECT_EVERY > 0
     /* Test-only fault injection (default off): skip bufferevent creation for
      * every Nth accepted connection so the failed-accept contract documented in
@@ -339,10 +342,12 @@ LUA_API int tcpd_bind(lua_State *L) {
 
     tcpd_server_t *server = lua_newuserdata(L, sizeof(tcpd_server_t));
     memset(server, 0, sizeof(tcpd_server_t));
+    server->self_ref = LUA_NOREF;
     luaL_getmetatable(L, LUA_TCPD_SERVER_TYPE);
     lua_setmetatable(L, -2);
 
-    utlua_store_self_in_weak_table(L, server, lua_absindex(L, -1));
+    int server_index = lua_absindex(L, -1);
+    utlua_store_self_in_weak_table(L, server, server_index);
     server->mainthread = utlua_mainthread(L);
 
     // Set callbacks
@@ -392,12 +397,16 @@ LUA_API int tcpd_bind(lua_State *L) {
     server->ipv6 = lua_toboolean(L, -1);
     lua_pop(L, 1);
 
-    // Create listener
+    // Create listener. Do not create the strong native-lifetime pin until
+    // binding has succeeded; failed setup must remain collectible by Lua.
     tcpd_server_rebind(L, server);
 
     if (!server->listener) {
         return 0;
     }
+
+    lua_pushvalue(L, server_index);
+    server->self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
     if (!server->port) {
         server->port = regress_get_socket_port(evconnlistener_get_fd(server->listener));
@@ -477,7 +486,7 @@ LUA_API int tcpd_accept_send(lua_State *L) {
     pthread_mutex_lock(&accept->base.buf_mutex);
 
     struct bufferevent *buf = accept->base.buf;
-    if (!buf) {
+    if (accept->base.cleaned_up || !buf) {
         pthread_mutex_unlock(&accept->base.buf_mutex);
         lua_pushinteger(L, -1);
         return 1;
@@ -612,6 +621,52 @@ LUA_API int tcpd_accept_getpeername(lua_State *L) {
 // Server garbage collection
 static int tcpd_server_gc(lua_State *L);  // forward declaration
 
+static void tcpd_server_cleanup_owner(tcpd_server_t *server) {
+    if (!server || !event_mgr_is_current_owner(server->worker_id)) {
+        return;
+    }
+
+    if (server->mainthread) {
+        CLEAR_REF(server->mainthread, server->onAcceptRef);
+        CLEAR_REF(server->mainthread, server->onSSLHostNameRef);
+    }
+
+    if (server->listener) {
+        evconnlistener_free(server->listener);
+        server->listener = NULL;
+    }
+
+    if (server->self_ref != LUA_NOREF && server->mainthread) {
+        lua_lock(server->mainthread);
+        luaL_unref(server->mainthread, LUA_REGISTRYINDEX, server->self_ref);
+        lua_unlock(server->mainthread);
+        server->self_ref = LUA_NOREF;
+    }
+
+    if (server->host) {
+        free(server->host);
+        server->host = NULL;
+    }
+
+    if (server->unix_path) {
+        unlink(server->unix_path);
+        free(server->unix_path);
+        server->unix_path = NULL;
+    }
+
+    if (server->ssl_ctx) {
+        tcpd_ssl_context_release(server->ssl_ctx, server->mainthread);
+        server->ssl_ctx = NULL;
+    }
+    server->cleanup_requested = 0;
+}
+
+static void tcpd_server_cleanup_owner_cb(evutil_socket_t fd, short what, void *arg) {
+    (void)fd;
+    (void)what;
+    tcpd_server_cleanup_owner((tcpd_server_t *)arg);
+}
+
 // Explicit close — same as GC but callable from Lua
 static int tcpd_server_close(lua_State *L) {
     return tcpd_server_gc(L);
@@ -620,37 +675,22 @@ static int tcpd_server_close(lua_State *L) {
 static int tcpd_server_gc(lua_State *L) {
     tcpd_server_t *server = luaL_checkudata(L, 1, LUA_TCPD_SERVER_TYPE);
 
-    // Clear Lua registry callback references
-    if (server->mainthread) {
-        CLEAR_REF(server->mainthread, server->onAcceptRef);
-        CLEAR_REF(server->mainthread, server->onSSLHostNameRef);
+    if (!event_mgr_is_current_owner(server->worker_id)) {
+        if (!server->cleanup_requested) {
+            server->cleanup_requested = 1;
+            if (event_mgr_worker_once_internal(server->worker_id,
+                                               tcpd_server_cleanup_owner_cb,
+                                               server) != 0) {
+                server->cleanup_requested = 0;
+                return luaL_error(L,
+                                  "tcpd server owner cleanup dispatch failed (owner=%d)",
+                                  server->worker_id);
+            }
+        }
+        return 0;
     }
 
-    // Clean up listener
-    if (server->listener) {
-        evconnlistener_free(server->listener);
-        server->listener = NULL;
-    }
-
-    // Clean up host string
-    if (server->host) {
-        free(server->host);
-        server->host = NULL;
-    }
-
-    // Clean up unix_path
-    if (server->unix_path) {
-        unlink(server->unix_path);  // remove socket file on close
-        free(server->unix_path);
-        server->unix_path = NULL;
-    }
-
-    // Clean up SSL context
-    if (server->ssl_ctx) {
-        tcpd_ssl_context_release(server->ssl_ctx, server->mainthread);
-        server->ssl_ctx = NULL;
-    }
-
+    tcpd_server_cleanup_owner(server);
     return 0;
 }
 
@@ -658,8 +698,9 @@ static int tcpd_server_gc(lua_State *L) {
 static int tcpd_accept_conn_gc(lua_State *L) {
     tcpd_accept_conn_t *accept = luaL_checkudata(L, 1, LUA_TCPD_ACCEPT_TYPE);
 
-    // Route through the cleanup wrapper which uses the atomic cleaned_up guard
-    // to prevent double cleanup from worker eventcb + Lua GC.
+    // The cleanup wrapper may run on a foreign Lua worker: base cleanup
+    // detaches the bufferevent and queues only the native pointer to its owner.
+    // It never queues this userdata, which may be finalized immediately.
     tcpd_accept_cleanup_on_disconnect(accept);
 
     return 0;

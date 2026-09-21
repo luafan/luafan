@@ -4,6 +4,7 @@
 #include "utlua.h"
 #include "tcpd_common.h"  // Reuse common TCP/UDP configurations
 #include <event2/event.h>
+#include <event2/dns.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -89,6 +90,12 @@ typedef struct udpd_base_conn {
     // Worker thread assignment (-1 = main event_base)
     int worker_id;
 
+    // Strong registry pin while native callbacks can still use this userdata.
+    int self_ref;
+    int cleanup_pending;
+    int cleaned_up;
+    int finalized;
+
     // DNS resolution
     struct udpd_dns_request *dns_request;
 } udpd_base_conn_t;
@@ -108,6 +115,13 @@ typedef struct udpd_dns_request {
     lua_State *mainthread;
     int _ref_;
     int yielded;
+
+    // The libevent request remains alive until its callback runs after cancel.
+    struct evdns_getaddrinfo_request *native_request;
+    int cancelled;
+    int completed;
+    int starting;
+    int callback_done;
 } udpd_dns_request_t;
 
 // Configuration functions
@@ -123,6 +137,7 @@ int udpd_config_copy(udpd_config_t *dest, const udpd_config_t *src);
 // Base connection functions
 int udpd_base_conn_init(udpd_base_conn_t *conn, udpd_conn_type_t type, lua_State *L);
 void udpd_base_conn_cleanup(udpd_base_conn_t *conn);
+void udpd_base_conn_finalize(udpd_base_conn_t *conn);
 int udpd_base_conn_set_callbacks(udpd_base_conn_t *conn, lua_State *L, int table_index);
 int udpd_base_conn_create_socket(udpd_base_conn_t *conn);
 int udpd_base_conn_bind(udpd_base_conn_t *conn);
@@ -163,6 +178,7 @@ LUA_API int lua_udpd_dest_gc(lua_State *L);
 // DNS resolution functions
 udpd_dns_request_t* udpd_dns_request_create(const char *hostname, int port);
 void udpd_dns_request_cleanup(udpd_dns_request_t *request);
+void udpd_dns_cancel_resolution(udpd_base_conn_t *conn);
 int udpd_dns_resolve_for_connection(udpd_base_conn_t *conn);
 int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
                                                 struct evdns_base *dnsbase, lua_State *L);

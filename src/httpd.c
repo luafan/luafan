@@ -960,7 +960,9 @@ static struct bufferevent *bevcb(struct event_base *base, void *arg) {
     struct bufferevent *r;
     SSL_CTX *ctx = (SSL_CTX *)arg;
 
-    r = bufferevent_openssl_socket_new(base, -1, SSL_new(ctx), BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
+    r = bufferevent_openssl_socket_new(base, -1, SSL_new(ctx),
+        BUFFEREVENT_SSL_ACCEPTING,
+        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_THREADSAFE | BEV_OPT_UNLOCK_CALLBACKS);
     return r;
 }
 #endif

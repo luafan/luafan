@@ -22,13 +22,24 @@ udpd_dns_request_t* udpd_dns_request_create(const char *hostname, int port) {
     request->mainthread = NULL;
     request->_ref_ = 0;
     request->yielded = 0;
+    request->native_request = NULL;
+    request->cancelled = 0;
+    request->completed = 0;
+    request->starting = 0;
+    request->callback_done = 0;
 
     return request;
 }
 
-// Clean up DNS request
+// Clean up request-owned memory after the native callback has completed.
 void udpd_dns_request_cleanup(udpd_dns_request_t *request) {
     if (!request) return;
+
+    if (request->native_request && !request->completed) {
+        request->cancelled = 1;
+        evdns_getaddrinfo_cancel(request->native_request);
+        return;
+    }
 
     if (request->hostname) {
         free(request->hostname);
@@ -43,17 +54,50 @@ void udpd_dns_request_cleanup(udpd_dns_request_t *request) {
     free(request);
 }
 
+static void udpd_dns_request_finish(udpd_dns_request_t *request) {
+    if (!request || request->completed) return;
+    if (request->starting) {
+        request->callback_done = 1;
+        return;
+    }
+    request->completed = 1;
+    request->native_request = NULL;
+    udpd_dns_request_cleanup(request);
+}
+
+static void udpd_conn_dns_unpin(udpd_base_conn_t *conn) {
+    if (!conn || !conn->mainthread || conn->self_ref == LUA_NOREF) return;
+    lua_lock(conn->mainthread);
+    luaL_unref(conn->mainthread, LUA_REGISTRYINDEX, conn->self_ref);
+    conn->self_ref = LUA_NOREF;
+    lua_unlock(conn->mainthread);
+}
+
 // DNS resolution callback for connection establishment
 void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr) {
     udpd_base_conn_t *conn = (udpd_base_conn_t *)ptr;
 
     if (!conn) return;
 
-    // If the connection was cleaned up (GC or close) while DNS was pending,
-    // the state will have been set to DISCONNECTED and refs cleared.
-    // In that case, just free the DNS result and bail out.
-    if (conn->state == UDPD_CONN_DISCONNECTED) {
+    // Cancellation is delivered through the native callback. Do not touch Lua
+    // or the connection after close/GC requested cancellation. The connection
+    // enters RESOLVING before the native call, so DISCONNECTED is not used as
+    // a proxy for cancellation here.
+    if ((conn->dns_request && conn->dns_request->cancelled) ||
+        conn->cleanup_pending) {
         if (addr) evutil_freeaddrinfo(addr);
+        if (conn->dns_request) {
+            udpd_dns_request_finish(conn->dns_request);
+            conn->dns_request = NULL;
+        }
+        udpd_conn_dns_unpin(conn);
+        if (conn->cleanup_pending) {
+            conn->cleanup_pending = 0;
+            udpd_base_conn_cleanup(conn);
+            if (conn->cleaned_up) {
+                udpd_base_conn_finalize(conn);
+            }
+        }
         return;
     }
 
@@ -63,6 +107,11 @@ void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
     if (!L) {
         // Lua state no longer available (connection was collected)
         if (addr) evutil_freeaddrinfo(addr);
+        if (conn->dns_request) {
+            udpd_dns_request_finish(conn->dns_request);
+            conn->dns_request = NULL;
+        }
+        udpd_conn_dns_unpin(conn);
         return;
     }
 
@@ -70,10 +119,12 @@ void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
         // DNS resolution failed
         conn->state = UDPD_CONN_ERROR;
 
-        // Return error to Lua
+        // Return error to Lua (arguments under lua_lock, released before resume)
+        lua_lock(L);
         lua_pushnil(L);
         lua_pushfstring(L, "DNS resolution failed for '%s': %s",
                        conn->host, evutil_gai_strerror(errcode));
+        lua_unlock(L);
 
         FAN_RESUME(L, NULL, 2);
     } else {
@@ -95,12 +146,20 @@ void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
         if (setup_success) {
             conn->state = UDPD_CONN_READY;
 
-            // Return success to Lua - get connection object from weak table
+            // Return success to Lua - get connection object from weak table.
+            // Argument construction under lua_lock; the lock is released before
+            // FAN_RESUME, which owns it for the duration of the resume.
+            lua_lock(L);
             utlua_push_self_from_weak_table(L, conn);
-            if (lua_isnil(L, -1)) {
+            int is_nil = lua_isnil(L, -1);
+            lua_unlock(L);
+
+            if (is_nil) {
+                lua_lock(L);
                 lua_pop(L, 1); // pop nil
                 lua_pushnil(L);
                 lua_pushstring(L, "Connection object not found in weak table");
+                lua_unlock(L);
                 FAN_RESUME(L, NULL, 2);
             } else {
                 FAN_RESUME(L, NULL, 1);
@@ -108,19 +167,27 @@ void udpd_conn_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
         } else {
             conn->state = UDPD_CONN_ERROR;
 
-            // Return error to Lua
+            // Return error to Lua (arguments under lua_lock, released before resume)
+            lua_lock(L);
             lua_pushnil(L);
             lua_pushstring(L, "Failed to set up UDP connection after DNS resolution");
+            lua_unlock(L);
             FAN_RESUME(L, NULL, 2);
         }
     }
 
     REF_STATE_CLEAR(conn);
 
-    // Clean up DNS request
+    // The native callback has completed; now release the request state and
+    // the temporary userdata pin. During synchronous startup the caller still
+    // owns conn->dns_request and performs this detach after evdns returns.
     if (conn->dns_request) {
-        udpd_dns_request_cleanup(conn->dns_request);
-        conn->dns_request = NULL;
+        udpd_dns_request_t *request = conn->dns_request;
+        udpd_dns_request_finish(request);
+        if (!request->starting) {
+            conn->dns_request = NULL;
+            udpd_conn_dns_unpin(conn);
+        }
     }
 }
 
@@ -133,23 +200,35 @@ void udpd_dest_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
 
     REF_STATE_GET(request, L);
 
+    if (request->cancelled || errcode == EVUTIL_EAI_CANCEL) {
+        if (addr) evutil_freeaddrinfo(addr);
+        udpd_dns_request_finish(request);
+        return;
+    }
+
     if (!L) {
         if (addr) evutil_freeaddrinfo(addr);
-        udpd_dns_request_cleanup(request);
+        udpd_dns_request_finish(request);
         return;
     }
 
     if (errcode) {
         // DNS resolution failed
+        lua_lock(L);
         lua_pushnil(L);
         lua_pushfstring(L, "DNS resolution failed for '%s': %s",
                        request->hostname, evutil_gai_strerror(errcode));
+        lua_unlock(L);
 
         if (request->yielded) {
             FAN_RESUME(L, NULL, 2);
         }
     } else {
-        // DNS resolution successful - create destination object
+        // DNS resolution successful - create destination object.
+        // Argument construction is one multi-call sequence on the shared registry
+        // (weak-table store included), so it runs under lua_lock; the lock is
+        // released before FAN_RESUME, which owns it for the duration of the resume.
+        lua_lock(L);
         udpd_dest_t *dest = lua_newuserdata(L, sizeof(udpd_dest_t));
         luaL_getmetatable(L, LUA_UDPD_DEST_TYPE);
         lua_setmetatable(L, -2);
@@ -162,6 +241,7 @@ void udpd_dest_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
 
         // Store destination in weak table
         utlua_store_self_in_weak_table(L, dest, lua_gettop(L));
+        lua_unlock(L);
 
         evutil_freeaddrinfo(addr);
 
@@ -171,7 +251,7 @@ void udpd_dest_dns_callback(int errcode, struct evutil_addrinfo *addr, void *ptr
     }
 
     REF_STATE_CLEAR(request);
-    udpd_dns_request_cleanup(request);
+    udpd_dns_request_finish(request);
 }
 
 // DNS resolution callback for multiple destination creation
@@ -183,23 +263,35 @@ void udpd_dests_dns_callback(int errcode, struct evutil_addrinfo *addr_list, voi
 
     REF_STATE_GET(request, L);
 
+    if (request->cancelled || errcode == EVUTIL_EAI_CANCEL) {
+        if (addr_list) evutil_freeaddrinfo(addr_list);
+        udpd_dns_request_finish(request);
+        return;
+    }
+
     if (!L) {
         if (addr_list) evutil_freeaddrinfo(addr_list);
-        udpd_dns_request_cleanup(request);
+        udpd_dns_request_finish(request);
         return;
     }
 
     if (errcode) {
         // DNS resolution failed
+        lua_lock(L);
         lua_pushnil(L);
         lua_pushfstring(L, "DNS resolution failed for '%s': %s",
                        request->hostname, evutil_gai_strerror(errcode));
+        lua_unlock(L);
 
         if (request->yielded) {
             FAN_RESUME(L, NULL, 2);
         }
     } else {
-        // DNS resolution successful - create table with all destination objects
+        // DNS resolution successful - create table with all destination objects.
+        // Building the result table (including the shared weak-table store) is one
+        // multi-call sequence, so it runs under lua_lock; the lock is released
+        // before FAN_RESUME, which owns it for the duration of the resume.
+        lua_lock(L);
         lua_newtable(L);
         int table_index = 1;
 
@@ -225,6 +317,7 @@ void udpd_dests_dns_callback(int errcode, struct evutil_addrinfo *addr_list, voi
 
             addr = addr->ai_next;
         }
+        lua_unlock(L);
 
         evutil_freeaddrinfo(addr_list);
 
@@ -234,16 +327,19 @@ void udpd_dests_dns_callback(int errcode, struct evutil_addrinfo *addr_list, voi
     }
 
     REF_STATE_CLEAR(request);
-    udpd_dns_request_cleanup(request);
+    udpd_dns_request_finish(request);
 }
 
 // Resolve hostname asynchronously for connection
 int udpd_dns_resolve_for_connection(udpd_base_conn_t *conn) {
     if (!conn || !conn->host) return -1;
 
-    // Create DNS request
+    // Create DNS request.
     conn->dns_request = udpd_dns_request_create(conn->host, conn->port);
     if (!conn->dns_request) return -1;
+
+    // The caller pins the userdata before starting this native request.
+    // Keep that pin until the callback (including cancellation) completes.
 
     // Set up port string
     char portbuf[6];
@@ -263,9 +359,20 @@ int udpd_dns_resolve_for_connection(udpd_base_conn_t *conn) {
     } else {
         resolve_dnsbase = event_mgr_dnsbase();
     }
+    conn->dns_request->starting = 1;
     struct evdns_getaddrinfo_request *req =
         evdns_getaddrinfo(resolve_dnsbase, conn->host, portbuf, &hints,
                          udpd_conn_dns_callback, conn);
+    conn->dns_request->native_request = req;
+    conn->dns_request->starting = 0;
+
+    if (conn->dns_request->callback_done) {
+        udpd_dns_request_t *finished = conn->dns_request;
+        udpd_dns_request_finish(finished);
+        conn->dns_request = NULL;
+        udpd_conn_dns_unpin(conn);
+        return 0;
+    }
 
     if (!req) {
         udpd_dns_request_cleanup(conn->dns_request);
@@ -290,7 +397,7 @@ int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
         return -1;
     }
 
-    // Create DNS request
+    // Create DNS request.
     udpd_dns_request_t *request = udpd_dns_request_create(hostname, port);
     if (!request) return -1;
 
@@ -312,23 +419,32 @@ int udpd_dns_resolve_for_destination_with_evdns(const char *hostname, int port,
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
 
-    // Use provided DNS base or default
+    // Use the explicitly supplied DNS base or the main runtime DNS base.
     if (!dnsbase) {
         dnsbase = event_mgr_dnsbase();
     }
 
     // Start DNS resolution (callback may fire synchronously)
+    request->starting = 1;
     struct evdns_getaddrinfo_request *req =
         evdns_getaddrinfo(dnsbase, hostname, portbuf, &hints,
                          udpd_dest_dns_callback, request);
+    request->native_request = req;
+    request->starting = 0;
 
-    if (!req) {
-        // If req is NULL, either the callback already fired (sync completion)
-        // or there was an error. Check if the callback pushed results.
+    if (request->callback_done) {
+        udpd_dns_request_finish(request);
+        /* finish() releases request on synchronous completion. Do not inspect
+         * or clean it again below; the Lua callback has already placed the
+         * result on the stack when completion succeeded. */
         if (lua_gettop(L) > 3) {
             return lua_gettop(L) - 3;
         }
-        // Callback didn't fire — error. Clean up the request.
+        return -1;
+    }
+
+    if (!req) {
+        // If req is NULL and no callback ran, the native request failed.
         udpd_dns_request_cleanup(request);
         return -1;
     }
@@ -354,7 +470,7 @@ int udpd_dns_resolve_for_destinations_with_evdns(const char *hostname, int port,
         return -1;
     }
 
-    // Create DNS request
+    // Create DNS request.
     udpd_dns_request_t *request = udpd_dns_request_create(hostname, port);
     if (!request) return -1;
 
@@ -376,23 +492,32 @@ int udpd_dns_resolve_for_destinations_with_evdns(const char *hostname, int port,
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
 
-    // Use provided DNS base or default
+    // Use the explicitly supplied DNS base or the main runtime DNS base.
     if (!dnsbase) {
         dnsbase = event_mgr_dnsbase();
     }
 
     // Start DNS resolution for multiple addresses (callback may fire synchronously)
+    request->starting = 1;
     struct evdns_getaddrinfo_request *req =
         evdns_getaddrinfo(dnsbase, hostname, portbuf, &hints,
                          udpd_dests_dns_callback, request);
+    request->native_request = req;
+    request->starting = 0;
 
-    if (!req) {
-        // If req is NULL, either the callback already fired (sync completion)
-        // or there was an error. Check if the callback pushed results.
+    if (request->callback_done) {
+        udpd_dns_request_finish(request);
+        /* finish() releases request on synchronous completion. Do not inspect
+         * or clean it again below; the Lua callback has already placed the
+         * result on the stack when completion succeeded. */
         if (lua_gettop(L) > 3) {
             return lua_gettop(L) - 3;
         }
-        // Callback didn't fire — error. Clean up the request.
+        return -1;
+    }
+
+    if (!req) {
+        // If req is NULL and no callback ran, the native request failed.
         udpd_dns_request_cleanup(request);
         return -1;
     }
@@ -407,14 +532,14 @@ int udpd_dns_resolve_for_destinations_with_evdns(const char *hostname, int port,
     }
 }
 
-// Cancel pending DNS resolution
+// Cancel pending DNS resolution. The native callback performs final free.
 void udpd_dns_cancel_resolution(udpd_base_conn_t *conn) {
     if (!conn || !conn->dns_request) return;
 
-    // Note: libevent doesn't provide a direct way to cancel DNS requests
-    // We just clean up our state and the callback will be ignored
-    udpd_dns_request_cleanup(conn->dns_request);
-    conn->dns_request = NULL;
-
+    udpd_dns_request_t *request = conn->dns_request;
     conn->state = UDPD_CONN_DISCONNECTED;
+    if (!request->completed && request->native_request && !request->cancelled) {
+        request->cancelled = 1;
+        evdns_getaddrinfo_cancel(request->native_request);
+    }
 }

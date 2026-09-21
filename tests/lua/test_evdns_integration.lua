@@ -290,8 +290,10 @@ end)
 -- on all remaining evdns_base / bufferevent objects.
 local fan = require('fan')
 
+local failures
 fan.loop(function()
-    local failures = TestFramework.run_suite(suite)
+    failures = TestFramework.run_suite(suite)
     suite = nil
     fan.loopbreak()
 end)
+return failures

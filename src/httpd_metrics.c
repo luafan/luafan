@@ -35,15 +35,9 @@ static httpd_metrics_t g_metrics = {0};
 // Metrics update functions
 // ============================================================
 
-void metrics_init(void) {
-    /* Metrics are process-global and shared by every HTTPD instance. Only the
-     * first bind initialises them; later binds must not wipe counters that
-     * other live servers are still updating. */
-    static int initialized = 0;
-    if (initialized) {
-        return;
-    }
-    initialized = 1;
+static pthread_once_t g_metrics_once = PTHREAD_ONCE_INIT;
+
+static void metrics_initialize_once(void) {
     atomic_store(&g_metrics.requests_total, 0u);
     atomic_store(&g_metrics.requests_active, 0u);
     atomic_store(&g_metrics.bytes_sent, 0u);
@@ -62,6 +56,12 @@ void metrics_init(void) {
     atomic_store(&g_metrics.responses_4xx, 0u);
     atomic_store(&g_metrics.responses_5xx, 0u);
     g_metrics.start_time = time(NULL);
+}
+
+void metrics_init(void) {
+    /* Metrics are process-global; pthread_once prevents concurrent first-bind
+     * initialisation while preserving counters across later binds. */
+    pthread_once(&g_metrics_once, metrics_initialize_once);
 }
 
 void metrics_update_request_start(const char* method) {

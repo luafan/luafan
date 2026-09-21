@@ -220,6 +220,7 @@ typedef struct DB_STATUS
   event_callback_fn callback;
   DB_CTX *ctx;
   DB_PENDING *pending;    // reference-counted accounting (see DB_PENDING)
+  int owner_worker_id;    // event base that owns event and continuation cleanup
   int extra;
   int defer_retries;      // dispatches handed back until the coroutine yielded
   struct DB_STATUS *next; // next armed wait on pending->waits

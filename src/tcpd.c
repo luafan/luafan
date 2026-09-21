@@ -77,8 +77,6 @@ LUA_API int tcpd_connect(lua_State *L) {
 
     // Extract optional worker parameter for multi-threaded event base.
     // Unspecified worker keeps the connection on the main event base.
-    // Explicit worker selects that worker event base; invalid values are
-    // rejected instead of silently falling back to the main base.
     int worker_id = -1;
     lua_getfield(L, 1, "worker");
     if (!lua_isnil(L, -1)) {
@@ -94,6 +92,8 @@ LUA_API int tcpd_connect(lua_State *L) {
         worker_id = w;
     }
     lua_pop(L, 1);
+
+    client->base.owner_worker_id = worker_id;
 
     struct event_base *conn_base;
     struct evdns_base *conn_dnsbase;
@@ -119,7 +119,10 @@ LUA_API int tcpd_connect(lua_State *L) {
                     LOGE("SSL context configuration failed for %s:%d",
                          client->base.host ? client->base.host : "?", client->base.port);
                     free(cache_key);
-                    return 1;
+                    tcpd_client_cleanup_on_disconnect(client);
+                    lua_pushnil(L);
+                    lua_pushliteral(L, "failed to configure TCP SSL context");
+                    return 2;
                 }
 
                 // Get SSL hostname override
@@ -129,7 +132,7 @@ LUA_API int tcpd_connect(lua_State *L) {
                 client->base.buf = tcpd_ssl_create_client_bufferevent(
                     conn_base, client->base.ssl_ctx,
                     ssl_host ? ssl_host : client->base.host, client,
-                    worker_id >= 0 ? BEV_OPT_THREADSAFE | BEV_OPT_UNLOCK_CALLBACKS : 0);
+                    TCPD_BEV_FLAGS);
                 lua_pop(L, 1);
             } else {
                 LOGE("SSL context creation failed for %s:%d",
@@ -141,16 +144,24 @@ LUA_API int tcpd_connect(lua_State *L) {
         luaL_error(L, "SSL is not supported in this build");
 #endif
     } else {
-        int bev_flags = BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS;
-        if (worker_id >= 0) {
-            bev_flags |= BEV_OPT_THREADSAFE | BEV_OPT_UNLOCK_CALLBACKS;
-        }
+        int bev_flags = BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS
+            | TCPD_BEV_FLAGS;
         client->base.buf = bufferevent_socket_new(conn_base, -1, bev_flags);
     }
 
     if (!client->base.buf) {
-        return 1;
+        tcpd_client_cleanup_on_disconnect(client);
+        lua_pushnil(L);
+        lua_pushliteral(L, "failed to create TCP bufferevent");
+        return 2;
     }
+
+    /* Keep the userdata alive while the bufferevent can still invoke ctx.
+     * Accepted connections already use the same pin in the listener path;
+     * clients need it too because the Lua caller may drop its last reference
+     * before connect/disconnect callbacks complete. */
+    lua_pushvalue(L, -1);
+    client->base.self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
     // Connect to host or unix socket
     int rc;
@@ -174,9 +185,10 @@ LUA_API int tcpd_connect(lua_State *L) {
         }
     }
     if (rc < 0) {
-        tcpd_shutdown_bufferevent(client->base.buf);
-        client->base.buf = NULL;
-        return 1;
+        tcpd_client_cleanup_on_disconnect(client);
+        lua_pushnil(L);
+        lua_pushliteral(L, "failed to connect TCP peer");
+        return 2;
     }
 
     // Apply configuration
@@ -240,7 +252,7 @@ LUA_API int tcpd_conn_send(lua_State *L) {
     pthread_mutex_lock(&client->base.buf_mutex);
 
     struct bufferevent *buf = client->base.buf;
-    if (!buf) {
+    if (client->base.cleaned_up || !buf) {
         pthread_mutex_unlock(&client->base.buf_mutex);
         lua_pushinteger(L, -1);
         return 1;
@@ -429,8 +441,10 @@ LUA_API int tcpd_conn_tostring(lua_State *L) {
 static int tcpd_client_conn_gc(lua_State *L) {
     tcpd_client_conn_t *client = luaL_checkudata(L, 1, LUA_TCPD_CONNECTION_TYPE);
 
-    // Perform full client cleanup (SSL fields + base connection)
-    // tcpd_client_cleanup_on_disconnect is idempotent (all fields NULL-checked)
+    // Cleanup is safe to initiate from any Lua worker. The base cleanup
+    // detaches the bufferevent under buf_mutex and hands only that native
+    // pointer to the connection owner; it never queues this userdata.
+    // tcpd_client_cleanup_on_disconnect is idempotent.
     tcpd_client_cleanup_on_disconnect(client);
 
     return 0;

@@ -410,13 +410,15 @@ function TestFramework.async_test(test_func)
     if has_fan then
         -- Return a function that uses fan.loop with pcall protection
         return function()
+            local callback_ok = true
+            local callback_err = nil
             _G.fan.loop(function()
-                local ok, err = pcall(test_func)
+                callback_ok, callback_err = pcall(test_func)
                 _G.fan.loopbreak()
-                if not ok then
-                    error(err)
-                end
             end)
+            if not callback_ok then
+                error(callback_err, 0)
+            end
         end
     else
         -- Return the original function for non-fan environments

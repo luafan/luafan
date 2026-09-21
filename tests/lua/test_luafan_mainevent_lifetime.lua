@@ -67,12 +67,14 @@ end)
 
 suite:test("sequential_loop_cycles", function()
     for i = 1, 3 do
+        print(string.format("sequential_loop_cycles: starting cycle %d", i))
         local ran = false
         fan.loop(function()
             ran = true
             fan.loopbreak()
         end)
-        TestFramework.assert_true(ran)
+        print(string.format("sequential_loop_cycles: completed cycle %d (ran=%s)", i, tostring(ran)))
+        TestFramework.assert_true(ran, "loop cycle " .. i .. " did not run")
     end
 end)
 
