@@ -102,15 +102,7 @@ LUA_API int luafan_start(lua_State *L) {
         }
     }
 
-    // Start the actual event loop. It blocks until the service stops.
-    //
-    // The caller's lock levels (typically event_mgr_workers_init()'s hold when
-    // the pool was started from the main script) are released for the duration
-    // of the loop by event_mgr_loop() itself — see the hand-off note there. That
-    // placement matters: fan.loop() is only one way to reach the loop, and an
-    // embedded host that enters it directly (e.g. when the entry chunk yields
-    // first, LuanMac/LuaBridge.m) would otherwise leave the hold in place and
-    // starve every worker callback.
+    // The runtime is single-threaded: the main base is the only event owner.
     event_mgr_loop();
     return 0;
 }
@@ -378,42 +370,17 @@ LUA_API int luafan_gettop(lua_State *L) {
     return 1;
 }
 
-LUA_API int luafan_worker_count(lua_State *L) {
-    lua_pushinteger(L, event_mgr_worker_count());
-    return 1;
-}
+/* Worker threads are intentionally unsupported: the Lua runtime is single-threaded. */
 
-LUA_API int luafan_workers_init(lua_State *L) {
-    int count = (int)luaL_checkinteger(L, 1);
-    if (count < 0) count = 0;
-    int ret = event_mgr_workers_init(count);
-    lua_pushinteger(L, ret);
-    return 1;
-}
-
-/* ---- lock diagnostics ---------------------------------------------------
- *
- * Read-only probes that tell HOW the Lua lock is provided in this process (see
- * docs/threading-model.md and tests/lua/test_lock_granularity.lua):
- *
- *   fan.diag_lock_mode()  -> "none"      no lock implementation linked at all
- *                          | "single"    linked, no workers: locking off by design
- *                          | "core-hook" the interpreter serialises every resume
- *                          | "wrapper"   luafan wraps FAN_RESUME (stock core)
- *   fan.diag_lock_depth() -> this thread's recursive lock depth (0 when unused)
- */
+/* The runtime is single-threaded; lock diagnostics are retained only for
+ * compatibility with existing callers. */
 LUA_API int luafan_diag_lock_mode(lua_State *L) {
-    switch (event_mgr_lua_lock_mode()) {
-    case FAN_LUA_LOCK_MODE_CORE_HOOK: lua_pushliteral(L, "core-hook"); break;
-    case FAN_LUA_LOCK_MODE_WRAPPER:   lua_pushliteral(L, "wrapper");   break;
-    case FAN_LUA_LOCK_MODE_SINGLE:    lua_pushliteral(L, "single");    break;
-    default:                          lua_pushliteral(L, "none");      break;
-    }
+    lua_pushliteral(L, "single");
     return 1;
 }
 
 LUA_API int luafan_diag_lock_depth(lua_State *L) {
-    lua_pushinteger(L, event_mgr_lua_lock_depth());
+    lua_pushinteger(L, 0);
     return 1;
 }
 
@@ -542,8 +509,6 @@ static const struct luaL_Reg fanlib[] = {
     {"getcpucount", luafan_getcpucount},
 #endif
     {"getinterfaces", luafan_getinterfaces},
-    {"worker_count", luafan_worker_count},
-    {"workers_init", luafan_workers_init},
     {"const", luafan_const},
 
     {NULL, NULL},

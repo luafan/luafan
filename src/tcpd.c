@@ -75,35 +75,9 @@ LUA_API int tcpd_connect(lua_State *L) {
     }
     lua_pop(L, 1);
 
-    // Extract optional worker parameter for multi-threaded event base.
-    // Unspecified worker keeps the connection on the main event base.
-    int worker_id = -1;
-    lua_getfield(L, 1, "worker");
-    if (!lua_isnil(L, -1)) {
-        if (!lua_isinteger(L, -1)) {
-            lua_pop(L, 1);
-            return luaL_error(L, "tcp worker must be an integer");
-        }
-        int w = (int)lua_tointeger(L, -1);
-        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
-            lua_pop(L, 1);
-            return luaL_error(L, "tcp worker is unavailable");
-        }
-        worker_id = w;
-    }
-    lua_pop(L, 1);
-
-    client->base.owner_worker_id = worker_id;
-
-    struct event_base *conn_base;
-    struct evdns_base *conn_dnsbase;
-    if (worker_id >= 0 && event_mgr_worker_count() > 0) {
-        conn_base = event_mgr_worker_base(worker_id);
-        conn_dnsbase = custom_dnsbase ? custom_dnsbase : event_mgr_worker_dnsbase(worker_id);
-    } else {
-        conn_base = event_mgr_base();
-        conn_dnsbase = custom_dnsbase ? custom_dnsbase : event_mgr_dnsbase();
-    }
+    /* All connections use the single event loop and DNS base. */
+    struct event_base *conn_base = event_mgr_base();
+    struct evdns_base *conn_dnsbase = custom_dnsbase ? custom_dnsbase : event_mgr_dnsbase();
 
     // Set up SSL if enabled
     if (client->base.config.ssl_enabled) {

@@ -23,7 +23,7 @@ static struct evbuffer *websocket_create_frame(websocket_opcode_t opcode,
                                                 int fin, int rsv1);
 
 static int ws_affinity_is_current(Request *request) {
-    return request && event_mgr_is_current_owner(request->worker_id);
+    return request != NULL;
 }
 
 typedef struct {

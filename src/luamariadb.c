@@ -48,26 +48,9 @@ int LONG_DATA = 0; // &LONG_DATA used as mariadb const.
  * wait for itself. */
 static _Thread_local int wait_dispatch_depth = 0;
 
-/* The Lua-lock hand-off pair (declared by the force-included fan_lua_lock.h).
- * Weak linkage keeps builds that do not wire the hook valid, exactly as in
- * event_mgr.c. */
-#if !defined(FAN_LUA_LOCK_WIRED)
-#if defined(__clang__)
-#define MARIA_LOCK_WEAK_IMPORT __attribute__((weak_import))
-#else
-#define MARIA_LOCK_WEAK_IMPORT __attribute__((weak))
-#endif
-MARIA_LOCK_WEAK_IMPORT int LuaLockSuspendForLoop(void);
-MARIA_LOCK_WEAK_IMPORT void LuaLockResumeAfterLoop(int depth);
-#endif
-
-#if defined(FAN_LUA_LOCK_WIRED)
-#define MARIA_LOCK_SUSPEND()   (LuaLockSuspendForLoop())
-#define MARIA_LOCK_RESUME(d)   LuaLockResumeAfterLoop(d)
-#else
-#define MARIA_LOCK_SUSPEND()   (LuaLockSuspendForLoop ? LuaLockSuspendForLoop() : 0)
-#define MARIA_LOCK_RESUME(d)   do { if (LuaLockResumeAfterLoop) LuaLockResumeAfterLoop(d); } while (0)
-#endif
+/* The single-threaded runtime has no Lua lock hand-off. */
+#define MARIA_LOCK_SUSPEND() 0
+#define MARIA_LOCK_RESUME(d) ((void)(d))
 
 /* The pending context is reference counted (see the file header): DB_CTX owns
  * one reference, every armed or claimed wait owns one. */
@@ -373,10 +356,6 @@ int wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
   }
 
   struct event_base *base = event_mgr_base();
-  if (ctx->worker_id >= 0 && event_mgr_worker_count() > 0)
-  {
-    base = event_mgr_worker_base(ctx->worker_id);
-  }
 
   /* One critical section for "closed?", reading the socket and timeout out of
    * the MYSQL, arming the event and publishing the wait:
@@ -418,7 +397,6 @@ int wait_for_status(lua_State *L, DB_CTX *ctx, void *data,
   bag->callback = callback;
   bag->ctx = ctx;
   bag->pending = mariadb_pending_ref(pending);
-  bag->owner_worker_id = ctx->worker_id;
   bag->extra = extra;
   bag->next = NULL;
   bag->state = WAIT_ARMED;
@@ -532,24 +510,13 @@ void mariadb_close_begin(DB_CTX *ctx)
   pthread_mutex_unlock(&ctx->pending->mutex);
 }
 
-/* Wait until every continuation that another thread claimed has finished. Those
- * continuations run against this still-open connection and need the Lua lock to
- * reach their end, which the closing thread may be holding (stock-interpreter
- * shape), so hand the lock over while waiting -- the depth-symmetric hand-off
- * event_mgr_loop() uses. A continuation this thread is running itself (the
- * close may be issued from inside one) is not waited for: wait_dispatch_depth
- * is subtracted from the count. */
+/* Wait until every pending continuation has finished. */
 static void wait_for_foreign_continuations(DB_PENDING *pending)
 {
   pthread_mutex_lock(&pending->mutex);
-  if (pending->in_flight > wait_dispatch_depth)
+  while (pending->in_flight > wait_dispatch_depth)
   {
-    int lock_depth = MARIA_LOCK_SUSPEND();
-    while (pending->in_flight > wait_dispatch_depth)
-    {
-      pthread_cond_wait(&pending->cond, &pending->mutex);
-    }
-    MARIA_LOCK_RESUME(lock_depth);
+    pthread_cond_wait(&pending->cond, &pending->mutex);
   }
   pthread_mutex_unlock(&pending->mutex);
 }
@@ -612,17 +579,8 @@ void mariadb_cancel_pending_waits(DB_CTX *ctx)
      * bases are drained and joined, so a queued job would never run and this
      * close would block in wait_for_foreign_continuations() forever. */
     int handed_off = 0;
-    if (event_mgr_is_current_owner(bag->owner_worker_id))
-    {
-      wait_cancel_on_owner_cb(0, 0, bag);
-      handed_off = 1;
-    }
-    else if (event_mgr_is_loop_running())
-    {
-      handed_off = event_mgr_worker_once_internal(bag->owner_worker_id,
-                                                  wait_cancel_on_owner_cb,
-                                                  bag) == 0;
-    }
+    wait_cancel_on_owner_cb(0, 0, bag);
+    handed_off = 1;
 
     if (!handed_off)
     {
@@ -631,9 +589,7 @@ void mariadb_cancel_pending_waits(DB_CTX *ctx)
        * did before waits had an owner. It is the only option left that neither
        * leaves the wait armed, which would let it fire after mysql_close*()
        * released the connection (the R19/R20 use-after-free). */
-      LOGE("mariadb: owner base %d cannot run the pending wait cancellation "
-           "(loop_running=%d); replaying it locally\n",
-           bag->owner_worker_id, event_mgr_is_loop_running());
+      LOGE("mariadb: pending wait cancellation replayed locally\n");
       wait_cancel_on_owner_cb(0, 0, bag);
     }
   }

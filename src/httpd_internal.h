@@ -121,11 +121,6 @@ typedef struct httpd_reply_op {
 #define HTTPD_REPLY_OP_REPLY_END 4
 #define HTTPD_REPLY_OP_ADDHEADER 5
 
-typedef struct httpd_worker_instance {
-    struct evhttp *httpd;
-    struct evhttp_bound_socket *boundsocket;
-} httpd_worker_instance_t;
-
 /* Forward declaration: LuaServer embeds an intrusive list of live
  * WebSocket Requests (Request is defined below). */
 typedef struct Request Request;
@@ -136,23 +131,17 @@ typedef struct {
     struct evhttp_bound_socket *boundsocket;
     char *host;
     int port;
-    int worker_id;
-    int worker_specified;
-    int distribute_connections;
-    httpd_worker_instance_t *workers;
-    int worker_count;
-    _Atomic unsigned int next_worker;
     pthread_mutex_t accept_mutex;
     unsigned int pending_accepts;
     int accepting;
     int accept_high_water;           /* backpressure threshold (accept_mutex); see fix-plan Phase 2 */
     int listener_paused;             /* main listener disabled above high-water (accept_mutex) */
-    int pending_resume;              /* worker requested a resume; cleared on main base (accept_mutex) */
+    int pending_resume;              /* resume queued on the main base (accept_mutex) */
     _Atomic int life_state;          /* httpd_life_state_t (see fix-plan Phase 1) */
-    unsigned int teardown_remaining; /* evhttp instances not yet freed (accept_mutex) */
+    unsigned int teardown_remaining; /* evhttp instance pending cleanup (accept_mutex) */
     Request *ws_list;                /* live WebSocket requests, intrusive (accept_mutex) */
-    unsigned int *instance_ws;       /* ws count per owner, idx = worker_id+1 (accept_mutex) */
-    unsigned int *instance_accepts;  /* in-flight accept jobs per owner, idx = worker_id+1 (accept_mutex) */
+    unsigned int *instance_ws;       /* WebSocket count for the single instance */
+    unsigned int *instance_accepts;  /* accept count for the single instance */
     int instance_ws_len;
     int self_ref;
 #if FAN_HAS_OPENSSL
@@ -169,7 +158,6 @@ typedef struct {
 struct Request {
     struct evhttp_request *req;
     LuaServer *server;
-    int worker_id;
     int reply_status;
     int response_code;
     int metrics_finished;

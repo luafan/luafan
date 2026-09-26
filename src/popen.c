@@ -28,7 +28,6 @@ typedef struct {
     int onDisconnectedRef;
 
     lua_State *mainthread;
-    int worker_id;
 
     struct event *stdout_ev;
     struct event *stderr_ev;
@@ -45,13 +44,6 @@ static POPEN *popen_check(lua_State *L, int index) {
 }
 
 static void popen_cleanup_owner(POPEN *p);
-static void popen_cleanup_owner_cb(evutil_socket_t fd, short what, void *arg) {
-    (void)fd;
-    (void)what;
-    POPEN *p = (POPEN *)arg;
-    popen_cleanup_owner(p);
-    free(p);
-}
 
 static void popen_try_disconnected(POPEN *p, const char *reason) {
     // Only fire when both stdout and stderr events are gone
@@ -241,22 +233,6 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     }
     lua_pop(L, 1);
 
-    // Unspecified worker keeps the process events on the main event base.
-    int worker_id = -1;
-    lua_getfield(L, 1, "worker");
-    if (!lua_isnil(L, -1)) {
-        if (!lua_isinteger(L, -1)) {
-            lua_pop(L, 1);
-            return luaL_error(L, "popen worker must be an integer");
-        }
-        int w = (int)lua_tointeger(L, -1);
-        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
-            lua_pop(L, 1);
-            return luaL_error(L, "popen worker is unavailable");
-        }
-        worker_id = w;
-    }
-    lua_pop(L, 1);
 
     // Optional dedicated process group lets close() terminate shell descendants.
     int process_group = 0;
@@ -479,7 +455,6 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     p->process_group = process_group;
     p->closed = 0;
     p->mainthread = utlua_mainthread(L);
-    p->worker_id = worker_id;
 
     luaL_getmetatable(L, LUA_POPEN_TYPE);
     lua_setmetatable(L, -2);
@@ -488,10 +463,7 @@ LUA_API int luafan_popen_spawn(lua_State *L) {
     SET_FUNC_REF_FROM_TABLE(L, p->onStderrRef, 1, "onstderr")
     SET_FUNC_REF_FROM_TABLE(L, p->onDisconnectedRef, 1, "ondisconnected")
 
-    struct event_base *popen_base =
-        (p->worker_id >= 0 && event_mgr_worker_count() > 0)
-            ? event_mgr_worker_base(p->worker_id)
-            : event_mgr_base();
+    struct event_base *popen_base = event_mgr_base();
 
     // Register read events with separate callbacks
     if (p->onReadRef != LUA_NOREF) {
@@ -560,7 +532,7 @@ LUA_API int luafan_popen_close_stdin(lua_State *L) {
 }
 
 static void popen_cleanup_owner(POPEN *p) {
-    if (!p || p->closed || !event_mgr_is_current_owner(p->worker_id)) return;
+    if (!p || p->closed) return;
     p->closed = 1;
 
     if (p->mainthread) {
@@ -610,14 +582,6 @@ LUA_API int luafan_popen_gc(lua_State *L) {
     POPEN *p = *slot;
     *slot = NULL;
     if (!p) return 0;
-    if (!event_mgr_is_current_owner(p->worker_id)) {
-        if (event_mgr_worker_once_internal(p->worker_id,
-                                           popen_cleanup_owner_cb, p) != 0) {
-            LOGE("popen owner cleanup dispatch failed (owner=%d); retaining native resources",
-                 p->worker_id);
-        }
-        return 0;
-    }
     popen_cleanup_owner(p);
     free(p);
     return 0;

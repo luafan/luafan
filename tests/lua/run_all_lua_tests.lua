@@ -159,7 +159,6 @@ local test_files = {
     "test_fan_evdns.lua",
     "test_memory_leak_fix.lua",
     "test_tcpd_memory_leak_fix.lua",
-    "test_event_mgr_loop_cleanup.lua",     -- Regression tests for event_mgr_loop cleanup order
     "test_evdns_cleanup_order.lua",        -- Regression tests for DNS base release order
     "test_httpd_websocket_req_access.lua", -- Regression tests for WebSocket API request->req access
     "test_ssl_retain_count.lua",           -- Regression tests for SSL retain_count atomicity

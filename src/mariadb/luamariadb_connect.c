@@ -52,9 +52,8 @@ static void real_connect_cont(int fd, short event, void *_userdata)
 /*
 ** Connects to a data source.
 **     param: one string for each connection parameter, said
-**     datasource, username, password, host and port. An optional sixth
-**     integer selects the event worker; omitted selects round-robin and -1
-**     explicitly keeps the connection on the main event base.
+**     datasource, username, password, host and port. Worker selection is not
+**     supported because the runtime has one event loop.
 */
 LUA_API int real_connect_start(lua_State *L)
 {
@@ -63,12 +62,8 @@ LUA_API int real_connect_start(lua_State *L)
   const char *password = luaL_optstring(L, 3, NULL);
   const char *host = luaL_optstring(L, 4, NULL);
   const int port = luaL_optinteger(L, 5, 0);
-  const int requested_worker = lua_isnoneornil(L, 6)
-                                   ? event_mgr_next_worker()
-                                   : luaL_checkinteger(L, 6);
-  if (requested_worker < -1 ||
-      (requested_worker >= 0 && requested_worker >= event_mgr_worker_count())) {
-    return luaL_error(L, "mariadb worker is unavailable");
+  if (!lua_isnoneornil(L, 6)) {
+    return luaL_error(L, "mariadb worker is unsupported in single-threaded mode");
   }
   MYSQL *ret;
 
@@ -83,7 +78,6 @@ LUA_API int real_connect_start(lua_State *L)
     return luaL_error(L, "out of memory");
   }
   ctx->coref = LUA_NOREF;
-  ctx->worker_id = requested_worker;
 
   luasql_setmeta(L, MARIADB_CONNECTION_METATABLE);
 

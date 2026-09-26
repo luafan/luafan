@@ -1,746 +1,24 @@
-
 #include "event_mgr.h"
 
-#include "utlua.h"
-#include <lua.h>
-
 #include <signal.h>
-#include <pthread.h>
-#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
+#include <time.h>
 
 static struct event_base *base = NULL;
 static struct evdns_base *dnsbase = NULL;
-
-enum event_mgr_lifecycle_state {
-    EVENT_MGR_LIFECYCLE_IDLE = 0,
-    EVENT_MGR_LIFECYCLE_RUNNING,
-    EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP,
-    EVENT_MGR_LIFECYCLE_FINALIZING
-};
-
-/* The loop teardown has two phases: event_mgr_loop_run() releases DNS and
- * workers while Lua is alive, then the embedder runs lua_close() and calls
- * event_mgr_loop_cleanup() to release event bases. No other cleanup path may
- * cross that boundary or free the main base early. */
-static _Atomic int lifecycle_state = EVENT_MGR_LIFECYCLE_IDLE;
-
+static int initialized = 0;
+static int looping = 0;
 static int signal_count = 0;
 static struct event signal_int;
 static struct event signal_pipe;
 static int signal_int_added = 0;
 static int signal_pipe_added = 0;
 
-static int looping = 0;
-static int initialized = 0;
+extern void cleanup_http_curl(void);
 
-// Worker pool for multi-threaded event processing
-struct event_worker {
-    struct event_base *base;
-    struct evdns_base *dnsbase;
-    struct event *stop_event;
-    pthread_t thread;
-    pthread_mutex_t state_mutex;
-    pthread_cond_t state_cond;
-    _Atomic int running;
-    _Atomic int stop_requested;
-    int thread_valid;
-    int sync_initialized;
-    int state;
-    int id;
-};
-
-enum event_worker_state {
-    EVENT_WORKER_EMPTY = 0,
-    EVENT_WORKER_STARTING,
-    EVENT_WORKER_RUNNING,
-    EVENT_WORKER_STOPPED
-};
-
-static struct event_worker workers[EVENT_MGR_MAX_WORKERS];
-static int num_workers = 0;
-static _Atomic unsigned int next_worker_idx = 0;
-static _Atomic int workers_accepting_dispatch = 0;
-static pthread_t main_owner_thread;
-static int main_owner_thread_valid = 0;
-
-static _Thread_local int g_current_worker_id = -1;
-
-// Provided by the embedder's lua53 user lock hook (luauser.c) or the portable
-// fan_lua_lock.c. Weak linkage keeps standalone luafan builds valid without the
-// hook.
-//
-// On Mach-O a checkable possibly-null extern needs weak_import (a plain weak
-// declaration would make the reference strong and fail dlopen instead of
-// yielding NULL); on ELF a plain weak declaration behaves the same and gcc does
-// not know weak_import at all.
-#ifndef FAN_LUA_LOCK_WIRED
-#if defined(__clang__)
-#define FAN_LUA_LOCK_WEAK_IMPORT __attribute__((weak_import))
-#else
-#define FAN_LUA_LOCK_WEAK_IMPORT __attribute__((weak))
-#endif
-FAN_LUA_LOCK_WEAK_IMPORT void LuaLockEnable(void);
-
-/* State-less lock variants (luauser.c / fan_lua_lock.c). Same weak linkage. */
-FAN_LUA_LOCK_WEAK_IMPORT void LuaGlobalLock(void);
-FAN_LUA_LOCK_WEAK_IMPORT void LuaGlobalUnlock(void);
-
-/* Depth-symmetric hand-off pair used to release/re-acquire the calling thread's
- * lock levels around the blocking main-base loop (event_mgr_loop() and
- * event_mgr_loop_later_cleanup()). Weak for the same reason. */
-FAN_LUA_LOCK_WEAK_IMPORT int LuaLockSuspendForLoop(void);
-FAN_LUA_LOCK_WEAK_IMPORT void LuaLockResumeAfterLoop(int depth);
-
-/* Whether the RUNNING INTERPRETER owns the lock (hooked core). Deliberately not
- * declared by the wiring headers so this file stays the single declaration
- * point; absent_import => NULL => "assume stock core" => keep the wrapper. */
-FAN_LUA_LOCK_WEAK_IMPORT int LuaCoreLockHooked(void);
-
-/* Recursive depth accessors, declared by luauser.h on Apple and by
- * fan_lua_lock.h on Linux; weakly imported so unwired embedders still build. */
-FAN_LUA_LOCK_WEAK_IMPORT int LuaLockDepthGet(void);
-FAN_LUA_LOCK_WEAK_IMPORT void LuaLockDepthSet(int depth);
-#endif
-
-/* Lock-wiring queries used below. When the wiring header was force-included
- * (FAN_LUA_LOCK_WIRED) the symbols are present by construction; otherwise they
- * are resolved weakly and a missing implementation reads as "no hook". */
-#if defined(FAN_LUA_LOCK_WIRED)
-#define FAN_CORE_LOCK_HOOKED() (LuaCoreLockHooked() != 0)
-#define FAN_LOCK_DEPTH_GET()   (LuaLockDepthGet())
-#define FAN_LOCK_DEPTH_SET(d)  (LuaLockDepthSet(d))
-#define FAN_LOCK_SUSPEND_FOR_LOOP()   (LuaLockSuspendForLoop())
-#define FAN_LOCK_RESUME_AFTER_LOOP(d) LuaLockResumeAfterLoop(d)
-#else
-#define FAN_CORE_LOCK_HOOKED() (LuaCoreLockHooked && LuaCoreLockHooked() != 0)
-#define FAN_LOCK_DEPTH_GET()   (LuaLockDepthGet ? LuaLockDepthGet() : 0)
-#define FAN_LOCK_DEPTH_SET(d)  do { if (LuaLockDepthSet) LuaLockDepthSet(d); } while (0)
-#define FAN_LOCK_SUSPEND_FOR_LOOP()   (LuaLockSuspendForLoop ? LuaLockSuspendForLoop() : 0)
-#define FAN_LOCK_RESUME_AFTER_LOOP(d) do { if (LuaLockResumeAfterLoop) LuaLockResumeAfterLoop(d); } while (0)
-#endif
-
-static pthread_once_t event_threads_once = PTHREAD_ONCE_INIT;
-
-static void event_mgr_init_thread_support(void) {
-    if (evthread_use_pthreads() != 0) {
-        fprintf(stderr, "event_mgr: evthread_use_pthreads failed; cross-thread event_base operations are unsafe\n");
-    }
-}
-
-static void event_mgr_enable_thread_support(void) {
-    pthread_once(&event_threads_once, event_mgr_init_thread_support);
-}
-
-/* ---- framework (internal) hand-off jobs ---------------------------------
- *
- * A teardown path arms its own continuation from an owner-thread callback
- * (httpd_server_teardown_instance() -> httpd_drain_check_cb()): the follow-up
- * job is dispatched while the first job runs. That never fits the user-level
- * dispatch path, because event_mgr_worker_once_delay() rejects everything once
- * workers_accepting_dispatch is cleared, and the shutdown sequence clears it
- * before the worker loops have run the jobs that are already queued for them.
- * Refusing the continuation left the evhttp instances of a just-closed server
- * pinned until process exit ("resources retained until exit").
- *
- * These variants bypass that gate, count themselves per owner base and are
- * drained by the owner loop while it stops (see
- * event_mgr_drain_internal_jobs()). Only framework code that owns the target
- * base may use them: a job that is never run is a leak, not a rejected call.
- */
-typedef struct event_mgr_internal_job {
-    event_callback_fn cb;
-    void *arg;
-    int index;
-} event_mgr_internal_job;
-
-/* Pending/running internal jobs per owner base (index = worker_id + 1, 0 = the
- * main base). Maintained by event_mgr_internal_job_cb() so the drain knows when
- * a hand-off chain (teardown -> drain check -> finalize) has finished. */
-static _Atomic int internal_jobs_pending[EVENT_MGR_MAX_WORKERS + 1];
-
-/* Upper bound for one shutdown drain pass loop: each pass runs the owner base
- * and then sleeps 1ms so short-delay re-arms (the 5ms WebSocket drain check)
- * become ready. Overridable on the compiler command line — a value of 0
- * disables the drain, which reproduces the pre-drain "resources pinned until
- * exit" behaviour for regression testing (test_httpd_async_teardown.lua
- * scenario E). */
-#ifndef EVENT_MGR_DRAIN_MAX_MS
-#define EVENT_MGR_DRAIN_MAX_MS 100
-#endif
-
-static int internal_job_index(int worker_id) {
-    return (worker_id >= 0 && worker_id < EVENT_MGR_MAX_WORKERS) ? worker_id + 1 : 0;
-}
-
-/* Runs the wrapped callback, then releases its slot. The job is freed before
- * the callback so a re-arm inside it counts as new work (the drain must not
- * stop in the middle of a chain). */
-static void event_mgr_internal_job_cb(evutil_socket_t fd, short what, void *arg) {
-    event_mgr_internal_job *job = (event_mgr_internal_job *)arg;
-    event_callback_fn cb = job->cb;
-    void *job_arg = job->arg;
-    int index = job->index;
-    free(job);
-    cb(fd, what, job_arg);
-    atomic_fetch_sub(&internal_jobs_pending[index], 1);
-}
-
-int event_mgr_worker_once_internal_delay(int worker_id, event_callback_fn callback,
-                                         void *arg, long delay_ms) {
-    if (!callback) {
-        return -1;
-    }
-    struct event_base *target = event_mgr_worker_base(worker_id);
-    if (!target) {
-        return -1;
-    }
-    event_mgr_internal_job *job = (event_mgr_internal_job *)malloc(sizeof(*job));
-    if (!job) {
-        return -1;
-    }
-    job->cb = callback;
-    job->arg = arg;
-    job->index = internal_job_index(worker_id);
-    struct timeval tv;
-    tv.tv_sec = delay_ms / 1000;
-    tv.tv_usec = (delay_ms % 1000) * 1000;
-    atomic_fetch_add(&internal_jobs_pending[job->index], 1);
-    if (event_base_once(target, -1, EV_TIMEOUT, event_mgr_internal_job_cb, job, &tv) != 0) {
-        atomic_fetch_sub(&internal_jobs_pending[job->index], 1);
-        free(job);
-        return -1;
-    }
-    return 0;
-}
-
-int event_mgr_worker_once_internal(int worker_id, event_callback_fn callback, void *arg) {
-    return event_mgr_worker_once_internal_delay(worker_id, callback, arg, 0);
-}
-
-/* Run the events already queued for `base` until the framework hand-offs of
- * `worker_id` (and every job they arm) have completed, or the budget expires.
- * MUST be called on the thread that owns `base`, and only while that base is
- * stopping: loop shutdown calls it right after the loop broke, so a teardown
- * chain queued just before the break still finishes (the main base gets one
- * pass after the workers stopped, which is when their finalize job arrives). */
-static void event_mgr_drain_internal_jobs(struct event_base *base, int worker_id, int max_ms) {
-    if (!base) {
-        return;
-    }
-    int index = internal_job_index(worker_id);
-    for (int elapsed = 0; elapsed < max_ms; elapsed++) {
-        if (atomic_load(&internal_jobs_pending[index]) <= 0) {
-            return;
-        }
-        event_base_loop(base, EVLOOP_NONBLOCK);
-        struct timespec ts;
-        ts.tv_sec = 0;
-        ts.tv_nsec = 1000000L;
-        nanosleep(&ts, NULL);
-    }
-    int pending = atomic_load(&internal_jobs_pending[index]);
-    if (pending > 0) {
-        fprintf(stderr, "event_mgr: shutdown drain incomplete (owner=%d, pending=%d); "
-                        "resources retained until exit\n", worker_id, pending);
-    }
-}
-
-static void event_mgr_worker_set_state(struct event_worker *worker, int state) {
-    pthread_mutex_lock(&worker->state_mutex);
-    worker->state = state;
-    pthread_cond_broadcast(&worker->state_cond);
-    pthread_mutex_unlock(&worker->state_mutex);
-}
-
-/* ---- Lua lock mode ------------------------------------------------------ *
- *
- * Which mechanism actually serialises Lua in this process. Reported through
- * fan.diag_lock_mode() and asserted by tests/lua/test_lock_granularity.lua. */
-
-static int lua_lock_mode = FAN_LUA_LOCK_MODE_NONE;
-
-int event_mgr_lua_lock_mode(void) {
-    if (!LuaLockEnable && !LuaGlobalLock) {
-        /* No lock implementation is linked at all: workers_init refuses to run
-         * (see below), so there is nothing to report but "none". */
-        return FAN_LUA_LOCK_MODE_NONE;
-    }
-    if (lua_lock_mode == FAN_LUA_LOCK_MODE_WRAPPER) {
-        return FAN_LUA_LOCK_MODE_WRAPPER;
-    }
-    if (FAN_CORE_LOCK_HOOKED()) {
-        return FAN_LUA_LOCK_MODE_CORE_HOOK;
-    }
-    /* Lock implementation linked, but no workers yet: locking is off by design
-     * (single-threaded runs pay nothing). */
-    return FAN_LUA_LOCK_MODE_SINGLE;
-}
-
-int event_mgr_lua_lock_depth(void) {
-    return FAN_LOCK_DEPTH_GET();
-}
-
-void event_mgr_lua_lock_depth_set(int depth) {
-    FAN_LOCK_DEPTH_SET(depth);
-}
-
-/* ---- locking resume wrapper ----------------------------------------------
- *
- * A stock Lua core compiles lua_lock/lua_unlock to nothing (lua53/llimits.h), so
- * lua_resume() does NOT hold the mutex across a coroutine run. luafan's callback
- * sites rely on the resume layer owning the lock: they build the arguments under
- * lua_lock, release it, and only then call FAN_RESUME (tcpd_server.c,
- * httpd_websocket.c, http.c, ...). A core compiled with the lock hook keeps that
- * promise; a stock core does not, so luafan provides it here.
- *
- * This wrapper is therefore only for stock cores. On a hooked core it is
- * actively harmful: it takes one lock level OUTSIDE lua_resume, which the core's
- * cooperative yield points (luai_threadyield inside checkGC, llimits.h) never
- * release, so an entire resume -- however many yield points it passes -- becomes
- * one indivisible critical section.
- *
- * Note: this is unrelated to the loop hand-off. That hand-off (around
- * event_mgr_loop()/event_mgr_loop_later_cleanup(), see below) is mandatory on
- * BOTH shapes, because the level it releases is the extra one
- * event_mgr_workers_init() takes on the calling thread -- not the wrapper's
- * level, which exists only for the duration of a resume.
- *
- * The wrapper always stays the OUTERMOST resume layer (utlua_set_outer_resume),
- * so an embedder that installs its own resume later cannot silently drop it. */
-static int locking_resume(lua_State *co, lua_State *from, int count) {
-    int status;
-    if (LuaGlobalLock) LuaGlobalLock();
-    status = utlua_inner_resume(co, from, count);
-    if (LuaGlobalUnlock) LuaGlobalUnlock();
-    return status;
-}
-
-static _Atomic int resume_wrapper_installed = 0;
-
-/* Installed once, inside workers_init, before the first worker thread can run a
- * callback. Weak symbols: embedders without any lock implementation resolve
- * FAN_CORE_LOCK_HOOKED() to false and keep today's behaviour. */
-static void install_locking_resume(void) {
-    if (FAN_CORE_LOCK_HOOKED()) {
-        lua_lock_mode = FAN_LUA_LOCK_MODE_CORE_HOOK;
-        return;
-    }
-
-    int expected = 0;
-    if (atomic_compare_exchange_strong(&resume_wrapper_installed, &expected, 1)) {
-        utlua_set_outer_resume(locking_resume);
-        lua_lock_mode = FAN_LUA_LOCK_MODE_WRAPPER;
-    }
-}
-
-static void event_mgr_worker_stop_cb(evutil_socket_t fd, short what, void *arg) {
-    struct event_worker *worker = (struct event_worker *)arg;
-    (void)fd;
-    (void)what;
-    atomic_store(&worker->stop_requested, 1);
-    event_base_loopbreak(worker->base);
-}
-
-static void *worker_thread_func(void *arg) {
-    struct event_worker *w = (struct event_worker *)arg;
-    g_current_worker_id = w->id;
-    // Block SIGPIPE on worker threads
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGPIPE);
-    pthread_sigmask(SIG_BLOCK, &set, NULL);
-
-    pthread_mutex_lock(&w->state_mutex);
-    if (atomic_load(&w->stop_requested)) {
-        w->state = EVENT_WORKER_STOPPED;
-        pthread_cond_broadcast(&w->state_cond);
-        pthread_mutex_unlock(&w->state_mutex);
-        atomic_store(&w->running, 0);
-        return NULL;
-    }
-    if (event_add(w->stop_event, NULL) != 0) {
-        w->state = EVENT_WORKER_STOPPED;
-        pthread_cond_broadcast(&w->state_cond);
-        pthread_mutex_unlock(&w->state_mutex);
-        atomic_store(&w->running, 0);
-        return NULL;
-    }
-    w->state = EVENT_WORKER_RUNNING;
-    pthread_cond_broadcast(&w->state_cond);
-    pthread_mutex_unlock(&w->state_mutex);
-
-    event_base_loop(w->base, EVLOOP_NO_EXIT_ON_EMPTY);
-    /* The loop broke (normal shutdown): finish the framework hand-offs that
-     * were queued for this owner before the break, so a server teardown that
-     * was in flight still releases its evhttp instance. No-op when nothing is
-     * pending. */
-    event_mgr_drain_internal_jobs(w->base, w->id, EVENT_MGR_DRAIN_MAX_MS);
-    atomic_store(&w->running, 0);
-    event_mgr_worker_set_state(w, EVENT_WORKER_STOPPED);
-    return NULL;
-}
-
-int event_mgr_workers_init(int count) {
-    if (num_workers > 0) {
-        return -1;
-    }
-    if (event_mgr_is_loop_running()) {
-        fprintf(stderr, "event_mgr: workers_init refused while event loop is running\n");
-        return -1;
-    }
-    // count <= 0 means "no workers": stay single-threaded, do NOT spawn any
-    // thread and do NOT enable the Lua lock. (Previously this silently became
-    // EVENT_MGR_DEFAULT_WORKERS, which was surprising.)
-    if (count <= 0) {
-        workers_accepting_dispatch = 0;
-        return 0;
-    }
-    if (count > EVENT_MGR_MAX_WORKERS) {
-        count = EVENT_MGR_MAX_WORKERS;
-    }
-
-    if (!LuaLockEnable && !LuaGlobalLock) {
-        /* No lock implementation is linked at all: the worker threads would
-         * share the lua_State completely unprotected. Refuse loudly instead of
-         * corrupting the VM (see src/fan_lua_lock.h / luauser.c wiring). */
-        fprintf(stderr, "event_mgr: workers_init(%d) refused: no Lua lock hook is "
-                        "linked (LuaLockEnable/LuaGlobalLock missing); multi-worker "
-                        "mode would corrupt the shared lua_State.\n", count);
-        return -1;
-    }
-
-    if (LuaLockEnable) {
-        LuaLockEnable();
-    }
-
-    // Decide who owns the Lua lock before any worker can run a callback: on a
-    // hooked interpreter the core already serialises every resume (no wrapper),
-    // on a stock core luafan installs its resume wrapper. See
-    // install_locking_resume() and event_mgr_lua_lock_mode().
-    install_locking_resume();
-
-    event_mgr_enable_thread_support();
-
-    workers_accepting_dispatch = 0;
-    num_workers = count;
-
-    for (int i = 0; i < num_workers; i++) {
-        struct event_worker *worker = &workers[i];
-        worker->id = i;
-        worker->state = EVENT_WORKER_STARTING;
-        worker->thread_valid = 0;
-        worker->sync_initialized = 0;
-        atomic_store(&worker->running, 0);
-        atomic_store(&worker->stop_requested, 0);
-
-        if (pthread_mutex_init(&worker->state_mutex, NULL) != 0) {
-            event_mgr_workers_shutdown();
-            return -1;
-        }
-        if (pthread_cond_init(&worker->state_cond, NULL) != 0) {
-            pthread_mutex_destroy(&worker->state_mutex);
-            event_mgr_workers_shutdown();
-            return -1;
-        }
-        worker->sync_initialized = 1;
-        worker->base = event_base_new();
-        if (!worker->base) {
-            event_mgr_workers_shutdown();
-            return -1;
-        }
-
-        worker->dnsbase = evdns_base_new(worker->base, 0);
-        if (!worker->dnsbase) {
-            event_mgr_workers_shutdown();
-            return -1;
-        }
-        evdns_base_set_option(worker->dnsbase, "randomize-case:", "0");
-        worker->stop_event = event_new(worker->base, -1, EV_PERSIST,
-                                       event_mgr_worker_stop_cb, worker);
-        if (!worker->stop_event) {
-            event_mgr_workers_shutdown();
-            return -1;
-        }
-
-        int rc = pthread_create(&worker->thread, NULL, worker_thread_func, worker);
-        if (rc != 0) {
-            event_mgr_workers_shutdown();
-            return -1;
-        }
-        worker->thread_valid = 1;
-
-        pthread_mutex_lock(&worker->state_mutex);
-        while (worker->state == EVENT_WORKER_STARTING) {
-            pthread_cond_wait(&worker->state_cond, &worker->state_mutex);
-        }
-        int ready = worker->state == EVENT_WORKER_RUNNING;
-        pthread_mutex_unlock(&worker->state_mutex);
-        if (!ready) {
-            event_mgr_workers_shutdown();
-            return -1;
-        }
-    }
-    workers_accepting_dispatch = 1;
-    /* Hold one extra lock level on the calling thread when workers are started
-     * from the main script (loop not yet parked): everything the script does
-     * before entering the loop cannot then interleave with worker callbacks.
-     * Skip the hold when workers_init is called from inside a running loop —
-     * the caller's own resume already holds the lock, and an extra unreleased
-     * level here would block every worker callback forever. The loop entry
-     * itself releases the level around the blocking loop (see the hand-off note
-     * above event_mgr_loop()), whichever way the embedder reaches it; a script
-     * that starts workers and then blocks without ever entering the loop keeps
-     * it until exit — the deliberate leak-not-race outcome for that unsupported
-     * shape. */
-    if (!event_mgr_is_loop_running() && LuaGlobalLock) {
-        LuaGlobalLock();
-    }
-    return 0;
-}
-
-static void event_mgr_request_worker_stop(struct event_worker *worker) {
-    if (!worker->sync_initialized || !worker->base) {
-        return;
-    }
-    atomic_store(&worker->stop_requested, 1);
-    pthread_mutex_lock(&worker->state_mutex);
-    int state = worker->state;
-    pthread_mutex_unlock(&worker->state_mutex);
-    if (state == EVENT_WORKER_RUNNING && worker->stop_event) {
-        event_active(worker->stop_event, EV_TIMEOUT, 1);
-    }
-}
-
-static void event_mgr_join_worker(struct event_worker *worker) {
-    if (worker->thread_valid) {
-        pthread_join(worker->thread, NULL);
-        worker->thread = 0;
-        worker->thread_valid = 0;
-    }
-}
-
-void event_mgr_workers_shutdown(void) {
-    // Reject new cross-thread dispatches before stopping worker loops.
-    workers_accepting_dispatch = 0;
-    for (int i = 0; i < num_workers; i++) {
-        event_mgr_request_worker_stop(&workers[i]);
-    }
-    for (int i = 0; i < num_workers; i++) {
-        event_mgr_join_worker(&workers[i]);
-    }
-
-    // Free the bases. Callers that still need to run Lua finalisers (which may
-    // bufferevent_free into a worker base) MUST do so before reaching here —
-    // see event_mgr_workers_stop_threads().
-    for (int i = 0; i < num_workers; i++) {
-        struct event_worker *worker = &workers[i];
-        if (worker->stop_event) {
-            event_free(worker->stop_event);
-            worker->stop_event = NULL;
-        }
-        if (worker->dnsbase) {
-            evdns_base_free(worker->dnsbase, 0);
-            worker->dnsbase = NULL;
-        }
-        if (worker->base) {
-            event_base_free(worker->base);
-            worker->base = NULL;
-        }
-        if (worker->sync_initialized) {
-            pthread_cond_destroy(&worker->state_cond);
-            pthread_mutex_destroy(&worker->state_mutex);
-            worker->sync_initialized = 0;
-        }
-        worker->state = EVENT_WORKER_EMPTY;
-    }
-    num_workers = 0;
-}
-
-// Stop worker threads but keep their event_bases alive, so that Lua __gc
-// finalisers running afterwards can still bufferevent_free() into them.
-// The matching event_base_free() happens later via event_mgr_workers_free_bases.
-void event_mgr_workers_stop_threads(void) {
-    // No new callbacks may be queued once worker loops are stopping.
-    workers_accepting_dispatch = 0;
-    for (int i = 0; i < num_workers; i++) {
-        event_mgr_request_worker_stop(&workers[i]);
-    }
-    for (int i = 0; i < num_workers; i++) {
-        event_mgr_join_worker(&workers[i]);
-    }
-}
-
-void event_mgr_workers_free_bases(void) {
-    workers_accepting_dispatch = 0;
-    for (int i = 0; i < num_workers; i++) {
-        struct event_worker *worker = &workers[i];
-        if (worker->stop_event) {
-            event_free(worker->stop_event);
-            worker->stop_event = NULL;
-        }
-        if (worker->dnsbase) {
-            // Worker bases may outlive the Lua state during final cleanup.
-            evdns_base_free(worker->dnsbase, 0);
-            worker->dnsbase = NULL;
-        }
-        if (worker->base) {
-            event_base_free(worker->base);
-            worker->base = NULL;
-        }
-        if (worker->sync_initialized) {
-            pthread_cond_destroy(&worker->state_cond);
-            pthread_mutex_destroy(&worker->state_mutex);
-            worker->sync_initialized = 0;
-        }
-        worker->state = EVENT_WORKER_EMPTY;
-    }
-    num_workers = 0;
-}
-
-struct event_base *event_mgr_worker_base(int worker_id) {
-    if (worker_id < 0 || worker_id >= num_workers) {
-        return event_mgr_base(); // fallback to main
-    }
-    return workers[worker_id].base;
-}
-
-int event_mgr_worker_once_delay(int worker_id, event_callback_fn callback, void *arg, long delay_ms) {
-    if (!callback) {
-        return -1;
-    }
-    if (worker_id >= 0 && !workers_accepting_dispatch) {
-        return -1;
-    }
-
-    struct timeval tv;
-    tv.tv_sec = delay_ms / 1000;
-    tv.tv_usec = (delay_ms % 1000) * 1000;
-    struct event_base *target = event_mgr_worker_base(worker_id);
-    if (!target) {
-        return -1;
-    }
-    return event_base_once(target, -1, EV_TIMEOUT, callback, arg, &tv);
-}
-
-int event_mgr_worker_once(int worker_id, event_callback_fn callback, void *arg) {
-    return event_mgr_worker_once_delay(worker_id, callback, arg, 0);
-}
-
-struct evdns_base *event_mgr_worker_dnsbase(int worker_id) {
-    if (worker_id < 0 || worker_id >= num_workers) {
-        return event_mgr_dnsbase();
-    }
-    return workers[worker_id].dnsbase;
-}
-
-int event_mgr_next_worker(void) {
-    if (num_workers <= 0) return -1;
-    unsigned int idx = next_worker_idx++;
-    return (int)(idx % (unsigned int)num_workers);
-}
-
-int event_mgr_worker_count(void) {
-    return num_workers;
-}
-
-int event_mgr_current_worker_id(void) {
-    return g_current_worker_id;
-}
-
-int event_mgr_is_loop_running(void) {
-    return looping != 0;
-}
-
-int event_mgr_is_current_owner(int worker_id) {
-    if (worker_id >= 0) {
-        return g_current_worker_id == worker_id;
-    }
-    return main_owner_thread_valid && pthread_equal(main_owner_thread, pthread_self());
-}
-
-struct event_base *event_mgr_base() {
-    if (!base) {
-        event_mgr_enable_thread_support();
-        base = event_base_new();
-        main_owner_thread = pthread_self();
-        main_owner_thread_valid = 1;
-    }
-
-    event_mgr_init();
-
-    return base;
-}
-
-struct event_base *event_mgr_base_current() {
-    return base;
-}
-
-struct evdns_base *event_mgr_dnsbase() {
-    return dnsbase;
-}
-
-static void signal_handler(int sig) {
-    static const char force_exit[] = "signal_handler: force exit\n";
-    switch (sig) {
-        case SIGINT:
-            signal_count++;
-            if (signal_count > 1) {
-                (void)write(STDERR_FILENO, force_exit, sizeof(force_exit) - 1);
-                _exit(0);
-            }
-            event_mgr_break();
-            break;
-        case SIGTERM:
-        case SIGHUP:
-        case SIGQUIT:
-            event_mgr_break();
-            break;
-        case SIGPIPE:
-            break;
-    }
-}
-
-static void signal_cb(evutil_socket_t fd, short event, void *arg) {
-    struct event *signal = arg;
-    printf("%s: got signal %d\n", __func__, EVENT_SIGNAL(signal));
-
-    switch (EVENT_SIGNAL(signal)) {
-        case SIGTERM:
-        case SIGHUP:
-        case SIGQUIT:
-        case SIGINT:
-            event_mgr_break();
-        default:
-            break;
-    }
-}
-
-void event_mgr_break() {
-    // Only break the main loop. Worker threads are stopped by
-    // event_mgr_workers_stop_threads() inside event_mgr_loop_later_cleanup,
-    // and their bases are freed later by event_mgr_workers_free_bases()
-    // inside event_mgr_loop_cleanup — after the caller has run lua_close.
-    // Freeing worker bases here races Lua finalisers (__gc → bufferevent_free)
-    // and triggers libevent's "evcb_pri < nactivequeues" assertion.
-    if (base) {
-        event_base_loopbreak(base);
-    }
-}
-
-/* Internal cleanup functions to eliminate redundancy */
-static void cleanup_signals() {
-    signal(SIGHUP, SIG_DFL);
-    signal(SIGTERM, SIG_DFL);
-    signal(SIGINT, SIG_DFL);
-    signal(SIGQUIT, SIG_DFL);
-    signal(SIGPIPE, SIG_DFL);
-}
-
-static void cleanup_signal_events() {
+static void cleanup_signal_events(void) {
     if (signal_int_added) {
         event_del(&signal_int);
         signal_int_added = 0;
@@ -753,287 +31,152 @@ static void cleanup_signal_events() {
     memset(&signal_pipe, 0, sizeof(signal_pipe));
 }
 
-static void cleanup_openssl() {
-#if FAN_HAS_OPENSSL && OPENSSL_VERSION_NUMBER < 0x1010000fL
-    EVP_cleanup();
-    CRYPTO_cleanup_all_ex_data();
-    ERR_remove_state(0);
-    ERR_free_strings();
-#endif
+static void cleanup_signals(void) {
+    signal(SIGHUP, SIG_DFL);
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGINT, SIG_DFL);
+    signal(SIGQUIT, SIG_DFL);
+    signal(SIGPIPE, SIG_DFL);
 }
 
-static void cleanup_dnsbase() {
+static void signal_handler(int sig) {
+    if (sig == SIGINT) {
+        signal_count++;
+        if (signal_count > 1) {
+            _exit(0);
+        }
+    }
+    event_mgr_break();
+}
+
+static void signal_cb(evutil_socket_t fd, short what, void *arg) {
+    (void)fd;
+    (void)what;
+    (void)arg;
+    event_mgr_break();
+}
+
+struct event_base *event_mgr_base(void) {
+    if (!base) {
+        base = event_base_new();
+    }
+    if (base && !initialized) {
+        event_mgr_init();
+    }
+    return base;
+}
+
+struct event_base *event_mgr_base_current(void) {
+    return base;
+}
+
+struct evdns_base *event_mgr_dnsbase(void) {
+    return dnsbase;
+}
+
+int event_mgr_init(void) {
+    if (initialized) {
+        return -1;
+    }
+    if (!base) {
+        base = event_base_new();
+    }
+    if (!base) {
+        return -1;
+    }
+    initialized = 1;
+    dnsbase = evdns_base_new(base, EVDNS_BASE_INITIALIZE_NAMESERVERS);
     if (dnsbase) {
-        // Pass 1 to fail outstanding requests rather than silently
-        // dropping them. With fail_requests=0 any callback that runs
-        // before the base is fully torn down can dereference state
-        // (lua_State, conn) that is already gone — the resolver's
-        // worker thread may queue a result just as we free the base.
-        // Asking libevent to invoke each pending callback with an
-        // error gives the user code a chance to clean its refs while
-        // the base is still valid.
-        evdns_base_free(dnsbase, 1);
-        dnsbase = NULL;
+        evdns_base_set_option(dnsbase, "randomize-case:", "0");
+    }
+
+    signal(SIGHUP, signal_handler);
+    signal(SIGTERM, signal_handler);
+    signal(SIGINT, signal_handler);
+    signal(SIGQUIT, signal_handler);
+    signal(SIGPIPE, signal_handler);
+    event_assign(&signal_int, base, SIGINT, EV_SIGNAL | EV_PERSIST, signal_cb, NULL);
+    signal_int_added = event_add(&signal_int, NULL) == 0;
+    event_assign(&signal_pipe, base, SIGPIPE, EV_SIGNAL | EV_PERSIST, signal_cb, NULL);
+    signal_pipe_added = event_add(&signal_pipe, NULL) == 0;
+    return 0;
+}
+
+void event_mgr_break(void) {
+    if (base) {
+        event_base_loopbreak(base);
     }
 }
 
-// Defined in http.c. Strongly linked — both TUs live in the same archive
-// (luafan). Tears down the curl multi handle and its evtimers. Must be called
-// while BOTH the event_base AND the Lua state are still alive: curl_multi_cleanup
-// drives multi_done → progress callbacks that touch Lua via clientp.
-extern void cleanup_http_curl(void);
-
-// Optional: luacurlimp.c (curlimp) when linked into the embedder (LuanMac /
-// Docker). PanPipe does not integrate curlimp, so its cleanup hook is disabled
-// with LUA_NO_CURLIMP and the weak symbol is omitted from this build.
-// Same lifetime rules as cleanup_http_curl: base + Lua still alive.
-#ifndef LUA_NO_CURLIMP
-__attribute__((weak)) void cleanup_curlimp(void);
-#endif
-
-static void cleanup_curl_clients(void) {
-    cleanup_http_curl();
-#ifndef LUA_NO_CURLIMP
-    if (cleanup_curlimp)
-        cleanup_curlimp();
-#endif
+int event_mgr_is_loop_running(void) {
+    return looping;
 }
 
-static void cleanup_eventbase() {
+int event_mgr_is_looping(void) {
+    return looping;
+}
+
+static int once_delay(event_callback_fn callback, void *arg, long delay_ms) {
+    if (!callback || !event_mgr_base()) {
+        return -1;
+    }
+    struct timeval tv;
+    tv.tv_sec = delay_ms / 1000;
+    tv.tv_usec = (delay_ms % 1000) * 1000;
+    return event_base_once(base, -1, EV_TIMEOUT, callback, arg, &tv);
+}
+
+int event_mgr_once_internal(event_callback_fn callback, void *arg) {
+    return once_delay(callback, arg, 0);
+}
+
+int event_mgr_once_internal_delay(event_callback_fn callback, void *arg, long delay_ms) {
+    return once_delay(callback, arg, delay_ms);
+}
+
+int event_mgr_lua_lock_mode(void) {
+    return FAN_LUA_LOCK_MODE_SINGLE;
+}
+int event_mgr_lua_lock_depth(void) { return 0; }
+void event_mgr_lua_lock_depth_set(int depth) { (void)depth; }
+
+int event_mgr_loop(void) {
+    if (looping || !event_mgr_base()) {
+        return -1;
+    }
+    looping = 1;
+    event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
+    looping = 0;
+    cleanup_signals();
+    cleanup_signal_events();
+    cleanup_http_curl();
+    if (dnsbase) {
+        evdns_base_free(dnsbase, 1);
+        dnsbase = NULL;
+    }
+    initialized = 0;
+    return 0;
+}
+
+int event_mgr_loop_later_cleanup(void) {
+    return event_mgr_loop();
+}
+
+void event_mgr_loop_cleanup(void) {
+    cleanup_signal_events();
+    if (dnsbase) {
+        evdns_base_free(dnsbase, 1);
+        dnsbase = NULL;
+    }
     if (base) {
         event_base_free(base);
         base = NULL;
     }
-}
-
-static void reset_state() {
     initialized = 0;
     looping = 0;
     signal_count = 0;
 }
 
-static void full_cleanup() {
-    cleanup_signals();
-    cleanup_signal_events();
-    event_mgr_workers_stop_threads();
-    cleanup_curl_clients();
-    cleanup_openssl();
-    cleanup_dnsbase();
-    event_mgr_workers_shutdown();
-    cleanup_eventbase();
-    reset_state();
-}
-
-int event_mgr_init() {
-    if (!initialized) {
-        initialized = 1;
-
-        dnsbase = evdns_base_new(event_mgr_base(), EVDNS_BASE_INITIALIZE_NAMESERVERS);
-        if (dnsbase) {
-            evdns_base_set_option(dnsbase, "randomize-case:", "0");
-        } else {
-            fprintf(stderr, "event_mgr_init: evdns_base_new failed (no network?), DNS resolution unavailable\n");
-        }
-
-#if FAN_HAS_OPENSSL && OPENSSL_VERSION_NUMBER < 0x1010000fL
-        SSL_library_init();
-        ERR_load_crypto_strings();
-        SSL_load_error_strings();
-        OpenSSL_add_all_algorithms();
-#endif
-
-        signal(SIGHUP, signal_handler);
-        signal(SIGTERM, signal_handler);
-        signal(SIGINT, signal_handler);
-        signal(SIGQUIT, signal_handler);
-        signal(SIGPIPE, signal_handler);
-
-        event_assign(&signal_int, event_mgr_base_current(), SIGINT, EV_SIGNAL | EV_PERSIST, signal_cb, &signal_int);
-        signal_int_added = event_add(&signal_int, NULL) == 0;
-
-        event_assign(&signal_pipe, event_mgr_base_current(), SIGPIPE, EV_SIGNAL | EV_PERSIST, signal_cb, &signal_pipe);
-        signal_pipe_added = event_add(&signal_pipe, NULL) == 0;
-        return 0;
-    }
-
-    return -1;
-}
-
-/* Body of the blocking main-base loop, shared by the two public entry points
- * below (their only differences are the owner claim and the call-site notes).
- * `claim_main_owner` is 1 for event_mgr_loop() — the canonical entry, whose
- * caller becomes the main base's owner thread — and 0 for
- * event_mgr_loop_later_cleanup(), called by an embedder that already owns it.
- *
- * The caller must have checked that no loop is running, and must run this under
- * the hand-off pair below: the calling thread still owns every lock level it
- * holds, and parked in here it would never release them. */
-static void event_mgr_loop_run(int claim_main_owner) {
-    int expected = atomic_load(&lifecycle_state);
-    for (;;) {
-        /* A loop may be entered again before the embedder performs the
-         * post-lua_close final cleanup. The bases are intentionally still
-         * alive in PENDING_FINAL_CLEANUP, so treat that state as reusable
-         * rather than rejecting the historical loop/loopbreak contract. */
-        if (expected != EVENT_MGR_LIFECYCLE_IDLE &&
-            expected != EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP) {
-            return;
-        }
-        if (atomic_compare_exchange_weak(&lifecycle_state, &expected,
-                                         EVENT_MGR_LIFECYCLE_RUNNING)) {
-            break;
-        }
-    }
-
-    event_mgr_init();
-    if (claim_main_owner) {
-        main_owner_thread = pthread_self();
-        main_owner_thread_valid = 1;
-    }
-
-    looping = 1;
-
-    event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
-
-    // Symmetric with event_mgr_loop_later_cleanup(): we cannot run
-    // full_cleanup() here because the caller still holds Lua state
-    // whose __gc finalisers are about to run (lua_close happens later
-    // in the embedder, e.g. when the Lua module is unloaded). Those
-    // finalisers may bufferevent_free() into worker bases — freeing
-    // those bases here triggers libevent's "evcb_pri < nactivequeues"
-    // assertion and use-after-free in __gc.
-    //
-    // Stop worker threads (no callbacks can fire any more) and clean
-    // signal handlers / dns / openssl. The worker bases and the main
-    // base are freed by the matching event_mgr_loop_cleanup() call,
-    // which the embedder invokes after lua_close. If the embedder
-    // never calls it, the bases leak at process exit — that is far
-    // preferable to a crash.
-    //
-    // cleanup_curl_clients() must run here, while BOTH the base and the
-    // Lua state are alive: curl_multi_cleanup drives multi_done →
-    // Curl_pgrsDone → onprogress, which dereferences L via clientp.
-    // Running it later (after lua_close) crashes in lua_rawgeti.
-    // Also tears down curlimp (if linked) so its static multi/timers do
-    // not outlive the base across stop/restart.
-    cleanup_signals();
-    cleanup_signal_events();
-    event_mgr_workers_stop_threads();
-    cleanup_curl_clients();
-    cleanup_openssl();
-    cleanup_dnsbase();
-    // The workers are gone; hand-offs they armed on the main base (the
-    // HTTPD finalize job) still need one pass so server resources are
-    // released instead of being pinned until process exit.
-    event_mgr_drain_internal_jobs(base, -1, EVENT_MGR_DRAIN_MAX_MS);
-
-    looping = 0;
-    initialized = 0;
-    atomic_store(&lifecycle_state, EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP);
-}
-
-/* ---- Lua-lock hand-off around the blocking loop --------------------------
- *
- * The calling thread still owns every lock level it took before entering the
- * loop — typically the extra level event_mgr_workers_init() takes when the pool
- * is started from the main script (see there). Parking the loop while holding
- * it leaves every worker callback blocked in LockMainState forever, so release
- * all levels first and restore exactly the same depth afterwards (which keeps
- * the enclosing resume's trailing unlock balanced). It is not shape-specific:
- * on a hooked core the level released here is that worker-pool hold, not a
- * resume layer (luaD_precall already dropped those at the C-call boundary).
- *
- * It lives here, in the loop entry itself, rather than in one particular
- * caller, because fan.loop() (luafan_start) is only one way a script reaches
- * the loop: an embedded host also enters it directly when the entry chunk
- * yields before fan.loop() (e.g. LuanMac/LuaBridge.m), and such a host cannot
- * know about the pool hold. With the hand-off in luafan_start only, that entry
- * kept the hold and starved every worker callback. Releasing at the entry point
- * covers all of them; a run without a worker pool releases nothing (depth 0),
- * so this degenerates into a no-op.
- *
- * Weak symbols: embedders without any lock implementation get a no-op. */
-int event_mgr_loop() {
-    if (looping) {
-        return -1;
-    }
-
-    int lock_depth = FAN_LOCK_SUSPEND_FOR_LOOP();
-    event_mgr_loop_run(1);
-    FAN_LOCK_RESUME_AFTER_LOOP(lock_depth);
-    return 0;
-}
-
-/* Partial cleanup — keep the event bases for the later
- * event_mgr_loop_cleanup(). Stop the worker threads but keep their bases alive:
- * Lua finalisers still run after this returns (lua_close → __gc →
- * bufferevent_free) and must be able to remove themselves from their owning
- * worker base, so only event_mgr_loop_cleanup() frees them. The cleanup
- * sequence itself is shared with event_mgr_loop() (see event_mgr_loop_run());
- * it includes cleanup_curl_clients(), which must run here while the Lua state
- * is still alive — curl_multi_cleanup → multi_done → onprogress dereferences L
- * — and curlimp's static multi/timers must not outlive the base.
- *
- * Runs the loop under the same Lua-lock hand-off as event_mgr_loop(): this is
- * the other way the main base's loop is run, so it must not leave the
- * worker-pool lock hold on the calling thread either (docs/threading-model.md
- * §2). */
-int event_mgr_loop_later_cleanup() {
-    if (looping) {
-        return -1;
-    }
-
-    int lock_depth = FAN_LOCK_SUSPEND_FOR_LOOP();
-    event_mgr_loop_run(0);
-    FAN_LOCK_RESUME_AFTER_LOOP(lock_depth);
-    return 0;
-}
-
-void event_mgr_cleanup() {
-    int expected = EVENT_MGR_LIFECYCLE_IDLE;
-
-    /* A loop teardown owns the bases from loop entry until the embedder calls
-     * event_mgr_loop_cleanup(). Do not let a second cleanup path free them in
-     * that interval. */
-    if (!atomic_compare_exchange_strong(&lifecycle_state, &expected,
-                                        EVENT_MGR_LIFECYCLE_FINALIZING)) {
-        return;
-    }
-
-    if (initialized) {
-        full_cleanup();
-    }
-    atomic_store(&lifecycle_state, EVENT_MGR_LIFECYCLE_IDLE);
-}
-
-void event_mgr_loop_cleanup() {
-    int expected = atomic_load(&lifecycle_state);
-    for (;;) {
-        /* A standalone C test may create a base without entering the loop.
-         * Preserve that historical cleanup contract while still rejecting a
-         * running or already-finalizing lifecycle. */
-        if (expected != EVENT_MGR_LIFECYCLE_IDLE &&
-            expected != EVENT_MGR_LIFECYCLE_PENDING_FINAL_CLEANUP) {
-            return;
-        }
-        if (atomic_compare_exchange_weak(&lifecycle_state, &expected,
-                                         EVENT_MGR_LIFECYCLE_FINALIZING)) {
-            break;
-        }
-    }
-
-    // Signal events borrow the main base and event_del() reads ev_base before
-    // it can report an inactive event. Remove them before freeing the base;
-    // cleanup_signal_events() is idempotent for repeated shutdown paths.
-    cleanup_signal_events();
-    // Free worker bases now — by this point the caller has run lua_close()
-    // so all bevs created on these bases have been removed.
-    event_mgr_workers_free_bases();
-    cleanup_eventbase();
-    atomic_store(&lifecycle_state, EVENT_MGR_LIFECYCLE_IDLE);
-}
-
-// Check if we are currently in a loop without starting one
-int event_mgr_is_looping() {
-    return looping;
+void event_mgr_cleanup(void) {
+    event_mgr_loop_cleanup();
 }

@@ -30,7 +30,7 @@ All tests run with ASan (`LD_PRELOAD=libasan.so.8`) to catch memory issues.
 | test_sqlite3_orm | 12 | 0 | 0 | |
 | test_chunked_disconnect_lua | pass | - | - | |
 | test_evdns_cleanup_order | 2 | 0 | 0 | |
-| test_event_mgr_loop_cleanup | 1 | 0 | 0 | |
+| test_event_mgr_single_threaded | 1 | 0 | 0 | |
 | test_luafan_mainevent_lifetime | 3 | 0 | 0 | |
 | test_tcpd_cleanup_mainthread | 2 | 0 | 0 | |
 | test_tcpd_concurrent_lifecycle | 2 | 0 | 0 | |

@@ -193,14 +193,7 @@ typedef struct
   MYSQL my_conn;
   int coref;
   int coref_count;
-  int worker_id;
-  /* Async waits still armed for this connection, and the accounting the close
-   * drain needs. The base of ctx->worker_id may be run by another worker thread,
-   * so the arming thread, the dispatching loop thread and the closing thread all
-   * touch this object. It is reference counted and owned by this userdata, but
-   * outlives it while a claim is still in flight: the resumed coroutine is the
-   * only strong reference to the connection, so the GC may finalize this
-   * userdata before the dispatcher left its claim (see luamariadb.c). */
+  /* Async waits still armed for this connection and close-drain accounting. */
   DB_PENDING *pending;
 } DB_CTX;
 
@@ -220,7 +213,6 @@ typedef struct DB_STATUS
   event_callback_fn callback;
   DB_CTX *ctx;
   DB_PENDING *pending;    // reference-counted accounting (see DB_PENDING)
-  int owner_worker_id;    // event base that owns event and continuation cleanup
   int extra;
   int defer_retries;      // dispatches handed back until the coroutine yielded
   struct DB_STATUS *next; // next armed wait on pending->waits
@@ -278,15 +270,13 @@ int luamariadb_push_errno(lua_State *L, DB_CTX *ctx);
 DB_PENDING *mariadb_pending_new(void);
 DB_PENDING *mariadb_pending_ref(DB_PENDING *pending);
 void mariadb_pending_unref(DB_PENDING *pending);
-/* Registers the async wait event for `status` on the base of ctx->worker_id.
+/* Registers the async wait event on the single event base.
  * Returns 0 when the wait event is armed (the caller must yield), non-zero when
  * it could not be armed (the caller must restore its own coroutine instead of
  * yielding, otherwise the operation hangs forever).
  *
- * Arming and publishing the wait on ctx->pending is one critical section (the
- * pending context's mutex): the event base of ctx->worker_id may belong to
- * another worker thread, so from the moment event_add() returns that thread can
- * dispatch the wait, and the arming thread must not touch the bag after it. */
+ * Arming and publishing the wait on ctx->pending is one critical section, so
+ * the callback cannot race the arming thread's ownership of the wait bag. */
 int wait_for_status(lua_State *L, DB_CTX *ctx, void *data, int status, event_callback_fn callback, int extra);
 int mariadb_push_wait_error(lua_State *L);
 /* Marks `ctx` closed under the pending context's mutex. Callers must do this

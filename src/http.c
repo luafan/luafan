@@ -17,7 +17,6 @@ typedef struct _ResumeInfo ResumeInfo;
 typedef struct _HttpRuntime HttpRuntime;
 
 struct _HttpRuntime {
-    int worker_id;
     struct event_base *base;
     struct event *timer_event;
     struct event *timer_check_multi_info;
@@ -27,8 +26,7 @@ struct _HttpRuntime {
     ResumeInfo *resume_head;
 };
 
-static HttpRuntime main_runtime = { .worker_id = HTTP_RUNTIME_MAIN };
-static HttpRuntime worker_runtimes[EVENT_MGR_MAX_WORKERS];
+static HttpRuntime main_runtime;
 
 /* Proxy + DNS globals defined here for all platforms. External code (iOS app
    TunnelService.m, Android JNI bridge, future macOS settings UI) may override
@@ -867,9 +865,7 @@ int debug_callback(CURL *curl_handle, curl_infotype infotype, char *buf, size_t 
 
 static int http_runtime_prepare(HttpRuntime *runtime) {
     if (!runtime->base) {
-        runtime->base = runtime->worker_id >= 0
-            ? event_mgr_worker_base(runtime->worker_id)
-            : event_mgr_base();
+        runtime->base = event_mgr_base();
     }
     if (!runtime->base) {
         return -1;
@@ -924,42 +920,15 @@ static int http_lua_error(lua_State *L, const char *msg) {
 }
 
 static HttpRuntime *http_runtime_for_request(lua_State *L) {
-    int current_worker = event_mgr_current_worker_id();
-    int requested_worker = current_worker;
-    int worker_specified = 0;
-
     if (lua_istable(L, 1)) {
         lua_getfield(L, 1, "worker");
         if (!lua_isnil(L, -1)) {
-            worker_specified = 1;
-            if (!lua_isinteger(L, -1)) {
-                lua_pop(L, 1);
-                http_lua_error(L, "http worker must be an integer");
-            }
-            requested_worker = (int)lua_tointeger(L, -1);
+            lua_pop(L, 1);
+            http_lua_error(L, "http worker is unsupported in single-threaded mode");
         }
         lua_pop(L, 1);
     }
-
-    if (!worker_specified && current_worker < 0) {
-        requested_worker = HTTP_RUNTIME_MAIN;
-    }
-    if (requested_worker < HTTP_RUNTIME_MAIN) {
-        http_lua_error(L, "http worker must be -1 or a non-negative worker id");
-    }
-    if (requested_worker == HTTP_RUNTIME_MAIN) {
-        if (current_worker >= 0 && worker_specified) {
-            http_lua_error(L, "worker thread cannot use the main HTTP runtime");
-        }
-        return &main_runtime;
-    }
-    if (requested_worker >= event_mgr_worker_count()) {
-        http_lua_error(L, "http worker is unavailable");
-    }
-    if (current_worker != requested_worker) {
-        http_lua_error(L, "http worker must match the current event worker");
-    }
-    return &worker_runtimes[requested_worker];
+    return &main_runtime;
 }
 
 /* Lock contract: every public entry point below (http_get/http_post/...) takes
@@ -1947,23 +1916,12 @@ static void cleanup_http_runtime(HttpRuntime *runtime) {
 
 void cleanup_http_curl(void) {
     cleanup_http_runtime(&main_runtime);
-    for (int i = 0; i < EVENT_MGR_MAX_WORKERS; i++) {
-        if (worker_runtimes[i].base || worker_runtimes[i].multi ||
-            worker_runtimes[i].inflight_head || worker_runtimes[i].timer_event ||
-            worker_runtimes[i].timer_check_multi_info) {
-            cleanup_http_runtime(&worker_runtimes[i]);
-        }
-    }
 }
 
 LUA_API int luaopen_fan_http_core(lua_State *L) {
     curl_global_init(CURL_GLOBAL_ALL);
 
-    main_runtime.worker_id = HTTP_RUNTIME_MAIN;
     main_runtime.base = event_mgr_base();
-    for (int i = 0; i < EVENT_MGR_MAX_WORKERS; i++) {
-        worker_runtimes[i].worker_id = i;
-    }
 
     if (!share_handle) {
         share_handle = curl_share_init();

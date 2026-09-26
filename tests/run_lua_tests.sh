@@ -20,7 +20,6 @@ echo "=================================="
 
 # Interpreter selection.
 #   LUAFAN_LUA_BIN            explicit interpreter (e.g. /usr/local/bin/lua from
-#                             tests/build_hooked_lua.sh -- the "hooked" build)
 #   luajit / lua              whatever PATH offers otherwise
 # A hooked interpreter owns the global Lua lock itself; a stock one makes luafan
 # fall back to its resume wrapper. Either way the lock mode is printed below so a
@@ -104,47 +103,16 @@ else
     TESTS_RUN=1
 fi
 
-# Worker/lock granularity suite, run as its own process -- the same step CI runs.
-# It is deliberately NOT in the curated list inside run_all_lua_tests.lua: that
-# runner executes each test file inside pcall() inside fan.loop(), and a test that
-# drives its own file-scope fan.loop() ends that nested loop with fan.loopbreak()/
-# os.exit(), which also ends the runner's loop and silently truncates the run.
-# Needs a lock build that carries the diagnostics (LUAFAN_TESTING=ON)
-# and >= 4 event workers; it exits 77 (SKIP) otherwise, so on a default dev build
-# this step is just a skip line.
-LOCK_TEST="$SCRIPT_DIR/lua/test_lock_granularity.lua"
-if [ -f "$LOCK_TEST" ]; then
-    echo
-    echo -e "${YELLOW}Running worker lock granularity tests...${NC}"
-    if timeout 180s $LUA_CMD "$LOCK_TEST"; then
-        echo -e "${GREEN}✓ Lock granularity test passed${NC}"
-        TESTS_RUN=$((TESTS_RUN + 1))
-    else
-        lock_exit=$?
-        if [ "$lock_exit" -eq 77 ]; then
-            echo -e "${YELLOW}⊝ Lock granularity test skipped (needs LUAFAN_TESTING build and >= 4 workers)${NC}"
-        else
-            if [ "$lock_exit" -eq 124 ]; then
-                echo -e "${RED}✗ Lock granularity test timed out${NC}"
-            else
-                echo -e "${RED}✗ Lock granularity test failed${NC}"
-            fi
-            TESTS_RUN=$((TESTS_RUN + 1))
-            TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
-        fi
-    fi
-fi
+# All event callbacks run on the single event loop; worker-lock suites are not
+# part of the single-threaded runtime test matrix.
 
-# Only native crash/UAF guards, independently-sized worker pools, and the
-# mainevent lifetime guard require a separate process.
+# Native lifecycle guards that require a separate process.
 STANDALONE_TESTS="
 test_tcpd_concurrent_lifecycle.lua
 test_udpd_event_lifecycle.lua
 test_udpd_send_ready_race.lua
 test_httpd_websocket_lifecycle.lua
 test_mariadb_pending_event.lua
-test_mariadb_workers.lua
-test_mariadb_pending_owner.lua
 test_luafan_mainevent_lifetime.lua
 "
 for standalone_name in $STANDALONE_TESTS; do

@@ -180,7 +180,7 @@ LUA_API int lua_evhttp_request_read(lua_State *L) {
  */
 
 static int reply_on_owner_thread(Request *request) {
-    return event_mgr_is_current_owner(request->worker_id);
+    return request != NULL;
 }
 
 /* Reply status as the calling thread must see it. reply_pending_status is the
@@ -208,10 +208,8 @@ static void reply_note_status(Request *request, int status) {
 }
 
 static int reply_wrong_thread_error(lua_State *L, Request *request, const char *what) {
-    return luaL_error(L,
-                      "%s must run on the connection's owner worker (worker_id=%d); "
-                      "calling it from another thread would race the owner event loop",
-                      what, request->worker_id);
+    (void)request;
+    return luaL_error(L, "%s must run on the single event-loop owner", what);
 }
 
 /* ---- owner-thread implementations (shared by the inline and the marshaled
@@ -530,7 +528,7 @@ static int reply_enqueue(lua_State *L, Request *request, httpd_reply_op_t *op) {
         return 0;
     }
 
-    if (event_mgr_worker_once(request->worker_id, httpd_reply_drain_cb, request) != 0) {
+    if (event_mgr_once_internal(httpd_reply_drain_cb, request) != 0) {
         /* Owner loop unreachable (stopped or shutting down): nothing can ever
          * run this batch. Drop it instead of pinning the request forever. */
         pthread_mutex_lock(&request->ws_mutex);

@@ -64,11 +64,8 @@ typedef struct tcpd_config {
 typedef struct tcpd_base_conn {
     // Core connection data
     struct bufferevent *buf;
-    // Stable event-base owner: -1 is the main base, >= 0 is worker N.
-    // It is selected when the connection is created and never changes.
-    int owner_worker_id;
-    // Serialises publication and invalidation of `buf` between the worker
-    // thread (eventcb / cleanup, which destroy the bev) and external callers
+    // Serialises publication and invalidation of `buf` during event cleanup
+    // and external callers.
     // such as tcpd_conn_send (which may run on the Lua main thread).
     // Held only across the read of `buf` and the bufferevent operations that
     // depend on it, never across event_base / Lua callbacks.

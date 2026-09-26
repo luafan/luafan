@@ -61,10 +61,8 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     tcpd_accept_conn_t *accept = lua_newuserdata(cbs.co, sizeof(tcpd_accept_conn_t));
     memset(accept, 0, sizeof(tcpd_accept_conn_t));
 
-    // Initialize base connection. Accepted connections inherit the listener's
-    // owner; they must never be rebound to a different worker implicitly.
+    // Initialize accepted connections on the single event loop.
     tcpd_base_conn_init(&accept->base, TCPD_CONN_TYPE_ACCEPT, mainthread);
-    accept->base.owner_worker_id = server->worker_id;
     accept->base.config = server->config;  // Copy server config
 
     luaL_getmetatable(cbs.co, LUA_TCPD_ACCEPT_TYPE);
@@ -95,7 +93,6 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     // bufferevent lock still protects proxy/tunnel writes from other threads;
     // it does not move the accept handshake or change callback affinity.
     struct event_base *accept_base = evconnlistener_get_base(listener);
-    int use_worker = (event_mgr_worker_count() > 0);
     struct bufferevent *bev;
 
     // Create bufferevent (SSL or regular). The accept handshake stays on the
@@ -154,15 +151,9 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
     accept->base.buf = bev;
     accept->base.state = TCPD_CONN_CONNECTED;
 
-    // Set callbacks
+    // Set callbacks and enable the single event-loop connection.
     bufferevent_setcb(bev, tcpd_common_readcb, tcpd_common_writecb, tcpd_common_eventcb, &accept->base);
-    if (use_worker) {
-        // With workers, defer EV_READ until tcpd_accept_bind sets onReadRef,
-        // avoiding a race where the worker fires readcb before Lua setup.
-        bufferevent_enable(bev, EV_WRITE);
-    } else {
-        bufferevent_enable(bev, EV_READ | EV_WRITE);
-    }
+    bufferevent_enable(bev, EV_READ | EV_WRITE);
 
     // Apply configuration
     tcpd_config_apply_buffers(&server->config, bev, fd);
@@ -208,10 +199,7 @@ void tcpd_server_rebind(lua_State *L, tcpd_server_t *server) {
         server->listener = NULL;
     }
 
-    struct event_base *listener_base =
-        (server->worker_id >= 0 && event_mgr_worker_count() > 0)
-            ? event_mgr_worker_base(server->worker_id)
-            : event_mgr_base();
+    struct event_base *listener_base = event_mgr_base();
 
     if (server->unix_path) {
         // Unix domain socket bind
@@ -359,22 +347,10 @@ LUA_API int tcpd_bind(lua_State *L) {
     SET_INT_FROM_TABLE(L, server->port, 1, "port");
     DUP_STR_FROM_TABLE(L, server->unix_path, 1, "unix_path");
 
-    // Unspecified worker keeps the listener on the main event base.
-    // Explicit worker selects that worker event base; invalid values are
-    // rejected instead of silently falling back to the main base.
-    server->worker_id = -1;
     lua_getfield(L, 1, "worker");
     if (!lua_isnil(L, -1)) {
-        if (!lua_isinteger(L, -1)) {
-            lua_pop(L, 1);
-            return luaL_error(L, "tcpd.bind worker must be an integer");
-        }
-        int w = (int)lua_tointeger(L, -1);
-        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
-            lua_pop(L, 1);
-            return luaL_error(L, "tcpd.bind worker is unavailable");
-        }
-        server->worker_id = w;
+        lua_pop(L, 1);
+        return luaL_error(L, "tcpd.bind worker is unsupported in single-threaded mode");
     }
     lua_pop(L, 1);
 
@@ -622,7 +598,7 @@ LUA_API int tcpd_accept_getpeername(lua_State *L) {
 static int tcpd_server_gc(lua_State *L);  // forward declaration
 
 static void tcpd_server_cleanup_owner(tcpd_server_t *server) {
-    if (!server || !event_mgr_is_current_owner(server->worker_id)) {
+    if (!server) {
         return;
     }
 
@@ -674,22 +650,6 @@ static int tcpd_server_close(lua_State *L) {
 
 static int tcpd_server_gc(lua_State *L) {
     tcpd_server_t *server = luaL_checkudata(L, 1, LUA_TCPD_SERVER_TYPE);
-
-    if (!event_mgr_is_current_owner(server->worker_id)) {
-        if (!server->cleanup_requested) {
-            server->cleanup_requested = 1;
-            if (event_mgr_worker_once_internal(server->worker_id,
-                                               tcpd_server_cleanup_owner_cb,
-                                               server) != 0) {
-                server->cleanup_requested = 0;
-                return luaL_error(L,
-                                  "tcpd server owner cleanup dispatch failed (owner=%d)",
-                                  server->worker_id);
-            }
-        }
-        return 0;
-    }
-
     tcpd_server_cleanup_owner(server);
     return 0;
 }

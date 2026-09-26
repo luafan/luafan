@@ -12,40 +12,8 @@ typedef struct {
 } udpd_conn_t;
 
 // Lua garbage collection for UDP connections
-static void udpd_conn_gc_owner_cb(evutil_socket_t fd, short what, void *arg) {
-    (void)fd;
-    (void)what;
-    udpd_conn_t *conn = (udpd_conn_t *)arg;
-    if (!conn || !event_mgr_is_current_owner(conn->base.worker_id)) {
-        LOGE("udp owner cleanup ran on the wrong worker");
-        return;
-    }
-    udpd_base_conn_cleanup(&conn->base);
-    if (conn->base.cleaned_up) {
-        udpd_base_conn_finalize(&conn->base);
-    }
-}
-
 LUA_API int lua_udpd_conn_gc(lua_State *L) {
     udpd_conn_t *conn = luaL_checkudata(L, 1, LUA_UDPD_CONNECTION_TYPE);
-    if (!event_mgr_is_current_owner(conn->base.worker_id)) {
-        if (!conn->base.cleanup_pending) {
-            // The owner callback receives a native pointer to the userdata.
-            // Keep the userdata alive until that callback has completed; this
-            // is a one-shot cleanup pin, not a permanent connection pin.
-            if (conn->base.self_ref == LUA_NOREF) {
-                lua_pushvalue(L, 1);
-                conn->base.self_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-            }
-            conn->base.cleanup_pending = 1;
-            if (event_mgr_worker_once_internal(conn->base.worker_id,
-                                               udpd_conn_gc_owner_cb, conn) != 0) {
-                LOGE("udp owner cleanup dispatch failed (owner=%d); retaining native resources",
-                     conn->base.worker_id);
-            }
-        }
-        return 0;
-    }
     udpd_base_conn_cleanup(&conn->base);
     if (conn->base.cleaned_up) {
         udpd_base_conn_finalize(&conn->base);
@@ -120,26 +88,6 @@ LUA_API int udpd_new(lua_State *L) {
     // Extract interface
     conn->base.interface = udpd_extract_interface_from_lua(L, 1);
     conn->base.config.base.interface = conn->base.interface;
-
-    // Extract optional worker parameter for multi-threaded event base.
-    // Unspecified worker keeps the connection on the main event base.
-    int worker_id = -1;
-    lua_getfield(L, 1, "worker");
-    if (!lua_isnil(L, -1)) {
-        if (!lua_isinteger(L, -1)) {
-            lua_pop(L, 1);
-            return luaL_error(L, "udp worker must be an integer");
-        }
-        int w = (int)lua_tointeger(L, -1);
-        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
-            lua_pop(L, 1);
-            return luaL_error(L, "udp worker is unavailable");
-        }
-        worker_id = w;
-    }
-    lua_pop(L, 1);
-
-    conn->base.worker_id = worker_id;
 
     // Set up Lua state reference for async operations
     REF_STATE_SET((&conn->base), L);

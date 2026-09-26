@@ -193,39 +193,30 @@ TEST_CASE(test_event_mgr_timer_integration) {
     event_del(&timer_event);
 }
 
-static int worker_once_callback_count = 0;
+static int once_callback_count = 0;
 
-static void test_worker_once_callback(evutil_socket_t fd, short event, void *arg) {
+static void test_once_callback(evutil_socket_t fd, short event, void *arg) {
     (void)fd;
     (void)event;
     (void)arg;
-    worker_once_callback_count++;
+    once_callback_count++;
 }
 
-TEST_CASE(test_event_mgr_worker_once) {
+TEST_CASE(test_event_mgr_once_internal) {
     struct event_base *base = event_mgr_base();
     TEST_ASSERT_NOT_NULL(base);
 
-    TEST_ASSERT_EQUAL(-1, event_mgr_worker_once(-1, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, event_mgr_once_internal(NULL, NULL));
 
-    worker_once_callback_count = 0;
-    TEST_ASSERT_EQUAL(0, event_mgr_worker_once(-1, test_worker_once_callback, NULL));
+    once_callback_count = 0;
+    TEST_ASSERT_EQUAL(0, event_mgr_once_internal(test_once_callback, NULL));
     TEST_ASSERT_EQUAL(0, event_base_loop(base, EVLOOP_ONCE));
-    TEST_ASSERT_EQUAL(1, worker_once_callback_count);
+    TEST_ASSERT_EQUAL(1, once_callback_count);
 }
 
-TEST_CASE(test_event_mgr_workers_zero_and_duplicate) {
-    event_mgr_workers_shutdown();
-    TEST_ASSERT_EQUAL(0, event_mgr_workers_init(0));
-    TEST_ASSERT_EQUAL(0, event_mgr_worker_count());
-    TEST_ASSERT_EQUAL(-1, event_mgr_next_worker());
-    TEST_ASSERT_EQUAL(0, event_mgr_workers_init(0));
-
-    TEST_ASSERT_EQUAL(0, event_mgr_workers_init(1));
-    TEST_ASSERT_EQUAL(1, event_mgr_worker_count());
-    TEST_ASSERT_EQUAL(-1, event_mgr_workers_init(1));
-    event_mgr_workers_shutdown();
-    TEST_ASSERT_EQUAL(0, event_mgr_worker_count());
+TEST_CASE(test_event_mgr_single_threaded_diagnostics) {
+    TEST_ASSERT_EQUAL(1, event_mgr_is_current_owner());
+    TEST_ASSERT_EQUAL(FAN_LUA_LOCK_MODE_SINGLE, event_mgr_lua_lock_mode());
 }
 
 /* Set up test suite */
@@ -240,8 +231,8 @@ TEST_SUITE_BEGIN(event_mgr)
     TEST_SUITE_ADD(test_event_mgr_init_cycles)
     TEST_SUITE_ADD(test_event_mgr_error_conditions)
     TEST_SUITE_ADD(test_event_mgr_timer_integration)
-    TEST_SUITE_ADD(test_event_mgr_worker_once)
-    TEST_SUITE_ADD(test_event_mgr_workers_zero_and_duplicate)
+    TEST_SUITE_ADD(test_event_mgr_once_internal)
+    TEST_SUITE_ADD(test_event_mgr_single_threaded_diagnostics)
 TEST_SUITE_END(event_mgr)
 
 TEST_SUITE_ADD_NAME(test_event_mgr_base_creation)
@@ -254,8 +245,8 @@ TEST_SUITE_ADD_NAME(test_event_mgr_base_recreation)
 TEST_SUITE_ADD_NAME(test_event_mgr_init_cycles)
 TEST_SUITE_ADD_NAME(test_event_mgr_error_conditions)
 TEST_SUITE_ADD_NAME(test_event_mgr_timer_integration)
-TEST_SUITE_ADD_NAME(test_event_mgr_worker_once)
-TEST_SUITE_ADD_NAME(test_event_mgr_workers_zero_and_duplicate)
+TEST_SUITE_ADD_NAME(test_event_mgr_once_internal)
+TEST_SUITE_ADD_NAME(test_event_mgr_single_threaded_diagnostics)
 
 TEST_SUITE_FINISH(event_mgr)
 

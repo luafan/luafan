@@ -9,7 +9,7 @@
 // Forward declarations
 static tcpd_error_t tcpd_analyze_event_error(struct bufferevent *bev, short events);
 static void tcpd_call_lua_callback(lua_State *mainthread, int callback_ref, int argc);
-static void tcpd_release_bufferevent_on_owner(struct bufferevent *bev, int owner_worker_id);
+static void tcpd_release_bufferevent(struct bufferevent *bev);
 
 // Helper function to push connection object to Lua stack from weak table
 void tcpd_push_connection_object(lua_State *co, tcpd_base_conn_t *conn) {
@@ -27,11 +27,6 @@ void tcpd_common_readcb(struct bufferevent *bev, void *ctx) {
     tcpd_base_conn_t *conn = (tcpd_base_conn_t *)ctx;
 
     if (!conn) return;
-    if (!tcpd_conn_is_current_owner(conn)) {
-        LOGE("tcpd read callback on foreign worker: owner=%d current=%d\n",
-             conn->owner_worker_id, event_mgr_current_worker_id());
-        return;
-    }
 
     // Snapshot buf under the mutex so a concurrent base_conn_cleanup that
     // is in the middle of nulling conn->buf and freeing the bev cannot
@@ -113,11 +108,6 @@ void tcpd_common_writecb(struct bufferevent *bev, void *ctx) {
     tcpd_base_conn_t *conn = (tcpd_base_conn_t *)ctx;
 
     if (!conn) return;
-    if (!tcpd_conn_is_current_owner(conn)) {
-        LOGE("tcpd write callback on foreign worker: owner=%d current=%d\n",
-             conn->owner_worker_id, event_mgr_current_worker_id());
-        return;
-    }
 
     // Snapshot under buf_mutex — see tcpd_common_readcb for rationale.
     pthread_mutex_lock(&conn->buf_mutex);
@@ -175,11 +165,6 @@ void tcpd_common_eventcb(struct bufferevent *bev, short events, void *ctx) {
     tcpd_base_conn_t *conn = (tcpd_base_conn_t *)ctx;
 
     if (!conn) return;
-    if (!tcpd_conn_is_current_owner(conn)) {
-        LOGE("tcpd event callback on foreign worker: owner=%d current=%d\n",
-             conn->owner_worker_id, event_mgr_current_worker_id());
-        return;
-    }
 
     // Handle connection established event (only for client connections)
     if (events & BEV_EVENT_CONNECTED && conn->type == TCPD_CONN_TYPE_CLIENT) {
@@ -321,7 +306,7 @@ after_eof_read:
         pthread_mutex_unlock(&conn->buf_mutex);
 
         if (bev_to_free) {
-            tcpd_release_bufferevent_on_owner(bev_to_free, conn->owner_worker_id);
+            tcpd_release_bufferevent(bev_to_free);
         }
 
         // Call the disconnected callback if set
@@ -456,35 +441,15 @@ void tcpd_shutdown_bufferevent(struct bufferevent *bev) {
     bufferevent_free(bev);
 }
 
-/* The job owns only the native bufferevent pointer. It deliberately does not
- * retain a Lua userdata or tcpd_base_conn_t: GC may have already completed the
- * userdata cleanup by the time this runs. */
-static void tcpd_owner_bufferevent_cleanup_cb(evutil_socket_t fd, short events, void *arg) {
-    (void)fd;
-    (void)events;
-    tcpd_shutdown_bufferevent((struct bufferevent *)arg);
-}
 
-/* Detach and destroy a bufferevent on its event-base owner. On a foreign
- * thread, event_base_once queues the final free after callbacks already queued
- * on that base, so a running owner callback cannot race the free. If dispatch
- * is unavailable during teardown, intentionally leak the detached native
- * object rather than freeing it on the wrong event base. */
-static void tcpd_release_bufferevent_on_owner(struct bufferevent *bev, int owner_worker_id) {
-    if (!bev) return;
-    if (event_mgr_is_current_owner(owner_worker_id)) {
+static void tcpd_release_bufferevent(struct bufferevent *bev) {
+    if (bev) {
         tcpd_shutdown_bufferevent(bev);
-        return;
-    }
-    if (event_mgr_worker_once_internal(owner_worker_id,
-                                       tcpd_owner_bufferevent_cleanup_cb, bev) != 0) {
-        LOGE("tcpd: unable to hand off bufferevent cleanup to owner=%d; leaking native resource\n",
-             owner_worker_id);
     }
 }
 
 int tcpd_conn_is_current_owner(const tcpd_base_conn_t *conn) {
-    return conn && event_mgr_is_current_owner(conn->owner_worker_id);
+    return conn != NULL;
 }
 
 // Initialize callbacks from Lua table
@@ -522,7 +487,6 @@ int tcpd_base_conn_init(tcpd_base_conn_t *conn, tcpd_conn_type_t type, lua_State
 
     conn->type = type;
     conn->state = TCPD_CONN_DISCONNECTED;
-    conn->owner_worker_id = event_mgr_current_worker_id();
     conn->mainthread = utlua_mainthread(L);
     conn->buf = NULL;
     conn->ssl_ctx = NULL;
@@ -557,7 +521,7 @@ void tcpd_base_conn_cleanup(tcpd_base_conn_t *conn) {
     pthread_mutex_unlock(&conn->buf_mutex);
 
     if (bev_to_free) {
-        tcpd_release_bufferevent_on_owner(bev_to_free, conn->owner_worker_id);
+        tcpd_release_bufferevent(bev_to_free);
     }
 
     // Clear callback references.

@@ -16,7 +16,6 @@ typedef struct {
     int onDisconnectedRef;
 
     lua_State *mainthread;
-    int worker_id;
     int closed;
 
     struct event *read_ev;
@@ -32,13 +31,6 @@ static FIFO *fifo_check(lua_State *L, int index) {
 }
 
 static void fifo_cleanup_owner(FIFO *fifo);
-static void fifo_cleanup_owner_cb(evutil_socket_t fd, short what, void *arg) {
-    (void)fd;
-    (void)what;
-    FIFO *fifo = (FIFO *)arg;
-    fifo_cleanup_owner(fifo);
-    free(fifo);
-}
 
 static void fifo_write_cb(evutil_socket_t fd, short event, void *arg) {
     FIFO *fifo = (FIFO *)arg;
@@ -154,23 +146,6 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
     lua_Integer mode = luaL_optinteger(L, -1, 0600);
     lua_pop(L, 1);
 
-    // Validate the optional worker before creating the FIFO so an invalid
-    // value cannot leave a freshly created fifo file behind.
-    int worker_id = -1;
-    lua_getfield(L, 1, "worker");
-    if (!lua_isnil(L, -1)) {
-        if (!lua_isinteger(L, -1)) {
-            lua_pop(L, 1);
-            return luaL_error(L, "fifo worker must be an integer");
-        }
-        int w = (int)lua_tointeger(L, -1);
-        if (w < -1 || (w >= 0 && w >= event_mgr_worker_count())) {
-            lua_pop(L, 1);
-            return luaL_error(L, "fifo worker is unavailable");
-        }
-        worker_id = w;
-    }
-    lua_pop(L, 1);
 
     int found_fifo = 0;
     struct stat st;
@@ -206,7 +181,6 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
     luaL_getmetatable(L, LUA_FIFO_CONNECTION_TYPE);
     lua_setmetatable(L, -2);
     fifo->mainthread = utlua_mainthread(L);
-    fifo->worker_id = worker_id;
     fifo->closed = 0;
     // fifo->read_ev = NULL;
     // fifo->write_ev = NULL;
@@ -257,10 +231,7 @@ LUA_API int luafan_fifo_connect(lua_State *L) {
     }
 
     fifo->socket = socket;
-    struct event_base *fifo_base =
-        (fifo->worker_id >= 0 && event_mgr_worker_count() > 0)
-            ? event_mgr_worker_base(fifo->worker_id)
-            : event_mgr_base();
+    struct event_base *fifo_base = event_mgr_base();
 
     if (fifo->onSendReadyRef != LUA_NOREF) {
         fifo->write_ev = event_new(fifo_base, socket, EV_WRITE, fifo_write_cb, fifo);
@@ -379,7 +350,7 @@ after_send_disconnect:
 }
 
 static void fifo_cleanup_owner(FIFO *fifo) {
-    if (!fifo || fifo->closed || !event_mgr_is_current_owner(fifo->worker_id)) return;
+    if (!fifo || fifo->closed) return;
     fifo->closed = 1;
 
     if (fifo->mainthread) {
@@ -423,14 +394,6 @@ LUA_API int luafan_fifo_gc(lua_State *L) {
     FIFO *fifo = *slot;
     *slot = NULL;
     if (!fifo) return 0;
-    if (!event_mgr_is_current_owner(fifo->worker_id)) {
-        if (event_mgr_worker_once_internal(fifo->worker_id,
-                                           fifo_cleanup_owner_cb, fifo) != 0) {
-            LOGE("fifo owner cleanup dispatch failed (owner=%d); retaining native resources",
-                 fifo->worker_id);
-        }
-        return 0;
-    }
     fifo_cleanup_owner(fifo);
     free(fifo);
     return 0;

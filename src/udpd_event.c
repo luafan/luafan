@@ -210,7 +210,6 @@ int udpd_base_conn_init(udpd_base_conn_t *conn, udpd_conn_type_t type, lua_State
     // Initialize event pointers
     conn->read_ev = NULL;
     conn->write_ev = NULL;
-    conn->worker_id = -1;
     conn->self_ref = LUA_NOREF;
     conn->cleanup_pending = 0;
     conn->cleaned_up = 0;
@@ -467,13 +466,7 @@ int udpd_base_conn_bind(udpd_base_conn_t *conn) {
 int udpd_base_conn_setup_events(udpd_base_conn_t *conn) {
     if (!conn || conn->socket_fd < 0) return -1;
 
-    // Use worker event_base if assigned, otherwise main
-    struct event_base *ev_base;
-    if (conn->worker_id >= 0 && event_mgr_worker_count() > 0) {
-        ev_base = event_mgr_worker_base(conn->worker_id);
-    } else {
-        ev_base = event_mgr_base();
-    }
+    struct event_base *ev_base = event_mgr_base();
 
     // Hold event_mutex across event_new + event_add so a parallel
     // request_send_ready / cleanup observes either fully-initialised events
