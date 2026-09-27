@@ -5,11 +5,8 @@
 #include <event2/bufferevent.h>
 #include <pthread.h>
 
-// Every TCPD bufferevent uses libevent's own lock. Proxy/tunnel callbacks may
-// write a target connection while its owner loop drains the output buffer.
-// UNLOCK_CALLBACKS is required because callbacks resume Lua and may re-enter
-// operations on the same bufferevent; its lock is not recursive.
-#define TCPD_BEV_FLAGS (BEV_OPT_THREADSAFE | BEV_OPT_UNLOCK_CALLBACKS)
+// TCPD runs on the single event loop; no cross-thread bufferevent access is required.
+#define TCPD_BEV_FLAGS 0
 
 // Forward declarations
 struct tcpd_config;
