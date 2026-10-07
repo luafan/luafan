@@ -20,8 +20,8 @@
 --   attempt to index a nil value (local 'apt').
 --
 -- The failure path is not reachable on demand from Lua, so it is exercised with
--- a scratch build that forces it (same lever as test_httpd_async_teardown.lua
--- scenario E):
+-- a scratch build that forces it (using the same drain-test build lever as the
+-- HTTPD lifecycle regression coverage):
 --
 --   cmake -S . -B /tmp/inject -DCMAKE_C_FLAGS=-DTCPD_ACCEPT_FAIL_INJECT_EVERY=1
 --   LUA_CPATH='/tmp/inject/?.so;;' lua lua/test_tcpd_accept_failure_contract.lua

@@ -102,8 +102,7 @@ void tcpd_server_listener_cb(struct evconnlistener *listener, evutil_socket_t fd
      * every Nth accepted connection so the failed-accept contract documented in
      * docs/api/tcpd.md stays verifiable with a scratch build:
      *   cmake -S . -B /tmp/inject -DCMAKE_C_FLAGS=-DTCPD_ACCEPT_FAIL_INJECT_EVERY=1
-     * Mirrors EVENT_MGR_DRAIN_MAX_MS (see tests/lua/test_httpd_async_teardown.lua
-     * scenario E). N=1 fails every accept, N=2 the 2nd/4th/... The fd is never
+     * Mirrors the HTTPD lifecycle drain-test build configuration. N=1 fails every accept, N=2 the 2nd/4th/... The fd is never
      * wrapped in a bufferevent, so the failure path closes it exactly once. */
     static _Atomic unsigned long accept_inject_seq = 0;
     unsigned long accept_seq = atomic_fetch_add(&accept_inject_seq, 1) + 1;

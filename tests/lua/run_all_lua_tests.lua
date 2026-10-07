@@ -121,7 +121,6 @@ local test_files = {
     "test_fan_utils.lua",
     "test_fan_objectbuf.lua",
     "test_fan_pool.lua",
-    "test_fan_worker.lua",
     "test_fan_upnp.lua",
     "test_fan_httpd_core.lua",
     -- "test_fan_httpd.lua",

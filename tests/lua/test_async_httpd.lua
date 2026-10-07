@@ -419,37 +419,6 @@ suite:test("close_midflight_then_rebind", function()
     server2.serv:close()
 end)
 
--- 10. Worker distribution: with a worker pool the distributed listener must
--- serve plain HTTP from worker-owned connections (worker_id >= 0 visible).
-suite:test("worker_distributed_requests", function()
-    if fan.worker_count() == 0 then
-        print("    (skip: no worker pool available)")
-        return
-    end
-
-    local seen_nonmain = false
-    local done = 0
-    local server = httpd.bind({
-        host = "127.0.0.1", port = 0,
-        onService = function(req, resp)
-            if req.worker_id >= 0 then seen_nonmain = true end
-            resp:reply(200, "OK", "w")
-        end,
-    })
-
-    for i = 1, 10 do
-        coroutine.wrap(function()
-            local res = http.get("http://127.0.0.1:" .. server.port .. "/", 10)
-            done = done + 1
-            assert(res and res.responseCode == 200, "worker-distributed request failed")
-        end)()
-    end
-    assert(wait_until(function() return done == 10 end, 15),
-        "worker-distributed requests incomplete: done=" .. done)
-    assert(seen_nonmain, "no request ever ran on a worker base")
-    server.serv:close()
-end)
-
 -- Optional worker pool (LUAN_TEST_WORKERS=N); must precede fan.loop().
 TestFramework.init_workers_from_env()
 

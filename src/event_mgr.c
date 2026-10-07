@@ -5,9 +5,13 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <pthread.h>
+#include <event2/thread.h>
 
 static struct event_base *base = NULL;
 static struct evdns_base *dnsbase = NULL;
+static pthread_mutex_t base_lifecycle_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int pthread_support_initialized = 0;
 static int initialized = 0;
 static int looping = 0;
 static int signal_count = 0;
@@ -15,6 +19,18 @@ static struct event signal_int;
 static struct event signal_pipe;
 static int signal_int_added = 0;
 static int signal_pipe_added = 0;
+
+/*
+ * Protects the event base pointer and the interval in which callers create
+ * and add events to it. Cleanup takes the same lock before freeing the base.
+ */
+void event_mgr_base_lock(void) {
+    pthread_mutex_lock(&base_lifecycle_mutex);
+}
+
+void event_mgr_base_unlock(void) {
+    pthread_mutex_unlock(&base_lifecycle_mutex);
+}
 
 extern void cleanup_http_curl(void);
 
@@ -57,11 +73,8 @@ static void signal_cb(evutil_socket_t fd, short what, void *arg) {
 }
 
 struct event_base *event_mgr_base(void) {
-    if (!base) {
-        base = event_base_new();
-    }
-    if (base && !initialized) {
-        event_mgr_init();
+    if (!base && event_mgr_init() != 0) {
+        return NULL;
     }
     return base;
 }
@@ -78,6 +91,14 @@ int event_mgr_init(void) {
     if (initialized) {
         return -1;
     }
+
+    if (!pthread_support_initialized) {
+        if (evthread_use_pthreads() != 0) {
+            return -1;
+        }
+        pthread_support_initialized = 1;
+    }
+
     if (!base) {
         base = event_base_new();
     }
@@ -163,6 +184,7 @@ int event_mgr_loop_later_cleanup(void) {
 }
 
 void event_mgr_loop_cleanup(void) {
+    event_mgr_base_lock();
     cleanup_signal_events();
     if (dnsbase) {
         evdns_base_free(dnsbase, 1);
@@ -175,6 +197,7 @@ void event_mgr_loop_cleanup(void) {
     initialized = 0;
     looping = 0;
     signal_count = 0;
+    event_mgr_base_unlock();
 }
 
 void event_mgr_cleanup(void) {

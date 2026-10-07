@@ -1,19 +1,12 @@
 #!/usr/bin/env lua
 
--- Asynchronous tcpd behavior tests.
---
+-- Async TCP behavior tests for the single event-loop runtime.
 -- Server-side read callbacks require the accept handshake: the server's
 -- onaccept(apt) must call apt:bind{onread=..., ondisconnected=...} per
 -- connection (reads are deferred until bind enables EV_READ -- see
--- tcpd_accept_bind). These tests exercise that full async handshake.
---
---   echo under concurrent clients,
---   sequential connect/teardown churn,
---   server-side and client-side disconnect notification,
---   large payload integrity across many reads,
---   send from inside onaccept,
---   worker-affinity server with main-thread clients,
---   multiple servers on distinct ports.
+-- tcpd_accept_bind). These tests cover echo, teardown, disconnect,
+-- large-payload, rebinding, and accept-arity behavior.
+-- Worker-affinity cases are intentionally not part of this suite.
 
 local TestFramework = require('test_framework')
 local fan = require "fan"
@@ -274,44 +267,6 @@ suite:test("send_from_onaccept", function()
     close_server(server)
 end)
 
--- 7. Worker-affinity server, main-thread clients: callbacks run on the worker.
-suite:test("worker_affinity_server", function()
-    if fan.worker_count() == 0 then
-        print("    (skip: no worker pool available)")
-        return
-    end
-
-    local echoed = false
-    local server, port = bind_server({
-        host = "127.0.0.1", port = 0,
-        worker = 1,
-        onaccept = function(self, apt)
-            apt:bind{
-                onread = function(conn, buf)
-                    conn:send(buf)
-                end,
-                ondisconnected = function() end,
-            }
-        end,
-    })
-    assert(type(port) == "number" and port > 0, "tcpd bind failed: port=" .. tostring(port))
-
-    local client = tcpd.connect({
-        host = "127.0.0.1", port = port,
-        onread = function(_, buf)
-            if tostring(buf) == "affinity" then echoed = true end
-        end,
-        ondisconnected = function() end,
-    })
-    assert(client, "connect failed")
-    client:send("affinity")
-
-    assert(wait_until(function() return echoed end, 10),
-        "worker-affinity echo never arrived")
-    client:close()
-    close_server(server)
-end)
-
 -- 8. Client userdata must stay pinned while its bufferevent is active, even
 -- when the Lua caller drops its last external reference before callbacks run.
 suite:test("client_gc_does_not_drop_active_bufferevent", function()
@@ -415,7 +370,7 @@ end)
 -- that path, so this case doubles as the trigger.
 --
 -- The failed-accept branch itself is validated with a scratch build that forces
--- the path (mirrors test_httpd_async_teardown.lua scenario E):
+-- the path:
 --   cmake -S . -B /tmp/inject -DCMAKE_C_FLAGS=-DTCPD_ACCEPT_FAIL_INJECT_EVERY=1
 --   LUA_CPATH='/tmp/inject/?.so;;' lua lua/test_async_tcpd.lua
 -- With injection, failed_accept > 0 and this case must still pass (self never

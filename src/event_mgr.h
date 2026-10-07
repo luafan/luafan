@@ -9,6 +9,10 @@
 struct event_base *event_mgr_base(void);
 struct event_base *event_mgr_base_current(void);
 struct evdns_base *event_mgr_dnsbase(void);
+
+/* Serialize event creation/addition with event base teardown. */
+void event_mgr_base_lock(void);
+void event_mgr_base_unlock(void);
 void event_mgr_break(void);
 int event_mgr_init(void);
 void event_mgr_cleanup(void);

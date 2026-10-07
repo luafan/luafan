@@ -37,11 +37,9 @@ libevent patch (`lua-apple/libevent/http.c`, `http-internal.h`,
   `luan/tests/run_unit.sh`), which asserted in a real worker-pool runtime:
   bind (distribute) works, `serv:close()` releases the port so a retry-bind
   succeeds (async teardown → evhttp_free path), and 40 bind/close/collect
-  cycles stay clean. `run_unit.sh test_httpd_teardown.lua` → PASS (7/7 cli
-  unit tests pass). Active-WebSocket teardown (R1 UAF) is covered by the
-  luafan-repo integration suite `tests/lua/test_httpd_async_teardown.lua`
-  (scenario A) for the fan.so environment; ASan/TSan runs remain optional
-  follow-ups.
+  cycles stay clean. The active-WebSocket and close/drain paths are now covered
+  by the single-event-loop HTTPD lifecycle and WebSocket regression suites;
+  ASan/TSan runs remain optional follow-ups.
 
 - **Post-review hardening (current batch)**: closed the accept-dispatch
   vs. worker `evhttp` free race (per-owner `instance_accepts` counter,

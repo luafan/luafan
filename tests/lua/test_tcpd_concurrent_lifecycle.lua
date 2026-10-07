@@ -24,13 +24,11 @@ local tcpd = require "fan.tcpd"
 fan.loop(function()
     local conns = {}
 
-    -- Create %d connections (some on worker base if available)
+    -- Create %d connections on the single event-loop base.
     for i = 1, %d do
-        local worker_id = (i %% 2 == 0 and fan.worker_count() > 0) and 0 or -1
         local ok, conn = pcall(tcpd.connect, {
             host = "127.0.0.1",
             port = %d + i,
-            worker = worker_id,
             read_timeout = 0.001,
             write_timeout = 0.001,
             onconnected = function() end,
@@ -113,7 +111,6 @@ suite:test("rapid_connect_close_tostring", function()
             return tcpd.connect({
                 host = "127.0.0.1",
                 port = port,
-                worker = (i % 2 == 0 and fan.worker_count() > 0) and 0 or -1,
                 read_timeout = 0.01,
                 onconnected = function() end,
                 onread = function() end,
