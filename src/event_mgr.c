@@ -5,8 +5,20 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <stdio.h>
 #include <pthread.h>
 #include <event2/thread.h>
+
+#if DEBUG
+#if defined(__APPLE__)
+#include <os/log.h>
+#define PANPIPE_LOOP_LOG(...) os_log(OS_LOG_DEFAULT, __VA_ARGS__)
+#else
+#define PANPIPE_LOOP_LOG(...) do { fprintf(stderr, __VA_ARGS__); fflush(stderr); } while (0)
+#endif
+#else
+#define PANPIPE_LOOP_LOG(...) do { } while (0)
+#endif
 
 static struct event_base *base = NULL;
 static struct evdns_base *dnsbase = NULL;
@@ -16,9 +28,7 @@ static int initialized = 0;
 static int looping = 0;
 static int signal_count = 0;
 static struct event signal_int;
-static struct event signal_pipe;
 static int signal_int_added = 0;
-static int signal_pipe_added = 0;
 
 /*
  * Protects the event base pointer and the interval in which callers create
@@ -39,12 +49,7 @@ static void cleanup_signal_events(void) {
         event_del(&signal_int);
         signal_int_added = 0;
     }
-    if (signal_pipe_added) {
-        event_del(&signal_pipe);
-        signal_pipe_added = 0;
-    }
     memset(&signal_int, 0, sizeof(signal_int));
-    memset(&signal_pipe, 0, sizeof(signal_pipe));
 }
 
 static void cleanup_signals(void) {
@@ -52,10 +57,14 @@ static void cleanup_signals(void) {
     signal(SIGTERM, SIG_DFL);
     signal(SIGINT, SIG_DFL);
     signal(SIGQUIT, SIG_DFL);
-    signal(SIGPIPE, SIG_DFL);
+    // SIGPIPE is a per-connection write failure (EPIPE), not a process shutdown.
+    // Keep it ignored so one broken upstream socket cannot break the global loop.
+    signal(SIGPIPE, SIG_IGN);
 }
 
 static void signal_handler(int sig) {
+    PANPIPE_LOOP_LOG("[event_mgr] signal_handler sig=%d thread=%lu",
+                 sig, (unsigned long)pthread_self());
     if (sig == SIGINT) {
         signal_count++;
         if (signal_count > 1) {
@@ -66,9 +75,9 @@ static void signal_handler(int sig) {
 }
 
 static void signal_cb(evutil_socket_t fd, short what, void *arg) {
-    (void)fd;
-    (void)what;
     (void)arg;
+    PANPIPE_LOOP_LOG("[event_mgr] signal_cb fd=%d what=%d thread=%lu",
+                 (int)fd, (int)what, (unsigned long)pthread_self());
     event_mgr_break();
 }
 
@@ -115,18 +124,22 @@ int event_mgr_init(void) {
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
     signal(SIGQUIT, signal_handler);
-    signal(SIGPIPE, signal_handler);
+    // Do not register SIGPIPE with signal_handler/signal_cb: EPIPE belongs to
+    // the individual connection and must never call event_mgr_break().
+    signal(SIGPIPE, SIG_IGN);
     event_assign(&signal_int, base, SIGINT, EV_SIGNAL | EV_PERSIST, signal_cb, NULL);
     signal_int_added = event_add(&signal_int, NULL) == 0;
-    event_assign(&signal_pipe, base, SIGPIPE, EV_SIGNAL | EV_PERSIST, signal_cb, NULL);
-    signal_pipe_added = event_add(&signal_pipe, NULL) == 0;
     return 0;
 }
 
 void event_mgr_break(void) {
-    if (base) {
-        event_base_loopbreak(base);
+    struct event_base *current = base;
+    int result = -1;
+    if (current) {
+        result = event_base_loopbreak(current);
     }
+    PANPIPE_LOOP_LOG("[event_mgr] break base=%p looping=%d thread=%lu result=%d",
+                 (void *)current, looping, (unsigned long)pthread_self(), result);
 }
 
 int event_mgr_is_loop_running(void) {
@@ -163,10 +176,16 @@ void event_mgr_lua_lock_depth_set(int depth) { (void)depth; }
 
 int event_mgr_loop(void) {
     if (looping || !event_mgr_base()) {
+        PANPIPE_LOOP_LOG("[event_mgr] loop refused looping=%d base=%p thread=%lu",
+                     looping, (void *)base, (unsigned long)pthread_self());
         return -1;
     }
     looping = 1;
-    event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
+    PANPIPE_LOOP_LOG("[event_mgr] loop enter base=%p thread=%lu",
+                 (void *)base, (unsigned long)pthread_self());
+    int result = event_base_loop(base, EVLOOP_NO_EXIT_ON_EMPTY);
+    PANPIPE_LOOP_LOG("[event_mgr] loop exit base=%p result=%d thread=%lu",
+                 (void *)base, result, (unsigned long)pthread_self());
     looping = 0;
     cleanup_signals();
     cleanup_signal_events();
@@ -176,7 +195,7 @@ int event_mgr_loop(void) {
         dnsbase = NULL;
     }
     initialized = 0;
-    return 0;
+    return result;
 }
 
 int event_mgr_loop_later_cleanup(void) {
@@ -184,6 +203,8 @@ int event_mgr_loop_later_cleanup(void) {
 }
 
 void event_mgr_loop_cleanup(void) {
+    PANPIPE_LOOP_LOG("[event_mgr] cleanup begin base=%p looping=%d thread=%lu",
+                 (void *)base, looping, (unsigned long)pthread_self());
     event_mgr_base_lock();
     cleanup_signal_events();
     if (dnsbase) {
@@ -198,6 +219,8 @@ void event_mgr_loop_cleanup(void) {
     looping = 0;
     signal_count = 0;
     event_mgr_base_unlock();
+    PANPIPE_LOOP_LOG("[event_mgr] cleanup end thread=%lu",
+                 (unsigned long)pthread_self());
 }
 
 void event_mgr_cleanup(void) {

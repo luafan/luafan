@@ -12,6 +12,17 @@
 #include <time.h>
 #include <unistd.h>
 
+#if DEBUG
+#if defined(__APPLE__)
+#include <os/log.h>
+#define PANPIPE_LOOP_LOG(...) os_log(OS_LOG_DEFAULT, __VA_ARGS__)
+#else
+#define PANPIPE_LOOP_LOG(...) do { fprintf(stderr, __VA_ARGS__); fflush(stderr); } while (0)
+#endif
+#else
+#define PANPIPE_LOOP_LOG(...) do { } while (0)
+#endif
+
 // Lock/unlock pair used by the FAN_LOCK_PROBE diagnostics below. The hand-off
 // that releases the caller's lock levels around the blocking event loop lives
 // in event_mgr_loop() itself (see the note there), so every way an embedder
@@ -108,6 +119,8 @@ LUA_API int luafan_start(lua_State *L) {
 }
 
 LUA_API int luafan_stop(lua_State *L) {
+    PANPIPE_LOOP_LOG("[luafan] Lua fan.loopbreak() thread=%lu state=%p",
+                   (unsigned long)pthread_self(), (void *)L);
     event_mgr_break();
     return 0;
 }
