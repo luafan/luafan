@@ -183,26 +183,26 @@ function apt_mt:send(buf)
 
     if #(buf) > BODY_SIZE then
         local package_index = 1
-        local index_count_f = #(buf) / BODY_SIZE
-        local index_count, fractional = math.modf(index_count_f)
-        if fractional == 0 then
-            index_count = index_count - 1
-        end
+        local start_pos = 1
+        local buf_len = #(buf)
+        local part_count = math.ceil(buf_len / BODY_SIZE)
 
-        for i = 0, index_count do
-            local head = string.pack("<I4I2I2", output_index, index_count + 1, package_index)
+        while start_pos <= buf_len do
+            local end_pos = math.min(start_pos + BODY_SIZE - 1, buf_len)
+            local head = string.pack("<I4I2I2", output_index, part_count, package_index)
             local package = {
                 apt = self,
                 head = head,
                 buf = buf,
                 output_index = output_index,
-                body_begin = i * BODY_SIZE + 1,
-                body_end = i * BODY_SIZE + BODY_SIZE
+                body_begin = start_pos,
+                body_end = end_pos
             }
             package_parts_map[head] = package
             package_index = package_index + 1
 
             self:send_package(package, package_parts_map)
+            start_pos = end_pos + 1
         end
     else
         local head = string.pack("<I4I2I2", output_index, 1, 1)
